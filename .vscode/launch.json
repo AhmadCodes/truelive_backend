@@ -1,0 +1,16 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "DEBUG Streamlit",
+        "type": "debugpy",
+        "request": "launch",
+        "program": "/Users/alethea/miniconda3/envs/data_analysis/bin/streamlit",
+        "args": [
+          "run",
+          "main.py"
+        ],
+        "console": "integratedTerminal"
+      }
+    ]
+  }

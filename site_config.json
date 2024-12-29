@@ -1,0 +1,37 @@
+{
+    "pcs": {
+        "pc1": {
+            "hostname": "viewer-01",
+            "ip_address": "192.168.1.50",
+            "gpu_type": "NVIDIA"
+        }
+    },
+    "screens": {
+        "screen1": {
+            "name": "Monitor 1",
+            "layout": "2x2"
+        },
+        "screen_2": {
+            "name": "ughj",
+            "layout": "3x3"
+        }
+    },
+    "mappings": {
+        "site_to_pc": {
+            "site1": [
+                "pc1"
+            ],
+            "site_q": [
+                "pc1"
+            ]
+        },
+        "site_to_screen": {
+            "site1": [
+                "screen1"
+            ],
+            "site_q": [
+                "screen_2"
+            ]
+        }
+    }
+}
