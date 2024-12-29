@@ -1,0 +1,38 @@
+{
+    "sites": {
+        "site_q": {
+            "name": "site 1",
+            "nvr_username": "sdasdfasdf",
+            "nvr_password": "asdsadfasdfas",
+            "cameras": {
+                "CAM_eb835440-1bae-49dd-8345-67d4a20cdb4f": {
+                    "name": "adasdasd",
+                    "rtsp_url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/302"
+                }
+            }
+        },
+        "site_9": {
+            "name": "site 2",
+            "nvr_username": "sdasdfasdf",
+            "nvr_password": "asdsadfasdfas",
+            "cameras": {
+                "cam_1": {
+                    "name": "asdfasf",
+                    "rtsp_url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/302"
+                }
+            }
+        },
+        "site_3": {
+            "name": "asdasdf",
+            "nvr_username": "asdad",
+            "nvr_password": "adadadasd",
+            "cameras": {}
+        },
+        "b9d2fe61-b755-4fea-945d-c35472ef80ac": {
+            "name": "asdf",
+            "nvr_username": "asdfasdf",
+            "nvr_password": "asdfasdfasf",
+            "cameras": {}
+        }
+    }
+}
