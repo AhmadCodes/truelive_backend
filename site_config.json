@@ -28,13 +28,111 @@
                     "view_1": {
                         "slot_1_1": {
                             "site_id": "site_11010",
-                            "camera_id": "CAM_202157"
+                            "site_name": "431 Dekalb",
+                            "camera_id": "CAM_202152",
+                            "camera_name": "431 Dekalb 1",
+                            "rtsp_url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/102"
                         },
-                        "slot_1_2": null,
-                        "slot_1_3": null,
-                        "slot_2_1": null,
-                        "slot_2_2": null,
-                        "slot_2_3": null,
+                        "slot_1_2": {
+                            "site_id": "site_11010",
+                            "site_name": "431 Dekalb",
+                            "camera_id": "CAM_202157",
+                            "camera_name": "431 Dekalb 8",
+                            "rtsp_url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/802"
+                        },
+                        "slot_1_3": {
+                            "site_id": "site_11010",
+                            "site_name": "431 Dekalb",
+                            "camera_id": "CAM_202151",
+                            "camera_name": "431 Dekalb 2",
+                            "rtsp_url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/202"
+                        },
+                        "slot_2_1": {
+                            "site_id": "site_11010",
+                            "site_name": "431 Dekalb",
+                            "camera_id": "CAM_202150",
+                            "camera_name": "431 Dekalb 3",
+                            "rtsp_url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/302"
+                        },
+                        "slot_2_2": {
+                            "site_id": "site_11010",
+                            "site_name": "431 Dekalb",
+                            "camera_id": "CAM_202153",
+                            "camera_name": "431 Dekalb 4",
+                            "rtsp_url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/402"
+                        },
+                        "slot_2_3": {
+                            "site_id": "site_11010",
+                            "site_name": "431 Dekalb",
+                            "camera_id": "CAM_202154",
+                            "camera_name": "431 Dekalb 5",
+                            "rtsp_url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/502"
+                        },
+                        "slot_3_1": {
+                            "site_id": "site_11010",
+                            "site_name": "431 Dekalb",
+                            "camera_id": "CAM_202155",
+                            "camera_name": "431 Dekalb 6",
+                            "rtsp_url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/602"
+                        },
+                        "slot_3_2": {
+                            "site_id": "site_11010",
+                            "site_name": "431 Dekalb",
+                            "camera_id": "CAM_202157",
+                            "camera_name": "431 Dekalb 8",
+                            "rtsp_url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/802"
+                        },
+                        "slot_3_3": {
+                            "site_id": "site_11010",
+                            "site_name": "431 Dekalb",
+                            "camera_id": "CAM_202159",
+                            "camera_name": "431 Dekalb 9",
+                            "rtsp_url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/902"
+                        }
+                    },
+                    "view_2": {
+                        "slot_1_1": {
+                            "site_id": "site_11013",
+                            "site_name": "433 Dekalb",
+                            "camera_id": "CAM_202160",
+                            "camera_name": "433 Dekalb 1",
+                            "rtsp_url": "rtsp://admin:shinbet2015@433dekalb.vidliveus.com:10554/Streaming/Channels/102"
+                        },
+                        "slot_1_2": {
+                            "site_id": "site_11013",
+                            "site_name": "433 Dekalb",
+                            "camera_id": "CAM_202163",
+                            "camera_name": "433 Dekalb 2",
+                            "rtsp_url": "rtsp://admin:shinbet2015@433dekalb.vidliveus.com:10554/Streaming/Channels/202"
+                        },
+                        "slot_1_3": {
+                            "site_id": "site_11013",
+                            "site_name": "433 Dekalb",
+                            "camera_id": "CAM_202164",
+                            "camera_name": "433 Dekalb 3",
+                            "rtsp_url": "rtsp://admin:shinbet2015@433dekalb.vidliveus.com:10554/Streaming/Channels/302"
+                        },
+                        "slot_2_1": {
+                            "site_id": "site_11013",
+                            "site_name": "433 Dekalb",
+                            "camera_id": "CAM_202162",
+                            "camera_name": "433 Dekalb 4",
+                            "rtsp_url": "rtsp://admin:shinbet2015@433dekalb.vidliveus.com:10554/Streaming/Channels/402"
+                        },
+                        "slot_2_2": {
+                            "site_id": "site_11013",
+                            "site_name": "433 Dekalb",
+                            "camera_id": "CAM_202161",
+                            "camera_name": "433 Dekalb 5",
+                            "rtsp_url": "rtsp://admin:shinbet2015@433dekalb.vidliveus.com:10554/Streaming/Channels/502"
+                        },
+                        "slot_2_3": {
+                            "site_id": "site_11013",
+                            "site_name": "433 Dekalb",
+                            "camera_id": "CAM_202165",
+                            "camera_name": "433 Dekalb 6",
+                            "rtsp_url": "rtsp://admin:shinbet2015@433dekalb.vidliveus.com:10554/Streaming/Channels/602"
+                        },
                         "slot_3_1": null,
                         "slot_3_2": null,
                         "slot_3_3": null
@@ -42,24 +140,7 @@
                 },
                 "pc071a_screen_2": {
                     "view_1": {
-                        "slot_1_1": {
-                            "site_id": "site_11010",
-                            "camera_id": "CAM_202158"
-                        },
-                        "slot_1_2": null,
-                        "slot_1_3": null,
-                        "slot_2_1": null,
-                        "slot_2_2": null,
-                        "slot_2_3": null,
-                        "slot_3_1": null,
-                        "slot_3_2": null,
-                        "slot_3_3": null
-                    },
-                    "view_2": {
-                        "slot_1_1": {
-                            "site_id": "site_11010",
-                            "camera_id": "CAM_202154"
-                        },
+                        "slot_1_1": null,
                         "slot_1_2": null,
                         "slot_1_3": null,
                         "slot_2_1": null,
