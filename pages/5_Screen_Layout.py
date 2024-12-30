@@ -9,6 +9,12 @@ import asyncio
 #     st.stop()
 
 def screen_layout_page():
+    
+    st.set_page_config(
+        page_title="Live View Camera Configuration System",
+        page_icon="🎥",
+        layout="wide"
+    )
     st.title("Screen Layout Configuration")
     
     site_config = load_site_config()

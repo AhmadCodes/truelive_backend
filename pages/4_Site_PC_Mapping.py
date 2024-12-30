@@ -8,6 +8,12 @@ import pandas as pd
 #     st.stop()
 
 def site_pc_mapping_page():
+    
+    st.set_page_config(
+        page_title="Live View Camera Configuration System",
+        page_icon="🎥",
+        layout="wide"
+    )
     st.title("Site to PC Mapping")
     
     site_config = load_site_config()

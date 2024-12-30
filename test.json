@@ -1,0 +1,52 @@
+{
+    "pageNumber": 1,
+    "pageSize": 72,
+    "totalRecords": 72,
+    "data": [
+        {
+            "deviceID": 196532,
+            "serverID": 10207,
+            "deviceTypeID": 1,
+            "input1": 2,
+            "input2": -1,
+            "title": "A2",
+            "groupID": 261363,
+            "settingsMeta": "<Camera><Qual>Lowest</Qual><TelemServerID>-1</TelemServerID><TelemSpeed>Default</TelemSpeed><TelemQual>Default</TelemQual><Presets /></Camera>",
+            "settings": null,
+            "comment": "",
+            "orderNum": null,
+            "extraValue": null,
+            "syncIdentifier": null,
+            "transcodingAllowed": false,
+            "groupSyncId": null,
+            "markDelete": false,
+            "hasPtz": false,
+            "quality": null,
+            "speed": null,
+            "relayType": null,
+            "auditServiceEndpoint": null,
+            "deviceServerEndpoint": null,
+            "deviceUrlParams": null,
+            "networkAddress": null,
+            "deviceServiceSession": null,
+            "eventRecordID": null,
+            "timeZone": null,
+            "liveVideoDelay": null,
+            "defaultReferenceShot": null,
+            "serverTitle": "Embedded Net DVR Chabad of Clinton and Pratt",
+            "presets": null,
+            "groupTitle": null,
+            "supportsAudio": false,
+            "receivesAudio": false,
+            "transmitsAudio": false,
+            "canPlayback": false,
+            "audioSettings": null,
+            "cameraSettings": {
+                "qual": "Lowest",
+                "telemServerId": -1,
+                "telemSpeed": "Default"
+            },
+            "relaySettings": null
+        }
+    ]
+}
