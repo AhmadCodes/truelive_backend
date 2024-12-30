@@ -3,65 +3,61 @@ from streamlit_modal import Modal
 from utils.config_loader import load_camera_config, save_camera_config
 import pandas as pd
 import time
-from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, WebRtcMode
 import cv2
 import numpy as np
 import uuid
+from threading import Thread
+import queue
 
+def get_camera_snapshot(rtsp_url, result_queue):
+    """Get a single frame from RTSP stream after 1 second buffer"""
+    cap = cv2.VideoCapture(rtsp_url)
+    if not cap.isOpened():
+        result_queue.put(None)
+        return
 
-# if 'logged_in' not in st.session_state or not st.session_state['logged_in']:
-#     st.error("You need to log in first.")
-#     st.stop()
-
-# Define a simple VideoProcessor to handle RTSP streams
-class RTSPVideoProcessor(VideoProcessorBase):
-    def __init__(self, rtsp_url):
-        self.rtsp_url = rtsp_url
-        self.cap = cv2.VideoCapture(self.rtsp_url)
-        if not self.cap.isOpened():
-            st.error(f"Failed to connect to RTSP stream: {self.rtsp_url}")
-
-    def recv(self):
-        ret, frame = self.cap.read()
+    # Buffer for 1 second
+    start_time = time.time()
+    while time.time() - start_time < 1:
+        ret = cap.grab()
         if not ret:
-            # Send a black frame with "Stream not available" text
-            frame = np.zeros((480, 640, 3), dtype=np.uint8)  # Black frame
-            frame = cv2.putText(
-                frame,
-                "Stream not available",
-                (10, 240),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1,
-                (0, 0, 255),
-                2,
-                cv2.LINE_AA,
-            )
-            return frame
-        # Convert the frame to RGB
+            break
+
+    # Get the last frame
+    ret, frame = cap.retrieve()
+    cap.release()
+
+    if ret:
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        return frame
+        result_queue.put(frame)
+    else:
+        result_queue.put(None)
 
 def cameras_page():
-    st.set_page_config(
-        page_title="Camera Management",
-        page_icon="🎥",
-        layout="wide"
-    )
+    st.set_page_config(page_title="Camera Management", page_icon="🎥", layout="wide")
 
     st.title("Camera Management")
 
     # Load config
     config = load_camera_config()
+    
+    # Initialize session state variables
     if "view_camera_id" not in st.session_state:
         st.session_state["view_camera_id"] = None
-    if "edit_camera_id" not in st.session_state:
-        st.session_state["edit_camera_id"] = None
+    if "CAMPAGE_edit_camera_id" not in st.session_state:
+        st.session_state["CAMPAGE_edit_camera_id"] = None
+    if "CAMPAGE_edit_camera_site_id" not in st.session_state:
+        st.session_state["CAMPAGE_edit_camera_site_id"] = None
     if "selected_camera_rtsp" not in st.session_state:
         st.session_state["selected_camera_rtsp"] = None
     if "stream_modal_open" not in st.session_state:
         st.session_state["stream_modal_open"] = False
+    if "snapshot_thread" not in st.session_state:
+        st.session_state["snapshot_thread"] = None
+    if "snapshot_queue" not in st.session_state:
+        st.session_state["snapshot_queue"] = queue.Queue()
 
-    # Custom CSS for the big blue button
+    # Custom CSS
     st.markdown(
         """
         <style>
@@ -80,15 +76,15 @@ def cameras_page():
         }
         </style>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
-    # Place the "Add Camera" button on the right side
+    # Add Camera button
     btn_cols = st.columns([9, 1])
     with btn_cols[1]:
         add_cam_clicked = st.button("Add Camera", key="add_cam_btn")
 
-    # ----- Add Camera Modal -----
+    # Add Camera Modal
     add_camera_modal = Modal(key="add_camera_modal", title="Add New Camera")
     if add_cam_clicked:
         add_camera_modal.open()
@@ -96,25 +92,26 @@ def cameras_page():
     if add_camera_modal.is_open():
         with add_camera_modal.container():
             st.subheader("Add New Camera")
-            sites = list(config.get('sites', {}).keys())
+            sites = list(config.get("sites", {}).keys())
             if sites:
                 site_selected = st.selectbox(
                     "Select Site",
                     options=sites,
-                    format_func=lambda x: config['sites'][x]['name']
+                    format_func=lambda x: config["sites"][x]["name"],
                 )
                 camera_name = st.text_input("Camera Name", key="new_cam_name")
                 rtsp_url = st.text_input("RTSP URL", key="new_cam_rtsp")
                 if st.button("Save Camera", key="save_cam_btn"):
                     if site_selected and camera_name and rtsp_url:
-                        # new_cam_id = f"cam_{len(config['sites'][site_selected]['cameras']) + 1}"
                         new_cam_id = "CAM_" + str(uuid.uuid4())
-                        config['sites'][site_selected]['cameras'][new_cam_id] = {
+                        config["sites"][site_selected]["cameras"][new_cam_id] = {
                             "name": camera_name,
-                            "rtsp_url": rtsp_url
+                            "rtsp_url": rtsp_url,
                         }
                         save_camera_config(config)
-                        st.success(f"Added camera: {camera_name} to site: {config['sites'][site_selected]['name']}")
+                        st.success(
+                            f"Added camera: {camera_name} to site: {config['sites'][site_selected]['name']}"
+                        )
                         time.sleep(0.5)
                         add_camera_modal.close()
                         st.rerun()
@@ -123,40 +120,44 @@ def cameras_page():
             else:
                 st.warning("No sites available. Please add a site first.")
 
-    # ----- Edit Camera Modal -----
-    edit_camera_modal = Modal(key="edit_camera_modal", title="Edit Camera")
-    if "edit_camera_id" in st.session_state and st.session_state["edit_camera_id"]:
-        cam_id = st.session_state["edit_camera_id"]
-        # Find the site containing this camera
-        for site_id, site_info in config['sites'].items():
-            if cam_id in site_info['cameras']:
-                cam_info = site_info['cameras'][cam_id]
-                with edit_camera_modal.container():
-                    st.subheader(f"Edit Camera: {cam_info['name']}")
-                    new_cam_name = st.text_input("Camera Name", value=cam_info['name'], key="edit_cam_name")
-                    new_rtsp_url = st.text_input("RTSP URL", value=cam_info['rtsp_url'], key="edit_cam_rtsp")
-                    if st.button("Save Changes", key="save_cam_changes"):
-                        if new_cam_name and new_rtsp_url:
-                            config['sites'][site_id]['cameras'][cam_id]['name'] = new_cam_name
-                            config['sites'][site_id]['cameras'][cam_id]['rtsp_url'] = new_rtsp_url
-                            save_camera_config(config)
-                            st.success("Camera details updated")
-                            time.sleep(0.5)
-                            edit_camera_modal.close()
-                            st.session_state["edit_camera_id"] = None
-                            st.rerun()
-                        else:
-                            st.error("Please fill in all fields.")
-                break
+    # Edit Camera Modal
+    edit_camera_modal = Modal(key="CAMPAGE_edit_camera_modal", title="Edit Camera")
+    
+    if st.session_state.get("CAMPAGE_edit_camera_id") and st.session_state.get("CAMPAGE_edit_camera_site_id"):
+        site_id = st.session_state["CAMPAGE_edit_camera_site_id"]
+        cam_id = st.session_state["CAMPAGE_edit_camera_id"]
+        
+        if cam_id in config["sites"][site_id]["cameras"]:
+            cam_info = config["sites"][site_id]["cameras"][cam_id]
+            with edit_camera_modal.container():
+                st.subheader(f"Edit Camera: {cam_info['name']}")
+                new_cam_name = st.text_input(
+                    "Camera Name", value=cam_info["name"], key="edit_cam_name"
+                )
+                new_rtsp_url = st.text_input(
+                    "RTSP URL", value=cam_info["rtsp_url"], key="edit_cam_rtsp"
+                )
+                if st.button("Save Changes", key="save_cam_changes"):
+                    if new_cam_name and new_rtsp_url:
+                        config["sites"][site_id]["cameras"][cam_id]["name"] = new_cam_name
+                        config["sites"][site_id]["cameras"][cam_id]["rtsp_url"] = new_rtsp_url
+                        save_camera_config(config)
+                        st.success("Camera details updated")
+                        time.sleep(0.5)
+                        st.session_state["CAMPAGE_edit_camera_id"] = None
+                        st.session_state["CAMPAGE_edit_camera_site_id"] = None
+                        edit_camera_modal.close()
+                        st.rerun()
+                    else:
+                        st.error("Please fill in all fields.")
 
-    # ----- Display Cameras -----
+    # Display Cameras
     st.markdown("### Existing Cameras")
-    if config.get('sites'):
-        for site_id, site_info in config['sites'].items():
-            with st.expander(site_info['name'], expanded=False):
-                cameras = site_info.get('cameras', {})
+    if config.get("sites"):
+        for site_id, site_info in config["sites"].items():
+            with st.expander(site_info["name"], expanded=False):
+                cameras = site_info.get("cameras", {})
                 if cameras:
-                    # Table header
                     cam_header = st.columns([3, 3, 2])
                     cam_header[0].markdown("**Camera Name**")
                     cam_header[1].markdown("**RTSP URL**")
@@ -165,19 +166,33 @@ def cameras_page():
                     for cam_id, cam_info in cameras.items():
                         row_cam = st.columns([3, 3, 2])
                         with row_cam[0]:
-                            if st.button(cam_info['name'], key=f"view_cam_{cam_id}_{site_id}"):
-                                st.session_state["selected_camera_rtsp"] = cam_info['rtsp_url']
+                            if st.button(cam_info["name"], key=f"view_cam_{cam_id}_{site_id}"):
+                                st.session_state["selected_camera_rtsp"] = cam_info["rtsp_url"]
+                                st.session_state["stream_modal_open"] = True
+                                # Clear previous queue
+                                st.session_state["snapshot_queue"] = queue.Queue()
+                                # Start new snapshot thread
+                                st.session_state["snapshot_thread"] = Thread(
+                                    target=get_camera_snapshot,
+                                    args=(cam_info["rtsp_url"], st.session_state["snapshot_queue"])
+                                )
+                                st.session_state["snapshot_thread"].start()
+                                st.rerun()
+                        
                         with row_cam[1]:
-                            st.write(cam_info['rtsp_url'])
+                            st.write(cam_info["rtsp_url"])
+                        
                         with row_cam[2]:
                             col_edit, col_delete = st.columns([1, 1], gap="small")
                             with col_edit:
-                                if st.button("✏️", key=f"edit_cam_{cam_id}_{site_id}"):
-                                    st.session_state["edit_camera_id"] = cam_id
+                                if st.button("✏️", key=f"CAMPAGE_edit_cam_{cam_id}_{site_id}"):
+                                    st.session_state["CAMPAGE_edit_camera_id"] = cam_id
+                                    st.session_state["CAMPAGE_edit_camera_site_id"] = site_id
                                     edit_camera_modal.open()
+                            
                             with col_delete:
                                 if st.button("🗑️", key=f"delete_cam_{cam_id}_{site_id}"):
-                                    config['sites'][site_id]['cameras'].pop(cam_id)
+                                    config["sites"][site_id]["cameras"].pop(cam_id)
                                     save_camera_config(config)
                                     st.success("Camera deleted")
                                     time.sleep(0.5)
@@ -185,36 +200,83 @@ def cameras_page():
                 else:
                     st.info("No cameras available for this site.")
 
-    # ----- Stream Live Camera Modal -----
-    stream_modal = Modal(key="stream_modal", title="Live Stream")
+    # Snapshot Modal
+    stream_modal = Modal(key="stream_modal", title="Camera Snapshot")
+    
     if st.session_state["stream_modal_open"]:
-        stream_modal.open()
-
-    if stream_modal.is_open():
         with stream_modal.container():
-            st.subheader("Live Stream")
-            webrtc_ctx = webrtc_streamer(
-                key="live_stream",
-                mode=WebRtcMode.SENDONLY,
-                video_processor_factory=lambda: RTSPVideoProcessor(st.session_state["selected_camera_rtsp"]),
-                async_processing=True,
-                media_stream_constraints={"video": True, "audio": False},
+            st.subheader("Camera Snapshot")
+            
+            # Create placeholder for image
+            image_placeholder = st.empty()
+            
+            loading_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+            loading_frame = cv2.putText(
+                loading_frame,
+                "Loading...",
+                (200, 240),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,
+                (255, 255, 255),
+                2,
+                cv2.LINE_AA,
             )
-            if not webrtc_ctx.state.playing:
-                st.warning("Failed to start the live stream.")
-            else:
-                st.success("Live stream started.")
-                if st.button("Stop Stream", key="stop_stream"):
-                    webrtc_ctx.stop()
-                    st.session_state["selected_camera_rtsp"] = None
-                    stream_modal.close()
-                    st.session_state["stream_modal_open"] = False
+            
+            # Show loading message
+            image_placeholder.image(
+                loading_frame,
+                caption="Receiving Snapshot...",
+                use_container_width=True
+            )
+
+            # Check if thread is running and hasn't exceeded timeout
+            if st.session_state.get("snapshot_thread"):
+                if st.session_state["snapshot_thread"].is_alive():
+                    # Thread is still running, keep showing loading message
+                    time.sleep(0.1)  # Small delay to prevent UI freeze
                     st.rerun()
-
-
-    # ----- Edit Camera Modal Handling -----
-    if edit_camera_modal.is_open():
-        # The modal content is handled above
-        pass
+                else:
+                    # Thread finished, get the result
+                    try:
+                        frame = st.session_state["snapshot_queue"].get_nowait()
+                        if frame is not None:
+                            image_placeholder.image(
+                                frame,
+                                caption="Camera Snapshot",
+                                use_container_width=True
+                            )
+                        else:
+                            error_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                            error_frame = cv2.putText(
+                                error_frame,
+                                "Failed to connect to camera",
+                                (100, 240),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                1,
+                                (255, 255, 255),
+                                2,
+                                cv2.LINE_AA,
+                            )
+                            image_placeholder.image(
+                                error_frame,
+                                caption="Connection Failed",
+                                use_container_width=True
+                            )
+                    except queue.Empty:
+                        image_placeholder.image(
+                            loading_frame,
+                            caption="No response from camera",
+                            use_container_width=True
+                        )
+                    
+                    # Clean up thread
+                    st.session_state["snapshot_thread"] = None
+            
+            if st.button("Close", key="close_snapshot"):
+                st.session_state["stream_modal_open"] = False
+                st.session_state["selected_camera_rtsp"] = None
+                st.session_state["snapshot_thread"] = None  # Clean up thread reference
+                stream_modal.close()
+                st.rerun()
 
 cameras_page()

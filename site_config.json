@@ -1,9 +1,16 @@
 {
     "pcs": {
         "pc1": {
-            "hostname": "viewer-01",
+            "name": "viewer-01",
+            "screens": 4,
             "ip_address": "192.168.1.50",
             "gpu_type": "NVIDIA"
+        },
+        "pc_2": {
+            "name": "fgh",
+            "screens": 1,
+            "ip_address": "",
+            "gpu_type": ""
         }
     },
     "screens": {
@@ -18,18 +25,18 @@
     },
     "mappings": {
         "site_to_pc": {
-            "site1": [
+            "site_11010": [
                 "pc1"
             ],
-            "site_q": [
+            "site_11013": [
                 "pc1"
             ]
         },
         "site_to_screen": {
-            "site1": [
+            "site_11010": [
                 "screen1"
             ],
-            "site_q": [
+            "site_11013": [
                 "screen_2"
             ]
         }
