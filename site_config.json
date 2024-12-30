@@ -1,46 +1,102 @@
 {
     "pcs": {
-        "pc1": {
-            "name": "viewer-01",
-            "screens": 4,
-            "ip_address": "192.168.1.50",
-            "gpu_type": "NVIDIA"
-        }
-    },
-    "screens": {
-        "screen1": {
-            "name": "Monitor 1",
-            "layout": "2x2"
-        },
-        "screen_2": {
-            "name": "ughj",
-            "layout": "3x3"
+        "pc071a": {
+            "name": "viewer 1",
+            "n_screens": 4,
+            "ip_address": "",
+            "gpu_type": "",
+            "screens": {
+                "pc071a_screen_1": {
+                    "name": "Monitor 1"
+                },
+                "pc071a_screen_2": {
+                    "name": "Monitor 2"
+                },
+                "pc071a_screen_3": {
+                    "name": "Monitor 3"
+                },
+                "pc071a_screen_4": {
+                    "name": "Monitor 4"
+                }
+            }
         }
     },
     "mappings": {
-        "site_to_pc": {
-            "site_11010": [
-                "pc1"
-            ],
-            "site_11013": [],
-            "site_10207": [],
-            "site_10634": [
-                "pc1"
-            ],
-            "site_10538": [
-                "pc1"
-            ],
-            "site_10817": [
-                "pc1"
-            ]
-        },
-        "site_to_screen": {
-            "site_11010": [
-                "screen1"
-            ],
-            "site_11013": [
-                "screen_2"
-            ]
+        "screen_to_cameras": {
+            "pc071a": {
+                "pc071a_screen_1": {
+                    "view_1": {
+                        "slot_1_1": {
+                            "site_id": "site_11010",
+                            "camera_id": "CAM_202157"
+                        },
+                        "slot_1_2": null,
+                        "slot_1_3": null,
+                        "slot_2_1": null,
+                        "slot_2_2": null,
+                        "slot_2_3": null,
+                        "slot_3_1": null,
+                        "slot_3_2": null,
+                        "slot_3_3": null
+                    }
+                },
+                "pc071a_screen_2": {
+                    "view_1": {
+                        "slot_1_1": {
+                            "site_id": "site_11010",
+                            "camera_id": "CAM_202158"
+                        },
+                        "slot_1_2": null,
+                        "slot_1_3": null,
+                        "slot_2_1": null,
+                        "slot_2_2": null,
+                        "slot_2_3": null,
+                        "slot_3_1": null,
+                        "slot_3_2": null,
+                        "slot_3_3": null
+                    },
+                    "view_2": {
+                        "slot_1_1": {
+                            "site_id": "site_11010",
+                            "camera_id": "CAM_202154"
+                        },
+                        "slot_1_2": null,
+                        "slot_1_3": null,
+                        "slot_2_1": null,
+                        "slot_2_2": null,
+                        "slot_2_3": null,
+                        "slot_3_1": null,
+                        "slot_3_2": null,
+                        "slot_3_3": null
+                    }
+                },
+                "pc071a_screen_3": {
+                    "view_1": {
+                        "slot_1_1": null,
+                        "slot_1_2": null,
+                        "slot_1_3": null,
+                        "slot_2_1": null,
+                        "slot_2_2": null,
+                        "slot_2_3": null,
+                        "slot_3_1": null,
+                        "slot_3_2": null,
+                        "slot_3_3": null
+                    }
+                },
+                "pc071a_screen_4": {
+                    "view_1": {
+                        "slot_1_1": null,
+                        "slot_1_2": null,
+                        "slot_1_3": null,
+                        "slot_2_1": null,
+                        "slot_2_2": null,
+                        "slot_2_3": null,
+                        "slot_3_1": null,
+                        "slot_3_2": null,
+                        "slot_3_3": null
+                    }
+                }
+            }
         }
     }
 }
