@@ -5,12 +5,6 @@
             "screens": 4,
             "ip_address": "192.168.1.50",
             "gpu_type": "NVIDIA"
-        },
-        "pc_2": {
-            "name": "fgh",
-            "screens": 1,
-            "ip_address": "",
-            "gpu_type": ""
         }
     },
     "screens": {
@@ -28,7 +22,15 @@
             "site_11010": [
                 "pc1"
             ],
-            "site_11013": [
+            "site_11013": [],
+            "site_10207": [],
+            "site_10634": [
+                "pc1"
+            ],
+            "site_10538": [
+                "pc1"
+            ],
+            "site_10817": [
                 "pc1"
             ]
         },
