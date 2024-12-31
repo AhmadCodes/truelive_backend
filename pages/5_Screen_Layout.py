@@ -2,10 +2,16 @@ import streamlit as st
 from streamlit_modal import Modal
 import json
 from utils.config_loader import load_site_config, load_camera_config, save_site_config
+from utils.config_generator import generate_config
 
 def send_screen_mapping(mapping_json):
     """Dummy function to send screen mapping configuration"""
     # This function will be implemented by you later
+    config = generate_config(mappings)
+
+    # Save config.json
+    with open("config.json", "w") as file:
+        json.dump(config, file, indent=4)
     pass
 
 def get_site_cameras(camera_config, site_id):
