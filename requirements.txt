@@ -1,0 +1,6 @@
+numpy==2.2.1
+opencv_python==4.10.0.84
+pandas==2.2.3
+streamlit==1.41.1
+streamlit_modal==0.1.2
+websockets==14.1
