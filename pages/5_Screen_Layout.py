@@ -29,6 +29,7 @@ def create_empty_view():
     return empty_view
 
 def screen_layout_page():
+    st.set_page_config(page_title="Screen Layout Configuration", layout="wide")
     st.title("Screen Layout Configuration")
 
     # Load configurations
@@ -66,6 +67,8 @@ def screen_layout_page():
         st.session_state.current_view_config = None
     if 'show_save_button' not in st.session_state:
         st.session_state.show_save_button = False
+    if 'editing_view_name' not in st.session_state:
+        st.session_state.editing_view_name = None
 
     # Create sidebar for navigation
     with st.sidebar:
@@ -86,7 +89,9 @@ def screen_layout_page():
             # Screen Selection
             if st.session_state.selected_pc:
                 pc_info = site_config['pcs'][current_pc_id]
-                screen_ids = [f"{current_pc_id}_screen_{i}" for i in range(1, pc_info['n_screens'] + 1)]
+                # screen_ids = [f"{current_pc_id}_screen_{i}" for i in range(1, pc_info['n_screens'] + 1)]
+                mapping = site_config['mappings']['screen_to_cameras'].get(current_pc_id, {})
+                screen_ids = list(mapping.keys())
                 selected_screen_index = st.selectbox(
                     "Select Screen",
                     range(len(screen_ids)),
@@ -94,6 +99,29 @@ def screen_layout_page():
                     key="screen_selector"
                 )
                 st.session_state.selected_screen = screen_ids[selected_screen_index]
+                
+                # Add rename modal
+                rename_modal = Modal(key="rename_modal", title="Rename View")
+                if st.session_state.editing_view_name and rename_modal.is_open():
+                    with rename_modal.container():
+                        view_name = st.session_state.editing_view_name
+                        new_name = st.text_input("New Name", value=view_name)
+                        views = site_config['mappings']['screen_to_cameras'][current_pc_id][st.session_state.selected_screen]
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.button("Save", use_container_width=True):
+                                if new_name != view_name and new_name not in views:
+                                    views[new_name] = views.pop(view_name)
+                                    if st.session_state.selected_view == view_name:
+                                        st.session_state.selected_view = new_name
+                                    save_site_config(site_config)
+                                st.session_state.editing_view_name = None
+                                rename_modal.close()
+                                st.rerun()
+                        with col2:
+                            if st.button("Cancel", use_container_width=True):
+                                st.session_state.editing_view_name = None
+                                rename_modal.close()
 
                 # View Management
                 if st.session_state.selected_screen:
@@ -123,16 +151,29 @@ def screen_layout_page():
                     st.markdown("#### Available Views:")
                     for view_name in views.keys():
                         cols = st.columns([3, 1, 1])
+                        
                         with cols[0]:
-                            if st.button(f"👁️ {view_name}", key=f"view_btn_{view_name}", 
-                                       use_container_width=True,
-                                       type="secondary" if st.session_state.selected_view != view_name else "primary"):
-                                st.session_state.selected_view = view_name
-                                st.session_state.current_view_config = dict(views[view_name])
-                        with cols[1]:
-                            if st.button("✏️", key=f"edit_{view_name}", use_container_width=True):
-                                st.session_state.selected_view = view_name
-                                st.session_state.current_view_config = dict(views[view_name])
+                            if st.session_state.editing_view_name == view_name:
+                                new_name = st.text_input("Name", value=view_name, key=f"rename_{view_name}")
+                                if new_name != view_name and new_name not in views:
+                                    views[new_name] = views.pop(view_name)
+                                    if st.session_state.selected_view == view_name:
+                                        st.session_state.selected_view = new_name
+                                    save_site_config(site_config)
+                                    st.session_state.editing_view_name = None
+                                    st.rerun()
+                            else:
+                                if st.button(f"👁️ {view_name}", key=f"view_btn_{view_name}", 
+                                        use_container_width=True,
+                                        type="secondary" if st.session_state.selected_view != view_name else "primary"):
+                                    st.session_state.selected_view = view_name
+                                    st.session_state.current_view_config = dict(views[view_name])
+                        
+                            with cols[1]:
+                                if st.button("✏️", key=f"edit_{view_name}", use_container_width=True):
+                                    st.session_state.editing_view_name = view_name
+                                    rename_modal.open()
+                        
                         with cols[2]:
                             if st.button("🗑️", key=f"delete_{view_name}", use_container_width=True):
                                 del views[view_name]
@@ -203,16 +244,17 @@ def screen_layout_page():
                     
                     # Create a container with border for each slot
                     with st.container():
-                        st.markdown(f'<div class="grid-slot">', unsafe_allow_html=True)
+                        st.markdown(f'---------', unsafe_allow_html=True)
                         
                         # Display current camera info or empty slot
                         if current_slot:
                             st.markdown(f"""
-                                **Slot {row}-{col}**
+                                ### Slot {row}-{col}
                                 
-                                Site: {current_slot['site_name']}
-                                Camera: {current_slot['camera_name']}
-                                RTSP: `{current_slot['rtsp_url']}`
+                                **Site:** {current_slot['site_name']} | 
+                                **Camera:** {current_slot['camera_name']}
+                                
+                                **RTSP:** `{current_slot['rtsp_url']}`
                             """)
                         else:
                             st.markdown(f"**Slot {row}-{col}**\n\nEmpty")

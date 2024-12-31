@@ -3,9 +3,9 @@
     "configurations": [
       {
         "name": "DEBUG Streamlit",
-        "type": "debugpy",
+        "type": "python",
         "request": "launch",
-        "program": "/Users/alethea/miniconda3/envs/data_analysis/bin/streamlit",
+        "module": "streamlit",
         "args": [
           "run",
           "main.py"

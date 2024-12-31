@@ -38,7 +38,6 @@ def main_app():
     - Sites: Manage your site locations and NVR credentials
     - Cameras: Configure cameras and their RTSP streams
     - PCs: Manage viewing stations and their capabilities
-    - Site-PC Mapping: Map sites to specific PCs
     - Screen Layout: Configure viewing layouts and communicate with streaming application
     """)
 
