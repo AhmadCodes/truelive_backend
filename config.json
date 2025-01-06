@@ -4,113 +4,227 @@
     "switchInterval": 10,
     "screens": [
         {
-            "id": "221cc500-6c24-4c04-a5c9-0fa33bdde8fc",
+            "id": "9c2fb0de-ad74-4591-b68b-4636daf8d5a6",
             "display_idx": 0,
             "sources": [
                 {
                     "0": {
-                        "id": "b5d741ef-8df8-414d-88a2-85426c41aad8",
+                        "id": "site_11010_CAM_202152",
                         "osd_text": "431 Dekalb 1 (431 Dekalb)",
-                        "url": "rtsp://admin:password@431dekalb.vidliveus.com:554/Streaming/Channels/102"
+                        "url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/102"
                     },
                     "1": {
-                        "id": "1b3498e6-7ae0-47ae-a562-5cc4e8704de6",
-                        "osd_text": "433 Dekalb 1 (433 Dekalb)",
-                        "url": "rtsp://admin:password@433dekalb.vidliveus.com:10554/Streaming/Channels/102"
+                        "id": null,
+                        "osd_text": null,
+                        "url": null
+                    },
+                    "2": {
+                        "id": "site_10989_CAM_201951",
+                        "osd_text": "729 Rogers Ave 1 D1 (729 Rogers Ave)",
+                        "url": "rtsp://admin:protec@2024@68.195.230.194:7000/Streaming/channels/102"
                     }
                 },
                 {
                     "0": {
-                        "id": "395ba617-10d3-4986-a951-86e6871fd099",
-                        "osd_text": "431 Dekalb 8 (431 Dekalb)",
-                        "url": "rtsp://admin:password@431dekalb.vidliveus.com:554/Streaming/Channels/802"
+                        "id": "site_11010_CAM_202158",
+                        "osd_text": "431 Dekalb 10 (431 Dekalb)",
+                        "url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/1002"
                     },
                     "1": {
-                        "id": "d5603aa1-893b-4339-8953-7e61f7ec3086",
-                        "osd_text": "433 Dekalb 2 (433 Dekalb)",
-                        "url": "rtsp://admin:password@433dekalb.vidliveus.com:10554/Streaming/Channels/202"
+                        "id": null,
+                        "osd_text": null,
+                        "url": null
+                    },
+                    "2": {
+                        "id": "site_10989_CAM_201953",
+                        "osd_text": "729 Rogers Ave 2 D2 (729 Rogers Ave)",
+                        "url": "rtsp://admin:protec@2024@68.195.230.194:7000/Streaming/channels/202"
                     }
                 },
                 {
                     "0": {
-                        "id": "4004bd12-464d-45c8-b721-d177c247dcea",
+                        "id": "site_11010_CAM_202151",
                         "osd_text": "431 Dekalb 2 (431 Dekalb)",
-                        "url": "rtsp://admin:password@431dekalb.vidliveus.com:554/Streaming/Channels/202"
+                        "url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/202"
                     },
                     "1": {
-                        "id": "9c5a66ee-45aa-4bfc-b548-e5f29c61e07e",
-                        "osd_text": "433 Dekalb 3 (433 Dekalb)",
-                        "url": "rtsp://admin:password@433dekalb.vidliveus.com:10554/Streaming/Channels/302"
+                        "id": null,
+                        "osd_text": null,
+                        "url": null
+                    },
+                    "2": {
+                        "id": "site_11010_CAM_202152",
+                        "osd_text": "431 Dekalb 1 (431 Dekalb)",
+                        "url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/102"
                     }
                 },
                 {
                     "0": {
-                        "id": "06291205-a3f6-4b68-85d3-5d0184829527",
+                        "id": "site_11010_CAM_202150",
                         "osd_text": "431 Dekalb 3 (431 Dekalb)",
-                        "url": "rtsp://admin:password@431dekalb.vidliveus.com:554/Streaming/Channels/302"
+                        "url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/302"
                     },
                     "1": {
-                        "id": "eb195b2a-bed0-4f8c-b156-c43db2a14773",
-                        "osd_text": "433 Dekalb 4 (433 Dekalb)",
-                        "url": "rtsp://admin:password@433dekalb.vidliveus.com:10554/Streaming/Channels/402"
-                    }
-                },
-                {
-                    "0": {
-                        "id": "11c7ca52-58b8-49b1-b43e-faca8d57b61d",
-                        "osd_text": "431 Dekalb 4 (431 Dekalb)",
-                        "url": "rtsp://admin:password@431dekalb.vidliveus.com:554/Streaming/Channels/402"
+                        "id": null,
+                        "osd_text": null,
+                        "url": null
                     },
-                    "1": {
-                        "id": "9a66f9bf-0cf8-469c-8f79-466fce7292b7",
-                        "osd_text": "433 Dekalb 5 (433 Dekalb)",
-                        "url": "rtsp://admin:password@433dekalb.vidliveus.com:10554/Streaming/Channels/502"
-                    }
-                },
-                {
-                    "0": {
-                        "id": "92a796ca-af39-4c38-bd5f-1611a2dd26df",
-                        "osd_text": "431 Dekalb 5 (431 Dekalb)",
-                        "url": "rtsp://admin:password@431dekalb.vidliveus.com:554/Streaming/Channels/502"
-                    },
-                    "1": {
-                        "id": "7a765e3e-22ad-4105-b675-b2e738ce872a",
-                        "osd_text": "433 Dekalb 6 (433 Dekalb)",
-                        "url": "rtsp://admin:password@433dekalb.vidliveus.com:10554/Streaming/Channels/602"
-                    }
-                },
-                {
-                    "0": {
-                        "id": "7000d6f1-b52e-45af-b71c-82a0a9a7409b",
+                    "2": {
+                        "id": "site_11010_CAM_202155",
                         "osd_text": "431 Dekalb 6 (431 Dekalb)",
-                        "url": "rtsp://admin:password@431dekalb.vidliveus.com:554/Streaming/Channels/602"
+                        "url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/602"
+                    }
+                },
+                {
+                    "0": {
+                        "id": "site_11010_CAM_202153",
+                        "osd_text": "431 Dekalb 4 (431 Dekalb)",
+                        "url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/402"
                     },
                     "1": {
-                        "id": "3993ffb6-9511-46d7-b911-d6f001106ca7",
+                        "id": null,
+                        "osd_text": null,
+                        "url": null
+                    },
+                    "2": {
+                        "id": null,
                         "osd_text": null,
                         "url": null
                     }
                 },
                 {
                     "0": {
-                        "id": "43bb2474-3191-4ccf-9895-bf4c7e64e993",
-                        "osd_text": "431 Dekalb 8 (431 Dekalb)",
-                        "url": "rtsp://admin:password@431dekalb.vidliveus.com:554/Streaming/Channels/802"
+                        "id": "site_11010_CAM_202154",
+                        "osd_text": "431 Dekalb 5 (431 Dekalb)",
+                        "url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/502"
                     },
                     "1": {
-                        "id": "2eb35b46-ac26-4014-841a-9ddcf572afb8",
+                        "id": null,
+                        "osd_text": null,
+                        "url": null
+                    },
+                    "2": {
+                        "id": null,
                         "osd_text": null,
                         "url": null
                     }
                 },
                 {
                     "0": {
-                        "id": "1af0c28b-d30c-48d8-a7af-598040464a7d",
-                        "osd_text": "431 Dekalb 9 (431 Dekalb)",
-                        "url": "rtsp://admin:password@431dekalb.vidliveus.com:554/Streaming/Channels/902"
+                        "id": "site_11010_CAM_202155",
+                        "osd_text": "431 Dekalb 6 (431 Dekalb)",
+                        "url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/602"
                     },
                     "1": {
-                        "id": "eec6a18e-0acb-48ab-8eb8-1347034c41a5",
+                        "id": "site_11010_CAM_202152",
+                        "osd_text": "431 Dekalb 1 (431 Dekalb)",
+                        "url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/102"
+                    },
+                    "2": {
+                        "id": null,
+                        "osd_text": null,
+                        "url": null
+                    }
+                },
+                {
+                    "0": {
+                        "id": null,
+                        "osd_text": null,
+                        "url": null
+                    },
+                    "1": {
+                        "id": null,
+                        "osd_text": null,
+                        "url": null
+                    },
+                    "2": {
+                        "id": null,
+                        "osd_text": null,
+                        "url": null
+                    }
+                },
+                {
+                    "0": {
+                        "id": null,
+                        "osd_text": null,
+                        "url": null
+                    },
+                    "1": {
+                        "id": null,
+                        "osd_text": null,
+                        "url": null
+                    },
+                    "2": {
+                        "id": null,
+                        "osd_text": null,
+                        "url": null
+                    }
+                }
+            ]
+        },
+        {
+            "id": "665c8b71-dfb9-4cc7-9a84-7d0519486b50",
+            "display_idx": 1,
+            "sources": [
+                {
+                    "0": {
+                        "id": null,
+                        "osd_text": null,
+                        "url": null
+                    }
+                },
+                {
+                    "0": {
+                        "id": null,
+                        "osd_text": null,
+                        "url": null
+                    }
+                },
+                {
+                    "0": {
+                        "id": null,
+                        "osd_text": null,
+                        "url": null
+                    }
+                },
+                {
+                    "0": {
+                        "id": "site_11010_CAM_202152",
+                        "osd_text": "431 Dekalb 1 (431 Dekalb)",
+                        "url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/102"
+                    }
+                },
+                {
+                    "0": {
+                        "id": null,
+                        "osd_text": null,
+                        "url": null
+                    }
+                },
+                {
+                    "0": {
+                        "id": null,
+                        "osd_text": null,
+                        "url": null
+                    }
+                },
+                {
+                    "0": {
+                        "id": null,
+                        "osd_text": null,
+                        "url": null
+                    }
+                },
+                {
+                    "0": {
+                        "id": null,
+                        "osd_text": null,
+                        "url": null
+                    }
+                },
+                {
+                    "0": {
+                        "id": null,
                         "osd_text": null,
                         "url": null
                     }
