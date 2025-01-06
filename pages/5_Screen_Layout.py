@@ -3,7 +3,7 @@ from streamlit_modal import Modal
 import json
 from utils.config_loader import load_site_config, load_camera_config, save_site_config
 from utils.config_generator import generate_config
-
+import time
 def send_screen_mapping(mapping_json):
     """Function to send screen mapping configuration"""
     config = generate_config(mapping_json)
@@ -97,7 +97,9 @@ def screen_layout_page():
             site_config = load_site_config()
             mapping_ret = send_screen_mapping(site_config)
             if mapping_ret:
-                st.success("Live view configuration applied successfully!")
+                success = st.success("Live view configuration applied successfully!")
+                time.sleep(1)
+                success.empty()
             else:
                 st.error("Failed to apply live view configuration!")
         
@@ -254,6 +256,10 @@ def screen_layout_page():
         
         st.header("Layout Configuration")
         
+        pc_name = pc_info['name']
+        screen_name = screen_info['name']
+        view_name = st.session_state.selected_view
+        st.subheader(f"{pc_name} - {screen_name} - {view_name}")
         
         # Create grid layout based on screen configuration
         for row in range(1, layout['rows'] + 1):
