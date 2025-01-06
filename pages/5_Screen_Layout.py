@@ -4,6 +4,7 @@ import json
 from utils.config_loader import load_site_config, load_camera_config, save_site_config
 from utils.config_generator import generate_config
 import time
+
 def send_screen_mapping(mapping_json):
     """Function to send screen mapping configuration"""
     config = generate_config(mapping_json)
@@ -189,6 +190,7 @@ def screen_layout_page():
                                            type="secondary" if st.session_state.selected_view != view_name else "primary"):
                                     st.session_state.selected_view = view_name
                                     st.session_state.current_view_config = dict(views[view_name])
+                                    st.rerun()
                             
                             with cols[1]:
                                 if st.button("✏️", key=f"edit_{view_name}", use_container_width=True):
