@@ -1,0 +1,44 @@
+{
+    "pcs": {
+        "pc3647": {
+            "name": "viewer",
+            "ip_address": "",
+            "gpu_type": "",
+            "screens": {
+                "pc3647_screen_aed9b293": {
+                    "name": "Monitor 1",
+                    "id": "pc3647_screen_aed9b293",
+                    "layout" : {
+                        "rows": 3,
+                        "columns": 3
+                    }
+                },
+                "pc3647_screen_bb98d99c": {
+                    "name": "Monitor 2",
+                    "id": "pc3647_screen_bb98d99c",
+                    "layout" : {
+                        "rows": 3,
+                        "columns": 3
+                    }
+                }
+            },
+            "n_screens": 2,
+            "switching_interval": 10
+        }
+    },
+    "mappings": {
+        "screen_to_cameras": {
+            "pc3647": {
+                "pc3647_screen_aed9b293": {
+                    
+                    "view_1": { ... },
+                    "view_2": { ... },
+                    "view_3": { ... }
+                },
+                "pc3647_screen_bb98d99c": {
+                    "view_1": { ... }
+                }
+            }
+        }
+    }
+}

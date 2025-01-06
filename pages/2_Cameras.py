@@ -9,8 +9,11 @@ import uuid
 from threading import Thread
 import queue
 
+from utils.url_processor import encode_rtsp_password
+
 def get_camera_snapshot(rtsp_url, result_queue):
     """Get a single frame from RTSP stream after 1 second buffer"""
+    rtsp_url = encode_rtsp_password(rtsp_url)
     cap = cv2.VideoCapture(rtsp_url)
     if not cap.isOpened():
         result_queue.put(None)
