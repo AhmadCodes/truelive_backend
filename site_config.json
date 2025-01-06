@@ -178,17 +178,6 @@
                             "camera_name": "Embedded Net DVR-A7",
                             "rtsp_url": "rtsp://admin:12345@ny@110emreson.dvrlists.com:8554/Streaming/Channels/702"
                         }
-                    },
-                    "view_3": {
-                        "slot_1_1": null,
-                        "slot_1_2": null,
-                        "slot_1_3": null,
-                        "slot_2_1": null,
-                        "slot_2_2": null,
-                        "slot_2_3": null,
-                        "slot_3_1": null,
-                        "slot_3_2": null,
-                        "slot_3_3": null
                     }
                 },
                 "pcafa1_screen_dae3d79b": {
