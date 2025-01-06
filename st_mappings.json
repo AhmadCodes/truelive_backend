@@ -49,7 +49,7 @@
         "screen_to_cameras": {
             "pcafa1": {
                 "pcafa1_screen_3a2531e2": {
-                    "view_1": {
+                    "431 Dekalb View": {
                         "slot_1_1": {
                             "site_id": "site_11010",
                             "site_name": "431 Dekalb",
@@ -114,7 +114,7 @@
                             "rtsp_url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/802"
                         }
                     },
-                    "view_2": {
+                    "110 Emerson View": {
                         "slot_1_1": {
                             "site_id": "site_10624",
                             "site_name": "Embedded Net DVR Emerson Office Suites",
