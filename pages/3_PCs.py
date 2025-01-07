@@ -5,6 +5,7 @@ from streamlit_modal import Modal
 from utils.config_loader import load_site_config, save_site_config
 import uuid
 
+# Helper functions (unchanged)
 def create_empty_slot_mapping(rows, cols):
     """Create an empty mapping structure based on the specified layout"""
     empty_slots = {}

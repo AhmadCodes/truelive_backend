@@ -4,6 +4,7 @@ import json
 from utils.config_loader import load_site_config, load_camera_config, save_site_config
 from utils.config_generator import generate_config
 import time
+from utils.websocket_client import send_config_sync
 
 def send_screen_mapping(mapping_json):
     """Function to send screen mapping configuration"""
@@ -14,6 +15,8 @@ def send_screen_mapping(mapping_json):
         
     with open("st_config.json", "w") as file:
         json.dump(config, file, indent=4)
+        
+    send_config_sync(config)
         
     return True
 

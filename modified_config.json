@@ -225,31 +225,12 @@
                             "row": 0,
                             "column": 0
                         },
-                        "id": "site_11010_CAM_202152",
-                        "osd_text": "431 Dekalb 1 (431 Dekalb)",
-                        "url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/102",
-                        "mainstream_url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/102"
-                    },
-                    {
-                        "location": {
-                            "row": 0,
-                            "column": 0
-                        },
                         "id": null,
                         "osd_text": null,
                         "url": null
                     }
                 ],
                 [
-                    {
-                        "location": {
-                            "row": 0,
-                            "column": 1
-                        },
-                        "id": null,
-                        "osd_text": null,
-                        "url": null
-                    },
                     {
                         "location": {
                             "row": 0,
@@ -267,15 +248,6 @@
                             "row": 0,
                             "column": 2
                         },
-                        "id": null,
-                        "osd_text": null,
-                        "url": null
-                    },
-                    {
-                        "location": {
-                            "row": 0,
-                            "column": 2
-                        },
                         "id": "site_10538_CAM_193786",
                         "osd_text": "Cam 3 - 10.1.1.139 (N843A8-41F0 13-21 Lexington)",
                         "url": "rtsp://admin:LeXington09%40%23@66.108.96.217:554//cam/realmonitor?channel=3&subtype=1",
@@ -283,15 +255,6 @@
                     }
                 ],
                 [
-                    {
-                        "location": {
-                            "row": 1,
-                            "column": 0
-                        },
-                        "id": null,
-                        "osd_text": null,
-                        "url": null
-                    },
                     {
                         "location": {
                             "row": 1,
@@ -309,15 +272,6 @@
                             "row": 1,
                             "column": 1
                         },
-                        "id": null,
-                        "osd_text": null,
-                        "url": null
-                    },
-                    {
-                        "location": {
-                            "row": 1,
-                            "column": 1
-                        },
                         "id": "site_10538_CAM_193787",
                         "osd_text": "Cam 5 - 10.1.1.137 (N843A8-41F0 13-21 Lexington)",
                         "url": "rtsp://admin:LeXington09%40%23@66.108.96.217:554//cam/realmonitor?channel=5&subtype=1",
@@ -325,15 +279,6 @@
                     }
                 ],
                 [
-                    {
-                        "location": {
-                            "row": 1,
-                            "column": 2
-                        },
-                        "id": null,
-                        "osd_text": null,
-                        "url": null
-                    },
                     {
                         "location": {
                             "row": 1,
