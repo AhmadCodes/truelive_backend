@@ -9,8 +9,8 @@
                     "name": "Monitor 1",
                     "id": "pcafa1_screen_3a2531e2",
                     "layout": {
-                        "rows": 3,
-                        "columns": 3
+                        "rows": 4,
+                        "columns": 4
                     },
                     "switching_interval": 10
                 },
@@ -36,7 +36,7 @@
                     "name": "Monitor 4",
                     "id": "pcafa1_screen_5affc58b",
                     "layout": {
-                        "rows": 2,
+                        "rows": 3,
                         "columns": 3
                     },
                     "switching_interval": 10
@@ -172,17 +172,29 @@
                             "camera_name": "Embedded Net DVR-A7",
                             "rtsp_url": "rtsp://admin:12345@ny@110emreson.dvrlists.com:8554/Streaming/Channels/702"
                         }
+                    },
+                    "my view": {
+                        "slot_1_1": null,
+                        "slot_1_2": null,
+                        "slot_1_3": null,
+                        "slot_1_4": null,
+                        "slot_2_1": null,
+                        "slot_2_2": null,
+                        "slot_2_3": null,
+                        "slot_2_4": null,
+                        "slot_3_1": null,
+                        "slot_3_2": null,
+                        "slot_3_3": null,
+                        "slot_3_4": null,
+                        "slot_4_1": null,
+                        "slot_4_2": null,
+                        "slot_4_3": null,
+                        "slot_4_4": null
                     }
                 },
                 "pcafa1_screen_dae3d79b": {
                     "view_1": {
-                        "slot_1_1": {
-                            "site_id": "site_11010",
-                            "site_name": "431 Dekalb",
-                            "camera_id": "CAM_202152",
-                            "camera_name": "431 Dekalb 1",
-                            "rtsp_url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/102"
-                        },
+                        "slot_1_1": null,
                         "slot_1_2": null,
                         "slot_1_3": null,
                         "slot_2_1": null,
@@ -251,7 +263,10 @@
                         "slot_1_3": null,
                         "slot_2_1": null,
                         "slot_2_2": null,
-                        "slot_2_3": null
+                        "slot_2_3": null,
+                        "slot_3_1": null,
+                        "slot_3_2": null,
+                        "slot_3_3": null
                     }
                 }
             }

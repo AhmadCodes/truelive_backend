@@ -23,7 +23,7 @@ def generate_config(site_config):
                 "id": screen_id,
                 "display_idx": len(config["screens"]),
                 "switchInterval": screen_data.get("switching_interval", 10),
-                "layout": layout,
+                # "layout": layout,
                 "source_groups": []
             }
 
@@ -58,24 +58,24 @@ def generate_config(site_config):
                         slot_data = view_data.get(slot_key)
                         if slot_data:
                             slot_sources.append({
-                                "location": {
-                                    "row": row_num,
-                                    "column": col_num
-                                },
+                                # "location": {
+                                #     "row": row_num,
+                                #     "column": col_num
+                                # },
                                 "id": f"{slot_data['site_id']}_{slot_data['camera_id']}",
                                 "osd_text": f"{slot_data['camera_name']} ({slot_data['site_name']})",
                                 "url": encode_rtsp_password(slot_data['rtsp_url']),
-                                "mainstream_url": encode_rtsp_password(slot_data['rtsp_url'])
+                                # "mainstream_url": encode_rtsp_password(slot_data['rtsp_url'])
                             })
                         else:
                             slot_sources.append({
-                                "location": {
-                                    "row": row_num,
-                                    "column": col_num
-                                },
-                                "id": None,
-                                "osd_text": None,
-                                "url": None
+                                # "location": {
+                                #     "row": row_num,
+                                #     "column": col_num
+                                # },
+                                "id": "",
+                                "osd_text": "",
+                                "url": ""
                             })
                     if slot_sources:  # Only add if there are sources
                         screen_config["source_groups"].append(slot_sources)
