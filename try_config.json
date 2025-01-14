@@ -1,0 +1,200 @@
+{
+    "width": 640,
+    "height": 480,
+    "screens": [
+        {
+            "id": "pcafa1_screen_3a2531e2",
+            "display_idx": 0,
+            "switchInterval": 10,
+            "source_groups": [
+                [
+                    {
+                        "id": "site_11010_CAM_202152",
+                        "osd_text": "431 Dekalb 1 (431 Dekalb)",
+                        "url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/102"
+                    },
+                    {
+                        "id": "site_10624_CAM_195034",
+                        "osd_text": "Embedded Net DVR-A1 (Embedded Net DVR Emerson Office Suites)",
+                        "url": "rtsp://admin:12345%40ny@110emreson.dvrlists.com:8554/Streaming/Channels/102"
+                    }
+                ],
+                [
+                    {
+                        "id": "site_11010_CAM_202158",
+                        "osd_text": "431 Dekalb 10 (431 Dekalb)",
+                        "url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/1002"
+                    },
+                    {
+                        "id": "site_10624_CAM_195033",
+                        "osd_text": "Embedded Net DVR-A10 (Embedded Net DVR Emerson Office Suites)",
+                        "url": "rtsp://admin:12345%40ny@110emreson.dvrlists.com:8554/Streaming/Channels/1002"
+                    }
+                ],
+                [
+                    {
+                        "id": "site_11010_CAM_202151",
+                        "osd_text": "431 Dekalb 2 (431 Dekalb)",
+                        "url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/202"
+                    },
+                    {
+                        "id": "site_10624_CAM_195035",
+                        "osd_text": "Embedded Net DVR-A12 (Embedded Net DVR Emerson Office Suites)",
+                        "url": "rtsp://admin:12345%40ny@110emreson.dvrlists.com:8554/Streaming/Channels/1202"
+                    }
+                ],
+                [
+                    {
+                        "id": "site_11010_CAM_202150",
+                        "osd_text": "431 Dekalb 3 (431 Dekalb)",
+                        "url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/302"
+                    },
+                    {
+                        "id": "site_10624_CAM_195046",
+                        "osd_text": "Embedded Net DVR-A13 (Embedded Net DVR Emerson Office Suites)",
+                        "url": "rtsp://admin:12345%40ny@110emreson.dvrlists.com:8554/Streaming/Channels/1302"
+                    }
+                ],
+                [
+                    {
+                        "id": "site_11010_CAM_202153",
+                        "osd_text": "431 Dekalb 4 (431 Dekalb)",
+                        "url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/402"
+                    },
+                    {
+                        "id": "site_10624_CAM_195047",
+                        "osd_text": "Embedded Net DVR-A14 (Embedded Net DVR Emerson Office Suites)",
+                        "url": "rtsp://admin:12345%40ny@110emreson.dvrlists.com:8554/Streaming/Channels/1402"
+                    }
+                ],
+                [
+                    {
+                        "id": "site_11010_CAM_202154",
+                        "osd_text": "431 Dekalb 5 (431 Dekalb)",
+                        "url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/502"
+                    },
+                    {
+                        "id": "site_10624_CAM_195048",
+                        "osd_text": "Embedded Net DVR-A15 (Embedded Net DVR Emerson Office Suites)",
+                        "url": "rtsp://admin:12345%40ny@110emreson.dvrlists.com:8554/Streaming/Channels/1502"
+                    }
+                ],
+                [
+                    {
+                        "id": "site_11010_CAM_202155",
+                        "osd_text": "431 Dekalb 6 (431 Dekalb)",
+                        "url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/602"
+                    },
+                    {
+                        "id": "site_10624_CAM_195036",
+                        "osd_text": "Embedded Net DVR-A3 (Embedded Net DVR Emerson Office Suites)",
+                        "url": "rtsp://admin:12345%40ny@110emreson.dvrlists.com:8554/Streaming/Channels/302"
+                    }
+                ],
+                [
+                    {
+                        "id": "site_11010_CAM_202159",
+                        "osd_text": "431 Dekalb 9 (431 Dekalb)",
+                        "url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/902"
+                    },
+                    {
+                        "id": "",
+                        "osd_text": "",
+                        "url": ""
+                    }
+                ],
+                [
+                    {
+                        "id": "site_11010_CAM_202157",
+                        "osd_text": "431 Dekalb 8 (431 Dekalb)",
+                        "url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/802"
+                    },
+                    {
+                        "id": "site_10624_CAM_195037",
+                        "osd_text": "Embedded Net DVR-A7 (Embedded Net DVR Emerson Office Suites)",
+                        "url": "rtsp://admin:12345%40ny@110emreson.dvrlists.com:8554/Streaming/Channels/702"
+                    }
+                ]
+            ]
+        },
+        {
+            "id": "pcafa1_screen_dae3d79b",
+            "display_idx": 1,
+            "switchInterval": 10,
+            "source_groups": [
+                [
+                    {
+                        "id": "site_11010_CAM_202152",
+                        "osd_text": "431 Dekalb 1 (431 Dekalb)",
+                        "url": "rtsp://admin:shinbet2015@431dekalb.vidliveus.com:554/Streaming/Channels/102"
+                    },
+                    {
+                        "id": "",
+                        "osd_text": "",
+                        "url": ""
+                    }
+                ],
+                [
+                    {
+                        "id": "",
+                        "osd_text": "",
+                        "url": ""
+                    },
+                    {
+                        "id": "site_10538_CAM_193628",
+                        "osd_text": "Cam 2 - 10.1.1.132 (N843A8-41F0 13-21 Lexington)",
+                        "url": "rtsp://admin:LeXington09%40%23@66.108.96.217:554//cam/realmonitor?channel=2&subtype=1"
+                    }
+                ],
+                [
+                    {
+                        "id": "",
+                        "osd_text": "",
+                        "url": ""
+                    },
+                    {
+                        "id": "site_10538_CAM_193786",
+                        "osd_text": "Cam 3 - 10.1.1.139 (N843A8-41F0 13-21 Lexington)",
+                        "url": "rtsp://admin:LeXington09%40%23@66.108.96.217:554//cam/realmonitor?channel=3&subtype=1"
+                    }
+                ],
+                [
+                    {
+                        "id": "",
+                        "osd_text": "",
+                        "url": ""
+                    },
+                    {
+                        "id": "site_10538_CAM_193785",
+                        "osd_text": "Cam 4 - 10.1.1.130 (N843A8-41F0 13-21 Lexington)",
+                        "url": "rtsp://admin:LeXington09%40%23@66.108.96.217:554//cam/realmonitor?channel=4&subtype=1"
+                    }
+                ],
+                [
+                    {
+                        "id": "",
+                        "osd_text": "",
+                        "url": ""
+                    },
+                    {
+                        "id": "site_10538_CAM_193787",
+                        "osd_text": "Cam 5 - 10.1.1.137 (N843A8-41F0 13-21 Lexington)",
+                        "url": "rtsp://admin:LeXington09%40%23@66.108.96.217:554//cam/realmonitor?channel=5&subtype=1"
+                    }
+                ],
+                [
+                    {
+                        "id": "",
+                        "osd_text": "",
+                        "url": ""
+                    },
+                    {
+                        "id": "site_10538_CAM_193789",
+                        "osd_text": "Cam 7 - 10.1.1.136 (N843A8-41F0 13-21 Lexington)",
+                        "url": "rtsp://admin:LeXington09%40%23@66.108.96.217:554//cam/realmonitor?channel=7&subtype=1"
+                    }
+                ]
+            ]
+        }
+    ]
+}
