@@ -1,27 +1,24 @@
 import streamlit as st
 from streamlit_modal import Modal
-import json
 from utils.config_loader import load_site_config, load_camera_config, save_site_config
 from utils.config_generator import generate_config
 import time
 from utils.websocket_client import send_config_sync
+from database import Database, View, ScreenMapping
+
+
+# use @st.cache_resurce() to load db instance as cache
+@ st.cache_resource
+def get_db_instance():
+    return Database()
+db = get_db_instance()
 
 def send_screen_mapping(mapping_json):
-    """Function to send screen mapping configuration"""
     config = generate_config(mapping_json)
-    
-    with open("st_mappings.json", "w") as file:
-        json.dump(mapping_json, file, indent=4)
-        
-    with open("st_config.json", "w") as file:
-        json.dump(config, file, indent=4)
-        
     send_config_sync(config)
-        
     return True
 
 def get_site_cameras(camera_config, site_id):
-    """Get cameras for a specific site"""
     site_info = camera_config['sites'].get(site_id, {})
     cameras = []
     for cam_id, cam_info in site_info.get('cameras', {}).items():
@@ -33,49 +30,20 @@ def get_site_cameras(camera_config, site_id):
     return cameras
 
 def create_empty_view(rows=3, columns=3):
-    """Create an empty grid view based on layout configuration"""
     empty_view = {}
     for row in range(1, rows + 1):
         for col in range(1, columns + 1):
             empty_view[f"slot_{row}_{col}"] = None
     return empty_view
 
+
 def screen_layout_page():
     st.set_page_config(page_title="Screen Layout Configuration", layout="wide")
     st.title("Screen Layout Configuration")
 
-    # Load configurations
     site_config = load_site_config()
     camera_config = load_camera_config()
 
-    # Custom CSS for enhanced UI
-    st.markdown("""
-        <style>
-        .grid-slot {
-            border: 2px solid #ddd;
-            border-radius: 8px;
-            padding: 15px;
-            margin: 8px;
-            background-color: #f8f9fa;
-            transition: all 0.3s ease;
-        }
-        .grid-slot:hover {
-            background-color: #e9ecef;
-            border-color: #007bff;
-        }
-        .stButton button {
-            width: 100%;
-        }
-        .screen-info {
-            padding: 10px;
-            background-color: #f1f3f5;
-            border-radius: 5px;
-            margin-bottom: 10px;
-        }
-        </style>
-    """, unsafe_allow_html=True)
-
-    # Initialize session states
     if 'selected_pc' not in st.session_state:
         st.session_state.selected_pc = None
     if 'selected_screen' not in st.session_state:
@@ -93,11 +61,9 @@ def screen_layout_page():
     if 'editing_view_name' not in st.session_state:
         st.session_state.editing_view_name = None
 
-    # Create sidebar for navigation
     with st.sidebar:
         st.header("Navigation")
         if st.button("Configure Live View", type="primary"):
-            #load site config
             site_config = load_site_config()
             mapping_ret = send_screen_mapping(site_config)
             if mapping_ret:
@@ -107,7 +73,6 @@ def screen_layout_page():
             else:
                 st.error("Failed to apply live view configuration!")
         
-        # PC Selection
         pc_options = [(pc_id, pc_info['name']) for pc_id, pc_info in site_config['pcs'].items()]
         if pc_options:
             selected_pc_index = st.selectbox(
@@ -119,7 +84,6 @@ def screen_layout_page():
             current_pc_id, current_pc_name = pc_options[selected_pc_index]
             st.session_state.selected_pc = current_pc_id
 
-            # Screen Selection
             if st.session_state.selected_pc:
                 pc_info = site_config['pcs'][current_pc_id]
                 screen_options = [(screen_id, screen_info['name']) 
@@ -133,77 +97,69 @@ def screen_layout_page():
                 )
                 st.session_state.selected_screen = screen_options[selected_screen_index][0]
                 
-                # Add rename modal
                 rename_modal = Modal(key="rename_modal", title="Rename View")
                 if st.session_state.editing_view_name and rename_modal.is_open():
                     with rename_modal.container():
                         view_name = st.session_state.editing_view_name
                         new_name = st.text_input("New Name", value=view_name)
-                        views = site_config['mappings']['screen_to_cameras'][current_pc_id][st.session_state.selected_screen]
+                        views = db.get_views_by_screen(st.session_state.selected_screen)
                         col1, col2 = st.columns(2)
                         with col1:
                             if st.button("Save", use_container_width=True):
-                                if new_name != view_name and new_name not in views:
-                                    views[new_name] = views.pop(view_name)
+                                if new_name != view_name and new_name not in [view.name for view in views]:
+                                    screen_id = st.session_state.selected_screen
+                                    
+                                    db.update_view_name(view_name, new_name, screen_id)
                                     if st.session_state.selected_view == view_name:
                                         st.session_state.selected_view = new_name
-                                    save_site_config(site_config)
-                                st.session_state.editing_view_name = None
-                                rename_modal.close()
-                                st.rerun()
+                                    st.rerun()
                         with col2:
                             if st.button("Cancel", use_container_width=True):
                                 st.session_state.editing_view_name = None
                                 rename_modal.close()
 
-                # View Management
                 if st.session_state.selected_screen:
                     st.markdown("### Views")
-                    screen_info = pc_info['screens'][st.session_state.selected_screen]
-                    layout = screen_info['layout']
-                    
-                    if 'mappings' not in site_config:
-                        site_config['mappings'] = {'screen_to_cameras': {}}
-                    if current_pc_id not in site_config['mappings']['screen_to_cameras']:
-                        site_config['mappings']['screen_to_cameras'][current_pc_id] = {}
-                    
-                    screen_mappings = site_config['mappings']['screen_to_cameras'][current_pc_id]
-                    if st.session_state.selected_screen not in screen_mappings:
-                        screen_mappings[st.session_state.selected_screen] = {}
-                    
-                    views = screen_mappings[st.session_state.selected_screen]
+                    views = db.get_views_by_screen(st.session_state.selected_screen)
 
-                    # Add new view button
                     if st.button("➕ Add New View", type="primary"):
                         next_view_num = len(views) + 1
                         new_view_name = f"view_{next_view_num}"
-                        views[new_view_name] = create_empty_view(layout['rows'], layout['columns'])
-                        save_site_config(site_config)
+                        screen_info = pc_info['screens'][st.session_state.selected_screen]
+                        new_view = View(
+                            id=f"{st.session_state.selected_screen}_{new_view_name}",
+                            screen_id=st.session_state.selected_screen,
+                            name=new_view_name,
+                            layout_rows=screen_info["layout"]["rows"],
+                            layout_columns=screen_info["layout"]["columns"]
+                        )
+                        db.add_view(new_view)
+                        st.session_state.selected_view = new_view_name
+                        st.session_state.current_view_config = db.get_view_config(new_view.id)
+                        print(st.session_state.current_view_config)
                         st.rerun()
 
-                    # List views with improved UI
                     st.markdown("#### Available Views:")
-                    for view_name in views.keys():
+                    for view in views:
                         with st.container():
                             cols = st.columns([3, 1, 1])
                             with cols[0]:
-                                if st.button(f"👁️ {view_name}", 
-                                           key=f"view_btn_{view_name}",
+                                if st.button(f"👁️ {view.name}", 
+                                           key=f"view_btn_{view.name}",
                                            use_container_width=True,
-                                           type="secondary" if st.session_state.selected_view != view_name else "primary"):
-                                    st.session_state.selected_view = view_name
-                                    st.session_state.current_view_config = dict(views[view_name])
+                                           type="secondary" if st.session_state.selected_view != view.name else "primary"):
+                                    st.session_state.selected_view = view.name
+                                    st.session_state.current_view_config = db.get_view_config(view.id)
                                     st.rerun()
                             
                             with cols[1]:
-                                if st.button("✏️", key=f"edit_{view_name}", use_container_width=True):
-                                    st.session_state.editing_view_name = view_name
+                                if st.button("✏️", key=f"edit_{view.name}", use_container_width=True):
+                                    st.session_state.editing_view_name = view.name
                                     rename_modal.open()
                             
                             with cols[2]:
-                                if st.button("🗑️", key=f"delete_{view_name}", use_container_width=True):
-                                    del views[view_name]
-                                    save_site_config(site_config)
+                                if st.button("🗑️", key=f"delete_{view.name}", use_container_width=True):
+                                    db.delete_view(view.id)
                                     st.session_state.selected_view = None
                                     st.rerun()
 
@@ -253,8 +209,8 @@ def screen_layout_page():
 
     # Main content area
     if (st.session_state.selected_pc and st.session_state.selected_screen and 
-            st.session_state.selected_view and st.session_state.current_view_config):
-        
+        st.session_state.selected_view and st.session_state.current_view_config):
+    
         pc_info = site_config['pcs'][st.session_state.selected_pc]
         screen_info = pc_info['screens'][st.session_state.selected_screen]
         layout = screen_info['layout']
@@ -265,6 +221,9 @@ def screen_layout_page():
         screen_name = screen_info['name']
         view_name = st.session_state.selected_view
         st.subheader(f"{pc_name} - {screen_name} - {view_name}")
+        
+        # Debug: Print the current view config
+        st.write(f"Debug: Current View Config: {st.session_state.current_view_config}")
         
         # Create grid layout based on screen configuration
         for row in range(1, layout['rows'] + 1):
@@ -278,13 +237,17 @@ def screen_layout_page():
                         st.markdown('----------------', unsafe_allow_html=True)
                         
                         if current_slot:
+                            site_name = db.get_site_by_id(current_slot['site_id']).name if current_slot['site_id'] else "N/A"
+                            camera_name = db.get_camera_by_id(current_slot['camera_id']).name if current_slot['camera_id'] else "N/A"
+                            rtsp_url = db.get_camera_by_id(current_slot['camera_id']).rtsp_url if current_slot['camera_id'] else "N/A"
+                            
                             st.markdown(f"""
                                 ### Slot {row}-{col}
                                 
-                                **Site:** {current_slot['site_name']}  
-                                **Camera:** {current_slot['camera_name']}
+                                **Site:** {site_name}  
+                                **Camera:** {camera_name}
                                 
-                                **RTSP:** `{current_slot['rtsp_url']}`
+                                **RTSP:** `{rtsp_url}`
                             """)
                         else:
                             st.markdown(f"### Slot {row}-{col}\n\nEmpty")
@@ -300,7 +263,6 @@ def screen_layout_page():
         with st.container():
             col1, col2 = st.columns(2)
             
-            # Save configuration button
             with col1:
                 if st.session_state.show_save_button:
                     if st.button("Save View Configuration", type="primary"):
@@ -311,7 +273,11 @@ def screen_layout_page():
                         st.success("View configuration saved successfully!")
                         st.rerun()
             
-            
+            with col2:
+                if st.button("Reset Configuration", type="secondary"):
+                    st.session_state.current_view_config = create_empty_view(layout['rows'], layout['columns'])
+                    st.session_state.show_save_button = True
+                    st.rerun()
 
 if __name__ == "__main__":
     screen_layout_page()

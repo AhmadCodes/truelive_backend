@@ -3,7 +3,7 @@ import websockets
 import json
 
 async def send_config(config):
-    uri = 'ws://localhost:9002'
+    uri = 'ws://host.docker.internal:9022'
     async with websockets.connect(uri) as websocket:
         config_json = json.dumps(config)
         await websocket.send(config_json)
