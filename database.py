@@ -36,7 +36,7 @@ class Screen:
 @dataclass
 class ScreenMapping:
     screen_id: str
-    view_name: str
+    view_id: str  # Changed from view_name
     slot_row: int
     slot_col: int
     site_id: str
@@ -64,23 +64,29 @@ class Database:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 
+                # Create tables in correct order to respect foreign key relationships
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS sites (
                         id TEXT PRIMARY KEY,
                         name TEXT NOT NULL,
                         nvr_username TEXT NOT NULL,
-                        nvr_password TEXT NOT NULL
+                        nvr_password TEXT NOT NULL,
+                        sureview_site boolean DEFAULT 0 NOT NULL
                     )
                 ''')
+                
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS cameras (
                         id TEXT PRIMARY KEY,
                         site_id TEXT NOT NULL,
                         name TEXT NOT NULL,
                         rtsp_url TEXT NOT NULL,
+                        main_stream_url TEXT,
+                        sureview_camera boolean DEFAULT 0 NOT NULL,
                         FOREIGN KEY(site_id) REFERENCES sites(id)
                     )
                 ''')
+                
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS pcs (
                         id TEXT PRIMARY KEY,
@@ -89,6 +95,7 @@ class Database:
                         gpu_type TEXT
                     )
                 ''')
+                
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS screens (
                         id TEXT PRIMARY KEY,
@@ -100,6 +107,18 @@ class Database:
                         FOREIGN KEY(pc_id) REFERENCES pcs(id)
                     )
                 ''')
+                
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS views (
+                        id TEXT PRIMARY KEY,
+                        screen_id TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        layout_rows INTEGER NOT NULL,
+                        layout_columns INTEGER NOT NULL,
+                        FOREIGN KEY(screen_id) REFERENCES screens(id)
+                    )
+                ''')
+                
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS screen_mappings (
                         screen_id TEXT NOT NULL,
@@ -108,49 +127,36 @@ class Database:
                         slot_col INTEGER NOT NULL,
                         site_id TEXT,
                         camera_id TEXT,
-                        PRIMARY KEY(screen_id, view_name, slot_row, slot_col),
-                        FOREIGN KEY(view_id) REFERENCES views(id),
+                        PRIMARY KEY(screen_id, view_id, slot_row, slot_col),
                         FOREIGN KEY(screen_id) REFERENCES screens(id),
+                        FOREIGN KEY(view_id) REFERENCES views(id),
                         FOREIGN KEY(site_id) REFERENCES sites(id),
                         FOREIGN KEY(camera_id) REFERENCES cameras(id)
                     )
                 ''')
                 
-                try:
-                    print("Creating views table")
-                    cursor.execute('''
-                        CREATE TABLE IF NOT EXISTS views (
-                            id TEXT PRIMARY KEY,
-                            screen_id TEXT NOT NULL,
-                            name TEXT NOT NULL,
-                            layout_rows INTEGER NOT NULL,
-                            layout_columns INTEGER NOT NULL,
-                            FOREIGN KEY(screen_id) REFERENCES screens(id)
-                        )
-                    ''')
-                    print("Views table created")
-                except sqlite3.Error as e:
-                    print(f"Error creating views table: {e}")
-                
                 conn.commit()
         except sqlite3.Error as e:
             print(f"An error occurred: {e}")
             
-    def update_view_name(self, old_name: str, new_name: str,
-                         screen_id: str):
-        """Update the name of a view."""
+    def update_view_name(self, old_name: str, new_name: str, screen_id: str):
+        """Update the name of `a view."""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
+            # Update view name
             cursor.execute('''
-                UPDATE views
+                UPDATE views 
                 SET name = ?
-                WHERE name = ?
-                and screen_id = ?
-                and id = ?
+                WHERE name = ? AND screen_id = ?
             ''', (new_name, old_name, screen_id))
+            # Update screen mappings
+            cursor.execute('''
+                UPDATE screen_mappings 
+                SET view_id = ?
+                WHERE view_id = ?
+            ''', (f"{screen_id}_{new_name}", f"{screen_id}_{old_name}"))
             conn.commit()
-            
-            
+
     def get_view_config(self, view_id: str) -> dict:
         """Get the configuration for a specific view."""
         with sqlite3.connect(self.db_path) as conn:
@@ -158,18 +164,21 @@ class Database:
             cursor.execute('''
                 SELECT slot_row, slot_col, site_id, camera_id
                 FROM screen_mappings
-                WHERE screen_id = ? AND view_name = ?
-            ''', (view_id.split('_')[0], view_id.split('_')[1]))
+                WHERE screen_id = ? AND view_id = ?
+            ''', (view_id.split('_')[0], view_id))
+            
             rows = cursor.fetchall()
             view_config = {}
             for row in rows:
                 slot_row, slot_col, site_id, camera_id = row
                 slot_key = f"slot_{slot_row}_{slot_col}"
                 view_config[slot_key] = {
-                    "site_id": site_id,
-                    "camera_id": camera_id
+                    'site_id': site_id,
+                    'camera_id': camera_id
                 }
             return view_config
+            
+
             
     def get_view_by_id(self, view_id: str) -> View:
         with sqlite3.connect(self.db_path) as conn:
@@ -265,25 +274,7 @@ class Database:
                 return PC(*row)
             return None
         
-        
-    def get_view_config(self, view_id: str) -> dict:
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT slot_row, slot_col, site_id, camera_id
-                FROM screen_mappings
-                WHERE screen_id = ? AND view_name = ?
-            ''', (view_id.split('_')[0], view_id.split('_')[1]))
-            rows = cursor.fetchall()
-            view_config = {}
-            for row in rows:
-                slot_row, slot_col, site_id, camera_id = row
-                slot_key = f"slot_{slot_row}_{slot_col}"
-                view_config[slot_key] = {
-                    "site_id": site_id,
-                    "camera_id": camera_id
-                }
-            return view_config
+
 
     def add_site(self, site: Site):
         with sqlite3.connect(self.db_path) as conn:
@@ -392,14 +383,14 @@ class Database:
                 ''', (mapping.screen_id, mapping.view_name, mapping.slot_row, mapping.slot_col, mapping.site_id, mapping.camera_id))
             conn.commit()
 
-    def get_screen_mappings(self, screen_id: str, view_name: str) -> List[ScreenMapping]:
+    def get_screen_mappings(self, screen_id: str, view_id: str) -> List[ScreenMapping]:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT screen_id, view_name, slot_row, slot_col, site_id, camera_id
+                SELECT screen_id, view_id, slot_row, slot_col, site_id, camera_id
                 FROM screen_mappings
-                WHERE screen_id = ? AND view_name = ?
-            ''', (screen_id, view_name))
+                WHERE screen_id = ? AND view_id = ?
+            ''', (screen_id, view_id))
             return [ScreenMapping(*row) for row in cursor.fetchall()]
 
     def update_screen_mapping(self, mapping: ScreenMapping):
