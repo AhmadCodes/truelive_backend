@@ -1,11 +1,11 @@
+# main.py
 import os
 from dataclasses import dataclass
 import streamlit as st
 
 @dataclass
 class Config:
-    CAMERA_CONFIG_FILE = os.getenv('CAMERA_CONFIG_FILE', 'camera_config.json')
-    SITE_CONFIG_FILE = os.getenv('SITE_CONFIG_FILE', 'site_config.json')
+    DB_PATH = os.getenv('DB_PATH', 'config.db')
     STREAM_APP_WS_URL = os.getenv('STREAM_APP_WS_URL', 'ws://localhost:8765')
 
 # Initialize session state
@@ -33,7 +33,7 @@ def main_app():
     
     st.title("Camera Configuration System")
     st.write("""
-    This application manages camera configurations and viewing layouts through JSON files.
+    This SQL application manages camera configurations and viewing layouts through SQLite database.
     Use the sidebar to navigate between different sections:
     - Sites: Manage your site locations and NVR credentials
     - Cameras: Configure cameras and their RTSP streams

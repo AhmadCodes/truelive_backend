@@ -1,6 +1,0 @@
-2025-01-07 07:49:07,755 - INFO - Starting Streamlit server...
-2025-01-07 07:49:07,960 - ERROR - Error running Streamlit: signal only works in main thread of the main interpreter
-2025-01-07 07:49:22,770 - ERROR - Server failed to start
-2025-01-07 07:49:35,972 - INFO - Starting Streamlit server...
-2025-01-07 07:49:36,166 - ERROR - Error running Streamlit: signal only works in main thread of the main interpreter
-2025-01-07 07:49:50,988 - ERROR - Server failed to start

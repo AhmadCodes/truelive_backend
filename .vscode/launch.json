@@ -8,7 +8,8 @@
         "module": "streamlit",
         "args": [
           "run",
-          "main.py"
+          "main.py",
+          "--server.port=7861"
         ],
         "console": "integratedTerminal"
       }

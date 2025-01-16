@@ -1,15 +1,9 @@
+# pages/1_Sites.py
 import streamlit as st
 from streamlit_modal import Modal
 from utils.config_loader import load_camera_config, save_camera_config
-import pandas as pd
-import time
 import uuid
-
-# if 'logged_in' not in st.session_state or not st.session_state['logged_in']:
-#     st.error("You need to log in first.")
-#     st.stop()
-
-
+import time
 def sites_page():
     st.set_page_config(page_title="Site Management", page_icon="🎥", layout="wide")
     
@@ -66,9 +60,6 @@ def sites_page():
             nvr_password = st.text_input("NVR Password", type="password", key="new_site_nvr_password")
             if st.button("Submit", key="submit_new_site"):
                 if site_name and nvr_username and nvr_password:
-                    
-                    config = load_camera_config()
-                    # site_id = f"site_{len(config['sites']) + 1}"
                     site_id = "SITE_" + str(uuid.uuid4())
                     config["sites"][site_id] = {
                         "name": site_name,
@@ -108,7 +99,7 @@ def sites_page():
             
             for cam_id, cam_info in site_data.get("cameras", {}).items():
                 row_cam = st.columns([3, 3, 2])
-                row_cam[0].write(cam_info["name"])
+                row_cam[0].write(cam_info["name"])                
                 row_cam[1].write(cam_info["rtsp_url"])
                 with row_cam[2]:
                     edit_cam_col, del_cam_col = st.columns(2)
@@ -142,10 +133,7 @@ def sites_page():
                     site_data = config["sites"][sid]
                     if st.button("Save New Camera", key="save_new_cam"):
                         if new_cam_name and new_cam_rtsp:
-                            # new_cam_id = f"cam_{len(site_data['cameras']) + 1}"
-                            new_cam_id = "CAM_" +str(uuid.uuid4())
-                            #add an empty dictionary to the site_data["cameras"] dictionary
-                            site_data["cameras"][new_cam_id] = {}
+                            new_cam_id = "CAM_" + str(uuid.uuid4())
                             site_data["cameras"][new_cam_id] = {
                                 "name": new_cam_name,
                                 "rtsp_url": new_cam_rtsp

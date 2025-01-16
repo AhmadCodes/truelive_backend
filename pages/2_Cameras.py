@@ -1,15 +1,14 @@
+# pages/2_Cameras.py
 import streamlit as st
 from streamlit_modal import Modal
 from utils.config_loader import load_camera_config, save_camera_config
-import pandas as pd
-import time
+import uuid
 import cv2
 import numpy as np
-import uuid
 from threading import Thread
 import queue
-
 from utils.url_processor import encode_rtsp_password
+import time
 
 def get_camera_snapshot(rtsp_url, result_queue):
     """Get a single frame from RTSP stream after 1 second buffer"""

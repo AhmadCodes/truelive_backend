@@ -1,4 +1,3 @@
-#%%
 from urllib.parse import quote, urlparse, urlunparse
 import urllib.parse
 from urllib.parse import quote
@@ -24,12 +23,16 @@ def encode_rtsp_password(rtsp_url):
     
     return encoded_rtsp_url
 
-# Example usage
-rtsp_url = "rtsp://admin:shin@bet2015@431dekalb.vidliveus.com:554/Streaming/Channels/102"
-encoded_rtsp_url = encode_rtsp_password(rtsp_url)
-print(encoded_rtsp_url)
+#%%
+if __name__ == "__main__":
+    # Example usage
+    
+    # Example usage
+    rtsp_url = "rtsp://admin:shin@bet2015@431dekalb.vidliveus.com:554/Streaming/Channels/102"
+    encoded_rtsp_url = encode_rtsp_password(rtsp_url)
+    print(encoded_rtsp_url)
 
-#%% Check if the output is as expected
-expected_url = "rtsp://admin:shin%40bet2015@431dekalb.vidliveus.com:554/Streaming/Channels/102"
-assert encoded_rtsp_url == expected_url, f"Expected {expected_url}, but got {encoded_rtsp_url}"
+    # Check if the output is as expected
+    expected_url = "rtsp://admin:shin%40bet2015@431dekalb.vidliveus.com:554/Streaming/Channels/102"
+    assert encoded_rtsp_url == expected_url, f"Expected {expected_url}, but got {encoded_rtsp_url}"
 # %%
