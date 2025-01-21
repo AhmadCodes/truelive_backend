@@ -358,100 +358,95 @@ def screen_layout_page():
                                         st.error("Failed to delete view.")
 
         # Camera Selection Modal
+        camera_modal = Modal(key="camera_select_modal", title="Select Camera")
         if st.session_state.edit_slot and camera_modal.is_open():
             with camera_modal.container():
-                site_options = [
-                    (site_id, site_info.get("name", "Unknown"))
-                    for site_id, site_info in camera_config["sites"].items()
-                    if isinstance(site_info, dict) and "name" in site_info
-                ]
-
-                if not site_options:
-                    st.error("No valid sites found in the configuration!")
-                    time.sleep(2)
-                    camera_modal.close()
-                    return
-
+                site_options = [(site_id, site_info['name']) 
+                            for site_id, site_info in camera_config['sites'].items()]
+                
                 selected_site_index = st.selectbox(
                     "Select Site",
                     range(len(site_options)),
-                    format_func=lambda x: site_options[x][1],
+                    format_func=lambda x: site_options[x][1]
                 )
-
+                total_sites = len(site_options)
+                if total_sites == 0:
+                    st.error("No sites found in the site configuration!")
+                    time.sleep(2)
+                    camera_modal.close()
+                    
                 selected_site_id = site_options[selected_site_index][0]
-
+                selected_site_name = site_options[selected_site_index][1]
+                
                 cameras = get_site_cameras(camera_config, selected_site_id)
-                if not cameras:
-                    st.warning("No cameras found for this site.")
-                    return
+                if cameras:
+                    selected_camera_index = st.selectbox(
+                        "Select Camera",
+                        range(len(cameras)),
+                        format_func=lambda x: cameras[x]["name"],
+                    )
+                    selected_camera = cameras[selected_camera_index]
 
-                selected_camera_index = st.selectbox(
-                    "Select Camera",
-                    range(len(cameras)),
-                    format_func=lambda x: cameras[x]["name"],
-                )
-                selected_camera = cameras[selected_camera_index]
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("Confirm", use_container_width=True):
+                            try:
+                                row, col = map(
+                                    int, st.session_state.edit_slot.split("_")[1:]
+                                )
 
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("Confirm", use_container_width=True):
-                        try:
-                            row, col = map(
-                                int, st.session_state.edit_slot.split("_")[1:]
-                            )
+                                mapping = ScreenMapping(
+                                    pc_id=st.session_state.selected_pc,
+                                    screen_id=st.session_state.selected_screen,
+                                    view_id=st.session_state.selected_view_id,
+                                    slot_row=row,
+                                    slot_col=col,
+                                    site_id=selected_site_id,
+                                    camera_id=selected_camera["camera_id"],
+                                )
 
-                            mapping = ScreenMapping(
-                                pc_id=st.session_state.selected_pc,
-                                screen_id=st.session_state.selected_screen,
-                                view_id=st.session_state.selected_view_id,
-                                slot_row=row,
-                                slot_col=col,
-                                site_id=selected_site_id,
-                                camera_id=selected_camera["camera_id"],
-                            )
+                                db.add_screen_mapping(mapping)
+                                # Updated: Using all three required parameters
+                                st.session_state.current_view_config = db.get_view_config(
+                                    st.session_state.selected_pc,
+                                    st.session_state.selected_screen,
+                                    st.session_state.selected_view_id,
+                                )
+                                st.session_state.edit_slot = None
+                                st.session_state.show_save_button = True
+                                camera_modal.close()
+                                st.rerun()
+                            except Exception as e:
+                                logger.error(f"Failed to add screen mapping: {e}")
+                                st.error("Failed to save camera configuration.")
 
-                            db.add_screen_mapping(mapping)
-                            # Updated: Using all three required parameters
-                            st.session_state.current_view_config = db.get_view_config(
-                                st.session_state.selected_pc,
-                                st.session_state.selected_screen,
-                                st.session_state.selected_view_id,
-                            )
-                            st.session_state.edit_slot = None
-                            st.session_state.show_save_button = True
-                            camera_modal.close()
-                            st.rerun()
-                        except Exception as e:
-                            logger.error(f"Failed to add screen mapping: {e}")
-                            st.error("Failed to save camera configuration.")
+                    with col2:
+                        if st.button("Clear Slot", use_container_width=True):
+                            try:
+                                row, col = map(
+                                    int, st.session_state.edit_slot.split("_")[1:]
+                                )
 
-                with col2:
-                    if st.button("Clear Slot", use_container_width=True):
-                        try:
-                            row, col = map(
-                                int, st.session_state.edit_slot.split("_")[1:]
-                            )
+                                db.delete_screen_mapping(
+                                    st.session_state.selected_screen,
+                                    st.session_state.selected_view_id,
+                                    row,
+                                    col,
+                                )
 
-                            db.delete_screen_mapping(
-                                st.session_state.selected_screen,
-                                st.session_state.selected_view_id,
-                                row,
-                                col,
-                            )
-
-                            # Updated: Using all three required parameters
-                            st.session_state.current_view_config = db.get_view_config(
-                                st.session_state.selected_pc,
-                                st.session_state.selected_screen,
-                                st.session_state.selected_view_id,
-                            )
-                            st.session_state.edit_slot = None
-                            st.session_state.show_save_button = True
-                            camera_modal.close()
-                            st.rerun()
-                        except Exception as e:
-                            logger.error(f"Failed to clear slot: {e}")
-                            st.error("Failed to clear camera slot.")
+                                # Updated: Using all three required parameters
+                                st.session_state.current_view_config = db.get_view_config(
+                                    st.session_state.selected_pc,
+                                    st.session_state.selected_screen,
+                                    st.session_state.selected_view_id,
+                                )
+                                st.session_state.edit_slot = None
+                                st.session_state.show_save_button = True
+                                camera_modal.close()
+                                st.rerun()
+                            except Exception as e:
+                                logger.error(f"Failed to clear slot: {e}")
+                                st.error("Failed to clear camera slot.")
 
         # Main content area
         if all(
