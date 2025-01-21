@@ -176,6 +176,12 @@ def screen_layout_page():
                 range(len(site_options)),
                 format_func=lambda x: site_options[x][1]
             )
+            total_sites = len(site_options)
+            if total_sites == 0:
+                st.error("No sites found in the site configuration!")
+                time.sleep(2)
+                camera_modal.close()
+                
             selected_site_id = site_options[selected_site_index][0]
             selected_site_name = site_options[selected_site_index][1]
             
