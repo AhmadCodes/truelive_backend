@@ -9,6 +9,7 @@ class Site:
     name: str
     nvr_username: str
     nvr_password: str
+    sureview_site: bool = False
 
 @dataclass
 class Camera:
@@ -16,6 +17,8 @@ class Camera:
     site_id: str
     name: str
     rtsp_url: str
+    main_stream_url: str = None
+    sureview_camera: bool = False
 
 @dataclass
 class PC:
@@ -41,6 +44,7 @@ class ScreenMapping:
     slot_col: int
     site_id: str
     camera_id: str
+    playing_state: bool = False
     
 from dataclasses import dataclass
 
@@ -127,6 +131,7 @@ class Database:
                         slot_col INTEGER NOT NULL,
                         site_id TEXT,
                         camera_id TEXT,
+                        playing_state BOOLEAN DEFAULT 0 NOT NULL,
                         PRIMARY KEY(screen_id, view_id, slot_row, slot_col),
                         FOREIGN KEY(screen_id) REFERENCES screens(id),
                         FOREIGN KEY(view_id) REFERENCES views(id),

@@ -1,9 +1,23 @@
 import asyncio
 import websockets
 import json
+import os
 
+def is_running_in_docker():
+    if os.path.exists("/.dockerenv"):
+        return True
+    try:
+        with open("/proc/1/cgroup") as f:
+            return "docker" in f.read()
+    except:
+        return False
+    
 async def send_config(config):
-    uri = 'ws://host.docker.internal:9022'
+    # if program is running in docker container, use host.docker.internal to access host machine
+    if is_running_in_docker():
+        uri = 'ws://host.docker.internal:9022'
+    else:
+        uri = 'ws://localhost:9022'
     async with websockets.connect(uri) as websocket:
         config_json = json.dumps(config)
         await websocket.send(config_json)
