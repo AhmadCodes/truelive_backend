@@ -35,9 +35,10 @@ class Screen:
     rows: int
     columns: int
     switching_interval: int
-
+    
 @dataclass
 class ScreenMapping:
+    pc_id: str
     screen_id: str
     view_id: str  # Changed from view_name
     slot_row: int
@@ -46,7 +47,6 @@ class ScreenMapping:
     camera_id: str
     playing_state: bool = False
     
-from dataclasses import dataclass
 
 @dataclass
 class View:
@@ -125,6 +125,7 @@ class Database:
                 
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS screen_mappings (
+                        pc_id TEXT NOT NULL,
                         screen_id TEXT NOT NULL,
                         view_id TEXT NOT NULL,
                         slot_row INTEGER NOT NULL,
@@ -132,7 +133,8 @@ class Database:
                         site_id TEXT,
                         camera_id TEXT,
                         playing_state BOOLEAN DEFAULT 0 NOT NULL,
-                        PRIMARY KEY(screen_id, view_id, slot_row, slot_col),
+                        PRIMARY KEY(pc_id, screen_id, view_id, slot_row, slot_col),
+                        FOREIGN KEY(pc_id) REFERENCES pcs(id),
                         FOREIGN KEY(screen_id) REFERENCES screens(id),
                         FOREIGN KEY(view_id) REFERENCES views(id),
                         FOREIGN KEY(site_id) REFERENCES sites(id),
@@ -162,26 +164,63 @@ class Database:
             ''', (f"{screen_id}_{new_name}", f"{screen_id}_{old_name}"))
             conn.commit()
 
-    def get_view_config(self, view_id: str) -> dict:
-        """Get the configuration for a specific view."""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT slot_row, slot_col, site_id, camera_id
-                FROM screen_mappings
-                WHERE screen_id = ? AND view_id = ?
-            ''', (view_id.split('_')[0], view_id))
+    def get_view_config(self, pc_id: str, screen_id: str, view_id: str) -> Dict[str, Any]:
+        """
+        Get the configuration for a specific view including all necessary fields.
+        
+        Args:
+            pc_id (str): ID of the PC
+            screen_id (str): ID of the screen
+            view_id (str): ID of the view
             
-            rows = cursor.fetchall()
-            view_config = {}
-            for row in rows:
-                slot_row, slot_col, site_id, camera_id = row
-                slot_key = f"slot_{slot_row}_{slot_col}"
-                view_config[slot_key] = {
-                    'site_id': site_id,
-                    'camera_id': camera_id
-                }
-            return view_config
+        Returns:
+            dict: A dictionary containing the view configuration with slot keys and their details
+        """
+        if not all([pc_id, screen_id, view_id]):
+            return {}
+            
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT 
+                        slot_row, 
+                        slot_col, 
+                        site_id, 
+                        camera_id,
+                        playing_state,
+                        s.name as site_name,
+                        c.name as camera_name,
+                        c.rtsp_url
+                    FROM screen_mappings sm
+                    LEFT JOIN sites s ON sm.site_id = s.id
+                    LEFT JOIN cameras c ON sm.camera_id = c.id
+                    WHERE sm.pc_id = ? AND sm.screen_id = ? AND sm.view_id = ?
+                ''', (pc_id, screen_id, view_id))
+                
+                rows = cursor.fetchall()
+                view_config = {}
+                
+                for row in rows:
+                    slot_row, slot_col, site_id, camera_id, playing_state, site_name, camera_name, rtsp_url = row
+                    slot_key = f"slot_{slot_row}_{slot_col}"
+                    view_config[slot_key] = {
+                        'site_id': site_id,
+                        'camera_id': camera_id,
+                        'playing_state': bool(playing_state),
+                        'site_name': site_name,
+                        'camera_name': camera_name,
+                        'rtsp_url': rtsp_url
+                    }
+                
+                return view_config
+                
+        except sqlite3.Error as e:
+            print(f"Database error: {e}")
+            return {}
+        except Exception as e:
+            print(f"Error getting view config: {e}")
+            return {}
             
 
             
@@ -369,8 +408,8 @@ class Database:
             # Check if the mapping already exists
             cursor.execute('''
                 SELECT * FROM screen_mappings
-                WHERE screen_id = ? AND view_name = ? AND slot_row = ? AND slot_col = ?
-            ''', (mapping.screen_id, mapping.view_name, mapping.slot_row, mapping.slot_col))
+                WHERE screen_id = ? AND view_id = ? AND slot_row = ? AND slot_col = ?
+            ''', (mapping.screen_id, mapping.view_id, mapping.slot_row, mapping.slot_col))
             existing_mapping = cursor.fetchone()
 
             if existing_mapping:
@@ -378,44 +417,48 @@ class Database:
                 cursor.execute('''
                     UPDATE screen_mappings
                     SET site_id = ?, camera_id = ?
-                    WHERE screen_id = ? AND view_name = ? AND slot_row = ? AND slot_col = ?
-                ''', (mapping.site_id, mapping.camera_id, mapping.screen_id, mapping.view_name, mapping.slot_row, mapping.slot_col))
+                    WHERE screen_id = ? AND view_id = ? AND slot_row = ? AND slot_col = ?
+                ''', (mapping.site_id, mapping.camera_id, mapping.screen_id, mapping.view_id, mapping.slot_row, mapping.slot_col))
             else:
                 # Insert a new mapping
                 cursor.execute('''
-                    INSERT INTO screen_mappings (screen_id, view_name, slot_row, slot_col, site_id, camera_id)
+                    INSERT INTO screen_mappings (screen_id, view_id, slot_row, slot_col, site_id, camera_id)
                     VALUES (?, ?, ?, ?, ?, ?)
-                ''', (mapping.screen_id, mapping.view_name, mapping.slot_row, mapping.slot_col, mapping.site_id, mapping.camera_id))
+                ''', (mapping.screen_id, mapping.view_id, mapping.slot_row, mapping.slot_col, mapping.site_id, mapping.camera_id))
             conn.commit()
 
-    def get_screen_mappings(self, screen_id: str, view_id: str) -> List[ScreenMapping]:
+
+    def delete_screen_mapping(self, screen_id: str, view_id: str, slot_row: int, slot_col: int):
+        """Delete a screen mapping with updated view_id parameter"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT screen_id, view_id, slot_row, slot_col, site_id, camera_id
-                FROM screen_mappings
-                WHERE screen_id = ? AND view_id = ?
-            ''', (screen_id, view_id))
-            return [ScreenMapping(*row) for row in cursor.fetchall()]
+                DELETE FROM screen_mappings
+                WHERE screen_id = ? AND view_id = ? AND slot_row = ? AND slot_col = ?
+            ''', (screen_id, view_id, slot_row, slot_col))
+            conn.commit()
 
     def update_screen_mapping(self, mapping: ScreenMapping):
+        """Update a screen mapping with correct view_id field"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 UPDATE screen_mappings
                 SET site_id = ?, camera_id = ?
-                WHERE screen_id = ? AND view_name = ? AND slot_row = ? AND slot_col = ?
-            ''', (mapping.site_id, mapping.camera_id, mapping.screen_id, mapping.view_name, mapping.slot_row, mapping.slot_col))
+                WHERE screen_id = ? AND view_id = ? AND slot_row = ? AND slot_col = ?
+            ''', (mapping.site_id, mapping.camera_id, mapping.screen_id, mapping.view_id, mapping.slot_row, mapping.slot_col))
             conn.commit()
 
-    def delete_screen_mapping(self, screen_id: str, view_name: str, slot_row: int, slot_col: int):
+    def get_screen_mappings(self, screen_id: str, view_id: str) -> List[ScreenMapping]:
+        """Get screen mappings with updated view_id parameter"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                DELETE FROM screen_mappings
-                WHERE screen_id = ? AND view_name = ? AND slot_row = ? AND slot_col = ?
-            ''', (screen_id, view_name, slot_row, slot_col))
-            conn.commit()
+                SELECT screen_id, view_id, slot_row, slot_col, site_id, camera_id, playing_state
+                FROM screen_mappings
+                WHERE screen_id = ? AND view_id = ?
+            ''', (screen_id, view_id))
+            return [ScreenMapping(*row) for row in cursor.fetchall()]
             
             
             
