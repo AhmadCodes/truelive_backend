@@ -8,6 +8,10 @@ from database import Database, View, ScreenMapping, Screen, PC
 from typing import Dict, List, Optional, Tuple, Any
 from utils.logging_utils import setup_logging
 import logging
+from utils.background_task import initialize_background_task, get_background_status
+
+# Initialize the background task system
+initialize_background_task()
 
 # Set up logging
 logger = setup_logging(logging.DEBUG)

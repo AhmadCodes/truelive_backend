@@ -4,6 +4,10 @@ from utils.config_loader import load_site_config, save_site_config
 import uuid
 import time
 from database import Database, PC, Screen
+from utils.background_task import initialize_background_task, get_background_status
+
+# Initialize the background task system
+initialize_background_task()
 
 db = Database()
 

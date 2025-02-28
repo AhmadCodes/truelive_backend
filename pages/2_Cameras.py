@@ -9,6 +9,10 @@ from threading import Thread
 import queue
 from utils.url_processor import encode_rtsp_password
 import time
+from utils.background_task import initialize_background_task, get_background_status
+
+# Initialize the background task system
+initialize_background_task()
 
 def get_camera_snapshot(rtsp_url, result_queue):
     """Get a single frame from RTSP stream after 1 second buffer"""
