@@ -34,8 +34,10 @@ def load_site_config():
         config["mappings"]["screen_to_cameras"][pc.id] = {}
         for screen in screens:
             config["mappings"]["screen_to_cameras"][pc.id][screen.id] = {}
-            for view_name in ["view_1"]:  # Assuming default view name
-                mappings = db.get_screen_mappings(screen.id, view_name)
+            views = db.get_views_by_screen(screen.id)
+            for view in views:
+                view_name = view.name
+                mappings = db.get_screen_mappings(screen.id, view.id)
                 config["mappings"]["screen_to_cameras"][pc.id][screen.id][view_name] = {
                     f"slot_{mapping.slot_row}_{mapping.slot_col}": {
                         "site_id": mapping.site_id,
@@ -66,8 +68,6 @@ def save_camera_config(config):
                 db.add_camera(camera)  # Add a new camera
 
 
-# utils/config_loader.py
-# utils/config_loader.py
 def save_site_config(config):
     for pc_id, pc_info in config["pcs"].items():
         pc = PC(pc_id, pc_info["name"], pc_info["ip_address"], pc_info["gpu_type"])
@@ -90,8 +90,9 @@ def save_site_config(config):
                 db.add_screen(screen)  # Add a new screen
 
             for view_name, view_info in config["mappings"]["screen_to_cameras"][pc_id][screen_id].items():
+                view_id = f"{screen_id}_{view_name}"
                 view = View(
-                    id=f"{screen_id}_{view_name}",
+                    id=view_id,
                     screen_id=screen_id,
                     name=view_name,
                     layout_rows=screen_info["layout"]["rows"],
@@ -105,10 +106,24 @@ def save_site_config(config):
                 else:
                     db.add_view(view)  # Add a new view
 
+                # Clear existing mappings for this view
+                # (This approach is safer than trying to update existing mappings)
+                for row in range(screen_info["layout"]["rows"]):
+                    for col in range(screen_info["layout"]["columns"]):
+                        db.delete_screen_mapping(screen_id, view_id, row, col)
+                
+                # Add new mappings
                 for slot_key, slot_info in view_info.items():
                     if slot_info and isinstance(slot_info, dict) and "site_id" in slot_info and "camera_id" in slot_info:
                         slot_row, slot_col = map(int, slot_key.split('_')[1:])
-                        mapping = ScreenMapping(screen_id, view_name, slot_row, slot_col, slot_info["site_id"], slot_info["camera_id"])
+                        mapping = ScreenMapping(
+                            screen_id=screen_id, 
+                            view_id=view_id, 
+                            slot_row=slot_row, 
+                            slot_col=slot_col, 
+                            site_id=slot_info["site_id"], 
+                            camera_id=slot_info["camera_id"]
+                        )
                         db.add_screen_mapping(mapping)
                     else:
                         st.error(f"Invalid slot_info for slot {slot_key} in view {view_name} for screen {screen_id}.")
