@@ -41,7 +41,7 @@ def main_app():
     bg_status = get_background_status()
     
     # Display status in the sidebar (remove in production if desired)
-    st.sidebar.text(f"Last refresh: {bg_status['last_run_time']}")
+    st.sidebar.text(f"Last Sites Fetch Time: {bg_status['last_run_time']}")
     st.sidebar.text(f"Fetch active: {'Yes' if bg_status['is_running'] else 'No'}")
     
     st.write("""
