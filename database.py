@@ -3,7 +3,12 @@ import sqlite3
 from dataclasses import dataclass
 from typing import List, Dict, Any
 import uuid
+import os
+import logging
 
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 @dataclass
 class Site:
@@ -69,7 +74,10 @@ class View:
 
 class Database:
     def __init__(self, db_path: str = "config.db"):
+        curr_dir = os.path.dirname(__file__)
+        db_path = os.path.join(curr_dir, db_path)
         self.db_path = db_path
+        logger.info(f"Database path: {db_path}")
         self._initialize_db()
 
     def _initialize_db(self):
@@ -85,7 +93,8 @@ class Database:
                         name TEXT NOT NULL,
                         nvr_username TEXT NOT NULL,
                         nvr_password TEXT NOT NULL,
-                        sureview_site boolean DEFAULT 0 NOT NULL
+                        sureview_site boolean DEFAULT 0 NOT NULL,
+                        new boolean DEFAULT 1 NOT NULL
                     )
                 """
                 )
@@ -99,7 +108,9 @@ class Database:
                         rtsp_url TEXT NOT NULL,
                         main_stream_url TEXT,
                         sureview_camera boolean DEFAULT 0 NOT NULL,
+                        new boolean DEFAULT 1 NOT NULL,
                         FOREIGN KEY(site_id) REFERENCES sites(id)
+                        
                     )
                 """
                 )
@@ -163,8 +174,12 @@ class Database:
                 )
 
                 conn.commit()
+                logger.info("Database initialized successfully.")
         except sqlite3.Error as e:
             print(f"An error occurred: {e}")
+            logger.error(f"An error occurred during database initialization: {e}")
+
+
 
     def update_view_name(self, old_name: str, new_name: str, screen_id: str):
         """Update the name of `a view."""

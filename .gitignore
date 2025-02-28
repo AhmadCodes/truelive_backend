@@ -1,2 +1,6 @@
 test.py
 .env
+
+*/.pyc
+
+*.pyc

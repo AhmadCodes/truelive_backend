@@ -3,12 +3,20 @@ import time
 import logging
 import requests
 import threading
+import sqlite3
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from dotenv import load_dotenv
+import sys
+try:
+    from database import Database, Site, Camera
+except ImportError:
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from database import Database, Site, Camera
 
 # Load environment variables from .env file
 load_dotenv()
@@ -27,15 +35,19 @@ if not USERNAME or not PASSWORD:
 
 # Set up WebDriver options for headless execution
 chrome_options = Options()
+chrome_options.add_argument("--headless")
+chrome_options.add_argument("--disable-extensions")
 chrome_options.add_argument("--disable-gpu")
 chrome_options.add_argument("--no-sandbox")
 chrome_options.add_argument("--disable-dev-shm-usage")
 chrome_options.add_argument("--log-level=3")
 
+db = Database()
+
 def automate_login():
     """Automates login and retrieves authentication cookies with retry logic."""
     driver = webdriver.Chrome(options=chrome_options)
-    wait = WebDriverWait(driver, 30)  # Increased wait time
+    wait = WebDriverWait(driver, 30)
 
     try:
         logging.info("Opening SureView login page...")
@@ -129,36 +141,36 @@ def get_devices_by_type(cookies, device_type_id=1):
         logging.error(f"API request failed: {e}")
         return None
 
-def generate_camera_dict(servers, devices):
-    """Generates a dictionary mapping servers to their associated cameras with RTSP URLs."""
-    server_dict = {}
-    
-    for server in servers:
-        server_title = server["title"]
-        server_id = server["serverID"]
-        username = server["username"]
-        password = server["password"]
-        host = server["host"]
-        port = server["port"]
-        extra_value = server["extraValue"]
+def save_to_database(servers, devices):
+    """Saves sites and cameras to the database in a thread-safe manner."""
+    with sqlite3.connect(db.db_path) as conn:
+        cursor = conn.cursor()
         
-        server_dict[server_title] = []
+        for server in servers:
+            site = Site(
+                id=str(server["serverID"]),
+                name=server["title"],
+                nvr_username=server["username"],
+                nvr_password=server["password"],
+                sureview_site=True,
+                new=True
+            )
+            cursor.execute("INSERT OR IGNORE INTO sites VALUES (?, ?, ?, ?, ?, ?)", (site.id, site.name, site.nvr_username, site.nvr_password, site.sureview_site, site.new))
         
         for device in devices:
-            if device["serverID"] == server_id:
-                input1 = device["input1"]
-                camera_id = device["deviceID"]
-                camera_name = device["title"]
-                rtsp_url = f"rtsp://{username}:{password}@{host}:{port}/{extra_value.replace('{#}', str(input1))}"
-                
-                server_dict[server_title].append({
-                    "server_id": server_id,
-                    "camera_id": camera_id,
-                    "camera_name": camera_name,
-                    "rtsp_url": rtsp_url
-                })
-    
-    return server_dict
+            rtsp_url = f"rtsp://{server['username']}:{server['password']}@{server['host']}:{server['port']}/{server['extraValue'].replace('{#}', str(device['input1']))}"
+            camera = Camera(
+                id=str(device["deviceID"]),
+                site_id=str(device["serverID"]),
+                name=device["title"],
+                rtsp_url=rtsp_url,
+                main_stream_url=None,
+                sureview_camera=True,
+                new=True
+            )
+            cursor.execute("INSERT OR IGNORE INTO cameras VALUES (?, ?, ?, ?, ?, ?, ?)", (camera.id, camera.site_id, camera.name, camera.rtsp_url, camera.main_stream_url, camera.sureview_camera, camera.new))
+        
+        conn.commit()
 
 def run_in_background():
     """Runs the login and API requests in a separate thread."""
@@ -168,8 +180,8 @@ def run_in_background():
             servers = get_server_list(cookies)
             devices = get_devices_by_type(cookies)
             if servers and devices:
-                camera_dict = generate_camera_dict(servers, devices)
-                logging.info(f"Camera Dictionary: {camera_dict}")
+                save_to_database(servers, devices)
+                logging.info("Data saved to database successfully.")
 
     thread = threading.Thread(target=task, daemon=True)
     thread.start()
@@ -177,5 +189,5 @@ def run_in_background():
 
 if __name__ == "__main__":
     run_in_background()
-    time.sleep(10)  # Allow background execution
+    time.sleep(10)
     logging.info("Main process continues running...")
