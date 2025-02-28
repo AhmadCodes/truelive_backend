@@ -12,6 +12,7 @@ class Site:
     nvr_username: str
     nvr_password: str
     sureview_site: bool = False
+    new : bool = True
 
 
 @dataclass
@@ -22,6 +23,9 @@ class Camera:
     rtsp_url: str
     main_stream_url: str = None
     sureview_camera: bool = False
+    new : bool = True
+
+
 
 
 @dataclass
