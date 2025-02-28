@@ -5,6 +5,10 @@ from utils.config_loader import load_camera_config, save_camera_config
 from database import Database
 import uuid
 import time
+from utils.background_task import initialize_background_task, get_background_status
+
+# Initialize the background task system
+initialize_background_task()
 
 def sites_page():
     st.set_page_config(page_title="Site Management", page_icon="🎥", layout="wide")
