@@ -11,13 +11,15 @@ def is_running_in_docker():
             return "docker" in f.read()
     except:
         return False
+
+ws_port = os.getenv('WS_PORT', 9022)
     
 async def send_config(config):
     # if program is running in docker container, use host.docker.internal to access host machine
     if is_running_in_docker():
-        uri = 'ws://host.docker.internal:9022'
+        uri = f'ws://host.docker.internal:{ws_port}'
     else:
-        uri = 'ws://localhost:9022'
+        uri = f'ws://localhost:{ws_port}'
     async with websockets.connect(uri) as websocket:
         config_json = json.dumps(config)
         await websocket.send(config_json)
