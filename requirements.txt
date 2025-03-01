@@ -5,3 +5,6 @@ selenium==4.29.0
 streamlit==1.41.1
 streamlit_modal==0.1.2
 websockets==14.1
+python-dotenv
+chromedriver-autoinstaller
+get-chrome-driver
