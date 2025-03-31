@@ -6,7 +6,7 @@ from utils.sureview_devices import run_in_background
 # Global thread object outside of Streamlit's session state
 _background_thread = None
 _last_run_time = 0
-_interval = 120  # 2 minutes in seconds
+_interval = 600  # 10 minutes in seconds
 
 def initialize_background_task():
     """Initialize background task tracking in session state"""

@@ -4,3 +4,9 @@ test.py
 */.pyc
 
 *.pyc
+
+db_backup/*
+db_backup/
+
+outputs/*
+outputs/

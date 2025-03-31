@@ -1,0 +1,85 @@
+{
+  "width": 640,
+  "height": 480,
+  "screens": [
+    {
+      "id": "pc9fb1_screen_970ea7a5",
+      "display_idx": 0,
+      "switchInterval": 10,
+      "source_groups": [
+        [
+          {
+            "id": "10207_186306",
+            "osd_text": "Embedded Net DVR 1 (Embedded Net DVR Chabad of Clinton and Pratt)",
+            "url": "rtsp://admin:12345%40ny@110emerson.ddns.net:8554/Streaming/Channels/102",
+            "use_tcp": false
+          }
+        ],
+        [
+          {
+            "id": "",
+            "osd_text": "",
+            "url": "",
+            "use_tcp": false
+          }
+        ],
+        [
+          {
+            "id": "",
+            "osd_text": "",
+            "url": "",
+            "use_tcp": false
+          }
+        ],
+        [
+          {
+            "id": "",
+            "osd_text": "",
+            "url": "",
+            "use_tcp": false
+          }
+        ],
+        [
+          {
+            "id": "",
+            "osd_text": "",
+            "url": "",
+            "use_tcp": false
+          }
+        ],
+        [
+          {
+            "id": "",
+            "osd_text": "",
+            "url": "",
+            "use_tcp": false
+          }
+        ],
+        [
+          {
+            "id": "",
+            "osd_text": "",
+            "url": "",
+            "use_tcp": false
+          }
+        ],
+        [
+          {
+            "id": "",
+            "osd_text": "",
+            "url": "",
+            "use_tcp": false
+          }
+        ],
+        [
+          {
+            "id": "",
+            "osd_text": "",
+            "url": "",
+            "use_tcp": false
+          }
+        ]
+      ]
+    }
+  ]
+}

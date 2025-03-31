@@ -9,6 +9,10 @@ from typing import Dict, List, Optional, Tuple, Any
 from utils.logging_utils import setup_logging
 import logging
 from utils.background_task import initialize_background_task, get_background_status
+import uuid
+import jwt
+import os
+import json
 
 # Initialize the background task system
 initialize_background_task()
@@ -41,17 +45,57 @@ def get_db_instance() -> Database:
         return None
 
 
-def send_screen_mapping(config: Dict[str, Any]) -> bool:
+def send_screen_mapping(config: Dict[str, Any], pc_id: str) -> bool:
     """Send screen mapping configuration with validation"""
     if not config:
         logger.error("Empty configuration provided")
         return False
 
     try:
+        # Get the PC's auth token from the database
+        db = get_db_instance()
+        pc = db.get_pc_by_id(pc_id)
+        if not pc or not hasattr(pc, 'auth_token') or not pc.auth_token:
+            # Generate a JWT token if not available
+            JWT_SECRET = os.getenv('JWT_SECRET', 'your-secret-key')
+            auth_token = jwt.encode({
+                'pc_id': pc_id,
+                'name': pc.name if pc else 'Unknown',
+                'exp': int(time.time()) + 86400  # 24 hour expiry
+            }, JWT_SECRET, algorithm='HS256')
+            
+            logger.info(f"Generated new auth token for PC {pc_id}")
+            
+            # Save the token if the PC exists
+            if pc:
+                db.update_pc_token(pc_id, auth_token)
+        else:
+            auth_token = pc.auth_token
+            logger.info(f"Using existing auth token for PC {pc_id}")
+
+        # Ensure we have a valid configuration
         generated_config = generate_config(config)
-        return send_config_sync(generated_config)
+        
+        # Log the config being sent (truncated for brevity)
+        config_str = json.dumps(generated_config)
+        logger.info(f"Sending config to PC {pc_id} (length: {len(config_str)} chars)")
+        logger.debug(f"Config first 500 chars: {config_str[:500]}...")
+        
+        # Send the configuration
+        success = send_config_sync(generated_config, pc_id, auth_token)
+        
+        if success:
+            logger.info(f"Successfully sent config to PC {pc_id}")
+            # Update the last_applied timestamp in the database
+            db.update_pc_last_applied(pc_id)
+        else:
+            logger.error(f"Failed to send config to PC {pc_id}")
+            
+        return success
     except Exception as e:
         logger.error(f"Failed to send screen mapping: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return False
 
 
@@ -134,6 +178,8 @@ def screen_layout_page():
                 return
         except Exception as e:
             logger.error(f"Failed to load camera config: {e}")
+            import traceback
+            traceback.print_exc()
             st.error(
                 "Failed to load camera configuration. Please check your settings.")
             return
@@ -148,6 +194,10 @@ def screen_layout_page():
             "current_view_config": None,
             "show_save_button": False,
             "editing_view_id": None,
+            "open_camera_modal": False,      # For tracking modal open request
+            "last_edited_slot": None,        # Track which slot was last edited
+            "modal_site_index": 0,           # Track selected site in modal
+            "modal_camera_index": 0,         # Track selected camera in modal
         }
 
         for key, default_value in session_states.items():
@@ -157,42 +207,105 @@ def screen_layout_page():
         with st.sidebar:
             st.header("Navigation")
 
-            # Live View Configuration Button
+            # Live View Configuration Button - MODIFIED: Removed view selection requirement
             if st.button("Configure Live View", type="primary"):
-                if not st.session_state.selected_view_id:
-                    st.warning("Please select a view first.")
+                # Check if PC and screen are selected
+                if not st.session_state.selected_pc or not st.session_state.selected_screen:
+                    st.warning("Please select a PC and screen first.")
                     return
 
-                view = db.get_view_by_id(st.session_state.selected_view_id)
-                if not view:
-                    st.error("Selected view not found.")
-                    return
-
-                # Updated: Using all three required parameters
-                config = db.get_view_config(
-                    st.session_state.selected_pc,
-                    st.session_state.selected_screen,
-                    st.session_state.selected_view_id,
-                )
-                if not config:
-                    st.error("View configuration is empty.")
-                    return
-
-                mapping_ret = send_screen_mapping(config)
-                if mapping_ret:
-                    success = st.success(
-                        "Live view configuration applied successfully!"
-                    )
-                    time.sleep(1)
-                    success.empty()
-                else:
-                    st.error("Failed to apply live view configuration!")
+                # Get PC configuration directly without requiring view selection
+                try:
+                    with st.spinner("Loading configuration..."):
+                        pc_config = db.get_pc_config(st.session_state.selected_pc)
+                        
+                    if not pc_config:
+                        st.error("PC configuration is empty. Please configure at least one view.")
+                        return
+                        
+                    if not pc_config.get("mappings", {}).get("screen_to_cameras", {}).get(st.session_state.selected_pc, {}):
+                        st.warning("No camera mappings found for this PC. Please configure at least one view.")
+                        return
+                        
+                    # Show configuration details before sending
+                    st.info("Preparing to send configuration to device...")
+                    
+                    # Display a progress bar with steps
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
+                    # Step 1: Preparing configuration
+                    status_text.text("Step 1/3: Preparing configuration...")
+                    time.sleep(0.5)
+                    progress_bar.progress(33)
+                    
+                    # Step 2: Sending to device
+                    status_text.text("Step 2/3: Sending to device...")
+                    
+                    # Send configuration
+                    mapping_ret = send_screen_mapping(pc_config, st.session_state.selected_pc)
+                    progress_bar.progress(66)
+                    
+                    # Step 3: Finalizing
+                    status_text.text("Step 3/3: Finalizing...")
+                    time.sleep(0.5)
+                    progress_bar.progress(100)
+                    
+                    # Clear progress indicators
+                    time.sleep(0.5)
+                    progress_bar.empty()
+                    status_text.empty()
+                    
+                    if mapping_ret:
+                        success = st.success(
+                            "✅ Live view configuration applied successfully!"
+                        )
+                        time.sleep(2)
+                        success.empty()
+                    else:
+                        st.error("❌ Failed to apply live view configuration!")
+                        st.info("Make sure the device is online and connected to the network.")
+                        st.info("Check the logs for more details on the error.")
+                except Exception as e:
+                    logger.error(f"Error sending configuration: {e}")
+                    st.error(f"An error occurred: {str(e)}")
+                    st.info("Please check the logs for more details.")
+                    import traceback
+                    logger.error(traceback.format_exc())
 
             # PC Selection
             pcs = db.get_pcs()
             if not pcs:
                 st.warning("No PCs configured in the system.")
                 return
+                
+            # Display status indicator for PC
+            if st.session_state.selected_pc:
+                pc = db.get_pc_by_id(st.session_state.selected_pc)
+                if pc and hasattr(pc, 'last_connected') and pc.last_connected:
+                    # Check if PC is recently connected (within last 5 minutes)
+                    if (time.time() - pc.last_connected) < 300:  # 5 minutes
+                        st.success("✅ Device online")
+                    else:
+                        st.warning("⚠️ Device may be offline")
+                else:
+                    st.warning("⚠️ Connection status unknown")
+                    
+                # Display last applied timestamp
+                if pc and hasattr(pc, 'last_applied') and pc.last_applied:
+                    time_diff = int(time.time() - pc.last_applied)
+                    if time_diff < 60:  # less than a minute
+                        last_applied_str = f"{time_diff} seconds ago"
+                    elif time_diff < 3600:  # less than an hour
+                        last_applied_str = f"{time_diff // 60} minutes ago"
+                    elif time_diff < 86400:  # less than a day
+                        last_applied_str = f"{time_diff // 3600} hours ago"
+                    else:
+                        last_applied_str = f"{time_diff // 86400} days ago"
+                    
+                    st.info(f"Last config applied: {last_applied_str}")
+                else:
+                    st.info("No configuration has been applied yet")
 
             pc_options = [(pc.id, pc.name)
                           for pc in pcs if pc and pc.id and pc.name]
@@ -270,8 +383,9 @@ def screen_layout_page():
                                             return
 
                                         if new_name != view.name:
+                                            screen_id = st.session_state.selected_screen
                                             db.update_view_name(
-                                                view.id, new_name)
+                                                 new_name, view.id, screen_id=screen_id)
                                             st.rerun()
                                 with col2:
                                     if st.button("Cancel", use_container_width=True):
@@ -290,14 +404,15 @@ def screen_layout_page():
                         if not (1 <= screen.rows <= 10 and 1 <= screen.columns <= 10):
                             st.error("Invalid screen dimensions.")
                             return
-
+                        # unique 4 digit hex string
+                        view_unique_id = uuid.uuid4().hex[:4]
                         new_view = View(
-                            id=f"{st.session_state.selected_screen}_{
-                                next_view_num}",
+                            id=f"{st.session_state.selected_screen}_{view_unique_id}",
                             screen_id=st.session_state.selected_screen,
                             name=new_view_name,
                             layout_rows=screen.rows,
                             layout_columns=screen.columns,
+                            view_number=next_view_num,
                         )
 
                         try:
@@ -361,40 +476,105 @@ def screen_layout_page():
                                             f"Failed to delete view: {e}")
                                         st.error("Failed to delete view.")
 
-        # Camera Selection Modal
-        camera_modal = Modal(key="camera_select_modal", title="Select Camera")
-        if st.session_state.edit_slot and camera_modal.is_open():
+        # Camera Selection Modal - IMPROVED IMPLEMENTATION
+        # Check if we need to open the modal this frame
+        if st.session_state.open_camera_modal and st.session_state.edit_slot:
+            st.session_state.open_camera_modal = False  # Reset the flag
+            st.session_state.last_edited_slot = st.session_state.edit_slot  # Remember which slot we're editing
+            # Reset selection indices when opening a new modal
+            st.session_state.modal_site_index = 0
+            st.session_state.modal_camera_index = 0
+            modal_key = f"camera_modal_{st.session_state.edit_slot}"
+            camera_modal = Modal(key=modal_key, title="Select Camera")
+            camera_modal.open()  # Explicitly open the modal
+        else:
+            # Create a modal with the appropriate key
+            modal_key = f"camera_modal_{st.session_state.last_edited_slot}" if st.session_state.last_edited_slot else "camera_modal_default"
+            camera_modal = Modal(key=modal_key, title="Select Camera")
+        
+        # Handle the modal content if it's open
+        if camera_modal.is_open():
             with camera_modal.container():
-                site_options = [(site_id, site_info['name']) 
-                            for site_id, site_info in camera_config['sites'].items()]
-                
-                selected_site_index = st.selectbox(
-                    "Select Site",
-                    range(len(site_options)),
-                    format_func=lambda x: site_options[x][1]
-                )
-                total_sites = len(site_options)
-                if total_sites == 0:
-                    st.error("No sites found in the site configuration!")
-                    time.sleep(2)
-                    camera_modal.close()
+                try:
+                    logger.debug(f"Modal open for slot: {st.session_state.edit_slot}")
                     
-                selected_site_id = site_options[selected_site_index][0]
-                selected_site_name = site_options[selected_site_index][1]
-                
-                cameras = get_site_cameras(camera_config, selected_site_id)
-                if cameras:
+                    # Get site options
+                    site_options = [(site_id, site_info['name']) 
+                                for site_id, site_info in camera_config['sites'].items()]
+                    
+                    if not site_options:
+                        st.error("No sites found in the site configuration!")
+                        time.sleep(1)
+                        camera_modal.close()
+                        st.session_state.edit_slot = None
+                        return
+                    
+                    # Get a stable unique ID for this modal instance
+                    modal_id = st.session_state.last_edited_slot if st.session_state.last_edited_slot else "default"
+                    
+                    # Create a callback to track site selection changes
+                    def on_site_change():
+                        # Update the camera index when site changes
+                        st.session_state.modal_camera_index = 0
+                    
+                    # Site selection with stable key and state tracking
+                    selected_site_index = st.selectbox(
+                        "Select Site",
+                        range(len(site_options)),
+                        index=st.session_state.modal_site_index,
+                        format_func=lambda x: site_options[x][1],
+                        key=f"site_select_{modal_id}",
+                        on_change=on_site_change
+                    )
+                    
+                    # Update the stored site index
+                    st.session_state.modal_site_index = selected_site_index
+                    
+                    selected_site_id = site_options[selected_site_index][0]
+                    selected_site_name = site_options[selected_site_index][1]
+                    
+                    # Get cameras for selected site
+                    cameras = get_site_cameras(camera_config, selected_site_id)
+                    
+                    if not cameras:
+                        st.warning(f"No cameras available for site: {selected_site_name}")
+                        if st.button("Close", key=f"close_no_cameras_{modal_id}"):
+                            camera_modal.close()
+                            st.session_state.edit_slot = None
+                        return
+                    
+                    # Ensure camera index is valid for the current camera list
+                    camera_index = min(st.session_state.modal_camera_index, len(cameras) - 1)
+                    
+                    # Camera selection with stable key and state tracking
                     selected_camera_index = st.selectbox(
                         "Select Camera",
                         range(len(cameras)),
+                        index=camera_index,
                         format_func=lambda x: cameras[x]["name"],
+                        key=f"camera_select_{modal_id}"
                     )
+                    
+                    # Update the stored camera index
+                    st.session_state.modal_camera_index = selected_camera_index
+                    
                     selected_camera = cameras[selected_camera_index]
-
+                    
+                    # Display selected camera details
+                    st.info(f"Selected Camera: {selected_camera['name']}")
+                    st.info(f"RTSP URL: {selected_camera['rtsp_url']}")
+                    
+                    # Action buttons
                     col1, col2 = st.columns(2)
                     with col1:
-                        if st.button("Confirm", use_container_width=True):
+                        if st.button("Confirm", use_container_width=True, key=f"confirm_{modal_id}"):
                             try:
+                                # Only proceed if we still have a valid edit_slot
+                                if not st.session_state.edit_slot:
+                                    st.error("Selection slot lost. Please try again.")
+                                    camera_modal.close()
+                                    return
+                                    
                                 row, col = map(
                                     int, st.session_state.edit_slot.split("_")[1:]
                                 )
@@ -410,23 +590,37 @@ def screen_layout_page():
                                 )
 
                                 db.add_screen_mapping(mapping)
-                                # Updated: Using all three required parameters
+                                
+                                # Refresh the configuration
                                 st.session_state.current_view_config = db.get_view_config(
                                     st.session_state.selected_pc,
                                     st.session_state.selected_screen,
                                     st.session_state.selected_view_id,
                                 )
-                                st.session_state.edit_slot = None
+                                
+                                # Update site name in the current view config
+                                slot_name = f"slot_{row}_{col}"
+                                if slot_name in st.session_state.current_view_config:
+                                    st.session_state.current_view_config[slot_name]["site_name"] = selected_site_name
+                                
                                 st.session_state.show_save_button = True
+                                
+                                # Clear edit slot AFTER processing
                                 camera_modal.close()
-                                st.rerun()
+                                st.session_state.edit_slot = None
                             except Exception as e:
                                 logger.error(f"Failed to add screen mapping: {e}")
                                 st.error("Failed to save camera configuration.")
 
                     with col2:
-                        if st.button("Clear Slot", use_container_width=True):
+                        if st.button("Clear Slot", use_container_width=True, key=f"clear_{modal_id}"):
                             try:
+                                # Only proceed if we still have a valid edit_slot
+                                if not st.session_state.edit_slot:
+                                    st.error("Selection slot lost. Please try again.")
+                                    camera_modal.close()
+                                    return
+                                    
                                 row, col = map(
                                     int, st.session_state.edit_slot.split("_")[1:]
                                 )
@@ -438,123 +632,183 @@ def screen_layout_page():
                                     col,
                                 )
 
-                                # Updated: Using all three required parameters
+                                # Refresh the configuration
                                 st.session_state.current_view_config = db.get_view_config(
                                     st.session_state.selected_pc,
                                     st.session_state.selected_screen,
                                     st.session_state.selected_view_id,
                                 )
-                                st.session_state.edit_slot = None
+                                
                                 st.session_state.show_save_button = True
+                                
+                                # Clear edit slot AFTER processing
                                 camera_modal.close()
-                                st.rerun()
+                                st.session_state.edit_slot = None
                             except Exception as e:
                                 logger.error(f"Failed to clear slot: {e}")
                                 st.error("Failed to clear camera slot.")
+                                
+                except Exception as e:
+                    logger.error(f"Error in camera selection modal: {e}")
+                    st.error("An error occurred while selecting a camera.")
+                    camera_modal.close()
+                    st.session_state.edit_slot = None
 
         # Main content area
-        if all(
-            [
-                st.session_state.selected_pc,
-                st.session_state.selected_screen,
-                st.session_state.selected_view_id,
-            ]
-        ):
+        if st.session_state.selected_pc and st.session_state.selected_screen:
             pc = db.get_pc_by_id(st.session_state.selected_pc)
             screen = db.get_screen_by_id(st.session_state.selected_screen)
-            view = db.get_view_by_id(st.session_state.selected_view_id)
-
-            # Updated: Using all three required parameters
-            st.session_state.current_view_config = db.get_view_config(
-                st.session_state.selected_pc,
-                st.session_state.selected_screen,
-                st.session_state.selected_view_id,
-            )
-
-            if not pc or not screen or not view:
-                st.error("Selected PC, screen, or view not found.")
+            
+            if not pc or not screen:
+                st.error("Selected PC or screen not found.")
                 return
-
+                
             st.header("Layout Configuration")
-            st.subheader(f"{pc.name} - {screen.name} - {view.name}")
+            st.subheader(f"{pc.name} - {screen.name}")
+            
+            # If a view is selected, show the detailed view configuration
+            if st.session_state.selected_view_id:
+                view = db.get_view_by_id(st.session_state.selected_view_id)
+                if not view:
+                    st.error("Selected view not found.")
+                    return
+                    
+                st.subheader(f"Configuring View: {view.name}")
 
-            # Create grid layout
-            for row in range(1, screen.rows + 1):
-                cols = st.columns(screen.columns)
-                for col in range(1, screen.columns + 1):
-                    with cols[col - 1]:
-                        slot_name = f"slot_{row}_{col}"
-                        current_slot = st.session_state.current_view_config.get(
-                            slot_name
-                        )
+                # Refresh the view config to ensure we have the latest data including site names
+                st.session_state.current_view_config = db.get_view_config(
+                    st.session_state.selected_pc,
+                    st.session_state.selected_screen,
+                    st.session_state.selected_view_id,
+                )
 
-                        with st.container():
-                            st.markdown("----------------")
-
-                            if current_slot:
-                                site_name = current_slot.get(
-                                    "site_name", "Unknown Site"
-                                )
-                                camera_name = current_slot.get(
-                                    "camera_name", "Unknown Camera"
-                                )
-                                rtsp_url = current_slot.get("rtsp_url", "N/A")
-                                playing_state = current_slot.get(
-                                    "playing_state", False)
-
-                                st.markdown(
-                                    f"""
-                                    ### Slot {row}-{col}
-
-                                    **Site:** {site_name}
-                                    **Camera:** {camera_name}
-                                    
-
-                                    **RTSP:** `{rtsp_url}`
-                                """
-                                ) #**Status:** {'Playing' if playing_state else 'Stopped'}
-                            else:
-                                st.markdown(f"### Slot {row}-{col}\n\nEmpty")
-
-                            if not isinstance(
-                                slot_name, str
-                            ) or not slot_name.startswith("slot_"):
-                                logger.error(
-                                    f"Invalid slot name format: {slot_name}")
-                                st.error("Invalid slot configuration")
-                                continue
-
-                            st.button(
-                                "Select Camera",
-                                key=f"select_{slot_name}",
-                                on_click=lambda s=slot_name: [
-                                    setattr(st.session_state, "edit_slot", s),
-                                    camera_modal.open(),
-                                ],
+                # Create grid layout
+                for row in range(1, screen.rows + 1):
+                    cols = st.columns(screen.columns)
+                    for col in range(1, screen.columns + 1):
+                        with cols[col - 1]:
+                            slot_name = f"slot_{row}_{col}"
+                            current_slot = st.session_state.current_view_config.get(
+                                slot_name
                             )
 
-            # Action buttons
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.session_state.show_save_button:
-                    if st.button("Save View Configuration", type="primary"):
-                        try:
-                            if not isinstance(
-                                st.session_state.current_view_config, dict
-                            ):
-                                raise ValueError(
-                                    "Invalid view configuration format")
+                            with st.container():
+                                st.markdown("----------------")
 
-                            # Additional validation could be added here
+                                if current_slot:
+                                    # Access site name from the camera_config if possible, as a fallback
+                                    site_id = current_slot.get("site_id", "")
+                                    site_name = current_slot.get("site_name", "Unknown Site")
+                                    
+                                    # If site_name is missing or "Unknown Site", try to get it from camera_config
+                                    if site_name == "Unknown Site" and site_id:
+                                        site_info = camera_config.get("sites", {}).get(site_id, {})
+                                        if site_info and "name" in site_info:
+                                            site_name = site_info["name"]
+                                            # Update the current view config with the correct site name
+                                            st.session_state.current_view_config[slot_name]["site_name"] = site_name
+                                    
+                                    camera_name = current_slot.get(
+                                        "camera_name", "Unknown Camera"
+                                    )
+                                    rtsp_url = current_slot.get("rtsp_url", "N/A")
 
-                            st.session_state.show_save_button = False
-                            st.success(
-                                "View configuration saved successfully!")
-                            st.rerun()
-                        except Exception as e:
-                            logger.error(
-                                f"Failed to save view configuration: {e}")
-                            st.error("Failed to save view configuration")
+                                    st.markdown(
+                                        f"""
+                                        ### Slot {row}-{col}
+
+                                        **Site:** {site_name}
+                                        **Camera:** {camera_name}
+                                        **RTSP:** `{rtsp_url}`
+                                    """
+                                    )
+                                else:
+                                    st.markdown(f"### Slot {row}-{col}\n\nEmpty")
+
+                                if not isinstance(
+                                    slot_name, str
+                                ) or not slot_name.startswith("slot_"):
+                                    logger.error(
+                                        f"Invalid slot name format: {slot_name}")
+                                    st.error("Invalid slot configuration")
+                                    continue
+
+                                # FIXED: Use a simple button with proper state management
+                                if st.button(
+                                    "Select Camera",
+                                    key=f"select_{slot_name}",
+                                ):
+                                    st.session_state.edit_slot = slot_name
+                                    st.session_state.open_camera_modal = True
+                                    st.rerun()
+
+                # Action buttons
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.session_state.show_save_button:
+                        if st.button("Save View Configuration", type="primary"):
+                            try:
+                                if not isinstance(
+                                    st.session_state.current_view_config, dict
+                                ):
+                                    raise ValueError(
+                                        "Invalid view configuration format")
+
+                                # Additional validation could be added here
+
+                                st.session_state.show_save_button = False
+                                st.success(
+                                    "View configuration saved successfully!")
+                                st.rerun()
+                            except Exception as e:
+                                logger.error(
+                                    f"Failed to save view configuration: {e}")
+                                st.error("Failed to save view configuration")
+            else:
+                # No view selected - show a simpler interface
+                st.info("No view is currently selected. You can:")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write("1. Select or create a view from the sidebar to configure camera layout")
+                with col2:
+                    st.write("2. Click 'Configure Live View' to apply current configuration to device")
+                
+                # Show current PC configuration summary
+                st.subheader("Current Device Configuration Summary")
+                try:
+                    pc_config = db.get_pc_config(st.session_state.selected_pc)
+                    if pc_config and 'views' in pc_config.get('mappings', {}).get('screen_to_cameras', {}).get(st.session_state.selected_pc, {}).get(st.session_state.selected_screen, {}):
+                        view_count = len(pc_config.get('mappings', {}).get('screen_to_cameras', {}).get(st.session_state.selected_pc, {}).get(st.session_state.selected_screen, {}))
+                        camera_count = 0
+                        
+                        # Count cameras across all views
+                        for view_name, view_config in pc_config.get('mappings', {}).get('screen_to_cameras', {}).get(st.session_state.selected_pc, {}).get(st.session_state.selected_screen, {}).items():
+                            camera_count += len(view_config)
+                        
+                        # Display summary metrics
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.metric("Total Views", view_count)
+                        with col2:
+                            st.metric("Total Cameras", camera_count)
+                        
+                        if view_count > 0:
+                            st.success("Device has active configuration that can be applied")
+                            
+                            # List configured views
+                            st.subheader("Configured Views")
+                            for view_name in pc_config.get('mappings', {}).get('screen_to_cameras', {}).get(st.session_state.selected_pc, {}).get(st.session_state.selected_screen, {}):
+                                cameras_in_view = len(pc_config.get('mappings', {}).get('screen_to_cameras', {}).get(st.session_state.selected_pc, {}).get(st.session_state.selected_screen, {}).get(view_name, {}))
+                                st.write(f"• **{view_name}**: {cameras_in_view} cameras configured")
+                        else:
+                            st.warning("No views configured yet")
+                            st.info("Please create a view and configure cameras using the sidebar")
+                    else:
+                        st.warning("No configuration available for this device")
+                        st.info("Please create a view and configure cameras using the sidebar")
+                except Exception as e:
+                    logger.error(f"Error getting PC config summary: {e}")
+                    st.error("Failed to retrieve device configuration summary")
 
     except Exception as e:
         logger.error(f"Unexpected error in screen_layout_page: {e}")

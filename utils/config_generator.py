@@ -65,6 +65,7 @@ def generate_config(site_config):
                                 "id": f"{slot_data['site_id']}_{slot_data['camera_id']}",
                                 "osd_text": f"{slot_data['camera_name']} ({slot_data['site_name']})",
                                 "url": encode_rtsp_password(slot_data['rtsp_url']),
+                                "use_tcp": slot_data.get("use_tcp", False)
                                 # "mainstream_url": encode_rtsp_password(slot_data['rtsp_url'])
                             })
                         else:
@@ -75,7 +76,8 @@ def generate_config(site_config):
                                 # },
                                 "id": "",
                                 "osd_text": "",
-                                "url": ""
+                                "url": "",
+                                "use_tcp": False
                             })
                     if slot_sources:  # Only add if there are sources
                         screen_config["source_groups"].append(slot_sources)
