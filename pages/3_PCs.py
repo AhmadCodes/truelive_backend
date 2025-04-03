@@ -13,6 +13,15 @@ import base64
 import requests
 import logging
 import os
+import secrets
+import io
+import websocket
+from PIL import Image
+import pandas as pd
+from dataclasses import asdict
+import threading
+import asyncio
+import websockets
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG,
@@ -118,22 +127,6 @@ def create_screen_structure(screen_id, screen_order, rows=3, cols=3, switching_i
         "switching_interval": switching_interval
     }
 
-def generate_qr_code(data):
-    """Generate QR code for connection data"""
-    qr = qrcode.QRCode(
-        version=1,
-        error_correction=qrcode.constants.ERROR_CORRECT_L,
-        box_size=10,
-        border=4,
-    )
-    qr.add_data(data)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white")
-    
-    buffered = BytesIO()
-    img.save(buffered)
-    img_str = base64.b64encode(buffered.getvalue()).decode()
-    return f"data:image/png;base64,{img_str}"
 
 def display_screen_layout_controls(screen_id, screen_info, screens_dict, key_prefix=""):
     """Display layout controls for a screen with live preview."""
@@ -231,11 +224,46 @@ def reorder_monitor_names(screens):
         # Return original screens if error occurs
         return screens
 
+def check_user_permission(required_role=None):
+    """
+    Check if the current user has the required role.
+    If required_role is None, just check if the user is logged in.
+    """
+    if 'user_id' not in st.session_state or not st.session_state['user_id']:
+        st.warning("You must be logged in to access this page")
+        st.stop()
+    
+    if required_role is None:
+        return True
+    
+    user_role = st.session_state.get('user_role', '')
+    
+    if required_role == 'admin':
+        if user_role not in ['admin', 'super_admin']:
+            st.error("You don't have permission to access this feature")
+            return False
+    elif required_role == 'super_admin':
+        if user_role != 'super_admin':
+            st.error("You don't have permission to access this feature")
+            return False
+    
+    return True
+
 def pcs_page():
     st.set_page_config(page_title="PC Management", page_icon="🎥", layout="wide")
+    
+    # Check if user is logged in
+    if 'user_id' not in st.session_state or not st.session_state['user_id']:
+        st.warning("Please log in to access this page")
+        st.stop()
+    
+    user_role = st.session_state.get('user_role', '')
+    is_read_only = user_role == 'user'
+    
     st.title("PC Management")
-
-    config = load_site_config()
+    
+    if is_read_only:
+        st.info("You have read-only access to PC information. Contact an administrator to make changes.")
     
     # Initialize session state variables
     if "edit_pc_id" not in st.session_state:
@@ -262,10 +290,13 @@ def pcs_page():
 
     cols = st.columns([8, 2])
     with cols[1]:
-        add_pc_clicked = st.button("Add PC", key="add_pc_btn")
+        if not is_read_only:
+            add_pc_btn = st.button("Add PC", key="add_pc_btn")
+        else:
+            add_pc_btn = False
 
     add_pc_modal = Modal(key="add_pc_modal", title="Add New PC")
-    if add_pc_clicked:
+    if add_pc_btn:
         add_pc_modal.open()
 
     if add_pc_modal.is_open():

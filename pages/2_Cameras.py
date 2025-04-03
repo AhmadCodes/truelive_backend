@@ -14,6 +14,31 @@ from utils.background_task import initialize_background_task, get_background_sta
 # Initialize the background task system
 initialize_background_task()
 
+def check_user_permission(required_role=None):
+    """
+    Check if the current user has the required role.
+    If required_role is None, just check if the user is logged in.
+    """
+    if 'user_id' not in st.session_state or not st.session_state['user_id']:
+        st.warning("You must be logged in to access this page")
+        st.stop()
+    
+    if required_role is None:
+        return True
+    
+    user_role = st.session_state.get('user_role', '')
+    
+    if required_role == 'admin':
+        if user_role not in ['admin', 'super_admin']:
+            st.error("You don't have permission to access this feature")
+            return False
+    elif required_role == 'super_admin':
+        if user_role != 'super_admin':
+            st.error("You don't have permission to access this feature")
+            return False
+    
+    return True
+
 def get_camera_snapshot(rtsp_url, result_queue):
     """Get a single frame from RTSP stream after 1 second buffer"""
     rtsp_url = encode_rtsp_password(rtsp_url)
@@ -42,7 +67,18 @@ def get_camera_snapshot(rtsp_url, result_queue):
 def cameras_page():
     st.set_page_config(page_title="Camera Management", page_icon="🎥", layout="wide")
 
+    # Check if user is logged in
+    if 'user_id' not in st.session_state or not st.session_state['user_id']:
+        st.warning("Please log in to access this page")
+        st.stop()
+    
+    user_role = st.session_state.get('user_role', '')
+    is_read_only = user_role == 'user'
+
     st.title("Camera Management")
+    
+    if is_read_only:
+        st.info("You have read-only access to camera information. Contact an administrator to make changes.")
 
     # Load config
     config = load_camera_config()
@@ -85,10 +121,13 @@ def cameras_page():
         unsafe_allow_html=True,
     )
 
-    # Add Camera button
-    btn_cols = st.columns([9, 1])
-    with btn_cols[1]:
-        add_cam_clicked = st.button("Add Camera", key="add_cam_btn")
+    # Add Camera button (only for admin and super_admin)
+    if not is_read_only:
+        btn_cols = st.columns([9, 1])
+        with btn_cols[1]:
+            add_cam_clicked = st.button("Add Camera", key="add_cam_btn")
+    else:
+        add_cam_clicked = False
 
     # Add Camera Modal
     add_camera_modal = Modal(key="add_camera_modal", title="Add New Camera")
@@ -188,21 +227,23 @@ def cameras_page():
                         with row_cam[1]:
                             st.write(cam_info["rtsp_url"])
                         
-                        with row_cam[2]:
-                            col_edit, col_delete = st.columns([1, 1], gap="small")
-                            with col_edit:
-                                if st.button("✏️", key=f"CAMPAGE_edit_cam_{cam_id}_{site_id}"):
-                                    st.session_state["CAMPAGE_edit_camera_id"] = cam_id
-                                    st.session_state["CAMPAGE_edit_camera_site_id"] = site_id
-                                    edit_camera_modal.open()
-                            
-                            with col_delete:
-                                if st.button("🗑️", key=f"delete_cam_{cam_id}_{site_id}"):
-                                    config["sites"][site_id]["cameras"].pop(cam_id)
-                                    save_camera_config(config)
-                                    st.success("Camera deleted")
-                                    time.sleep(0.5)
-                                    st.rerun()
+                        # Show edit/delete buttons only for admin and super_admin
+                        if not is_read_only:
+                            with row_cam[2]:
+                                col_edit, col_delete = st.columns([1, 1], gap="small")
+                                with col_edit:
+                                    if st.button("✏️", key=f"CAMPAGE_edit_cam_{cam_id}_{site_id}"):
+                                        st.session_state["CAMPAGE_edit_camera_id"] = cam_id
+                                        st.session_state["CAMPAGE_edit_camera_site_id"] = site_id
+                                        edit_camera_modal.open()
+                                
+                                with col_delete:
+                                    if st.button("🗑️", key=f"delete_cam_{cam_id}_{site_id}"):
+                                        config["sites"][site_id]["cameras"].pop(cam_id)
+                                        save_camera_config(config)
+                                        st.success("Camera deleted")
+                                        time.sleep(0.5)
+                                        st.rerun()
                 else:
                     st.info("No cameras available for this site.")
 
