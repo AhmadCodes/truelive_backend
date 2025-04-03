@@ -154,8 +154,42 @@ def create_empty_view(rows: int, columns: int) -> Dict[str, None]:
     }
 
 
+def check_user_permission(required_role=None):
+    """
+    Check if the current user has the required role.
+    If required_role is None, just check if the user is logged in.
+    """
+    if 'user_id' not in st.session_state or not st.session_state['user_id']:
+        st.warning("You must be logged in to access this page")
+        st.stop()
+    
+    if required_role is None:
+        return True
+    
+    user_role = st.session_state.get('user_role', '')
+    
+    if required_role == 'admin':
+        if user_role not in ['admin', 'super_admin']:
+            st.error("You don't have permission to access this feature")
+            return False
+    elif required_role == 'super_admin':
+        if user_role != 'super_admin':
+            st.error("You don't have permission to access this feature")
+            return False
+    
+    return True
+
+
 def screen_layout_page():
     try:
+        # st.set_page_config(page_title="Screen Layout", page_icon="��", layout="wide")
+
+        # Check if user is logged in
+        if 'user_id' not in st.session_state or not st.session_state['user_id']:
+            st.warning("Please log in to access this page")
+            st.stop()
+        
+        user_role = st.session_state.get('user_role', '')
         st.set_page_config(
             page_title="Screen Layout Configuration", layout="wide")
         st.title("Screen Layout Configuration")

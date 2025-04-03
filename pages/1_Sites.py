@@ -10,10 +10,46 @@ from utils.background_task import initialize_background_task, get_background_sta
 # Initialize the background task system
 initialize_background_task()
 
+def check_user_permission(required_role=None):
+    """
+    Check if the current user has the required role.
+    If required_role is None, just check if the user is logged in.
+    """
+    if 'user_id' not in st.session_state or not st.session_state['user_id']:
+        st.warning("You must be logged in to access this page")
+        st.stop()
+    
+    if required_role is None:
+        return True
+    
+    user_role = st.session_state.get('user_role', '')
+    
+    if required_role == 'admin':
+        if user_role not in ['admin', 'super_admin']:
+            st.error("You don't have permission to access this feature")
+            return False
+    elif required_role == 'super_admin':
+        if user_role != 'super_admin':
+            st.error("You don't have permission to access this feature")
+            return False
+    
+    return True
+
 def sites_page():
     st.set_page_config(page_title="Site Management", page_icon="🎥", layout="wide")
     
+    # Check if user is logged in
+    if 'user_id' not in st.session_state or not st.session_state['user_id']:
+        st.warning("Please log in to access this page")
+        st.stop()
+    
+    user_role = st.session_state.get('user_role', '')
+    is_read_only = user_role == 'user'
+    
     st.title("Site Management")
+    
+    if is_read_only:
+        st.info("You have read-only access to site information. Contact an administrator to make changes.")
     
     # Initialize the database connection
     db = Database()
@@ -51,10 +87,13 @@ def sites_page():
         unsafe_allow_html=True
     )
 
-    # Place the "Add New Site" button on the right side
-    btn_cols = st.columns([9, 1])
-    with btn_cols[1]:
-        add_site_clicked = st.button("Add New Site", key="add_site_btn", help="Add a new site")
+    # Place the "Add New Site" button on the right side (only for admins and super admins)
+    if not is_read_only:
+        btn_cols = st.columns([9, 1])
+        with btn_cols[1]:
+            add_site_clicked = st.button("Add New Site", key="add_site_btn", help="Add a new site")
+    else:
+        add_site_clicked = False
 
     # ----- Add Site Modal -----
     add_site_modal = Modal(key="add_site_modal", title="Add New Site")
@@ -99,8 +138,11 @@ def sites_page():
             st.write(f"**NVR Username:** {site_data['nvr_username']}")
             st.write(f"**NVR Password:** {site_data['nvr_password']}")
             
-            # Button to add cameras
-            add_cam_clicked = st.button("Add Camera", key="add_cam_btn")
+            # Button to add cameras (only for admins and super admins)
+            if not is_read_only:
+                add_cam_clicked = st.button("Add Camera", key="add_cam_btn")
+            else:
+                add_cam_clicked = False
             
             st.markdown("### Cameras")
             cam_header = st.columns([3, 3, 2])
@@ -112,30 +154,33 @@ def sites_page():
                 row_cam = st.columns([3, 3, 2])
                 row_cam[0].write(cam_info["name"])                
                 row_cam[1].write(cam_info["rtsp_url"])
-                with row_cam[2]:
-                    edit_cam_col, del_cam_col = st.columns(2)
-                    with edit_cam_col:
-                        if st.button("✏️", key=f"edit_cam_{cam_id}"):
-                            st.session_state["edit_camera_site_id"] = sid
-                            st.session_state["edit_camera_id"] = cam_id
-                            edit_camera_modal.open()
-                    with del_cam_col:
-                        delete_cam_key = f"delete_cam_{sid}_{cam_id}"
-                        if st.button("🗑️", key=delete_cam_key):
-                            # Delete camera
-                            if sid in config["sites"] and cam_id in config["sites"][sid]["cameras"]:
-                                # First, delete the camera from the database
-                                db.delete_camera(cam_id)
-                                
-                                # Then, update the in-memory config
-                                del config["sites"][sid]["cameras"][cam_id]
-                                
-                                # Save the updated config
-                                save_camera_config(config)
-                                
-                                st.success("Camera deleted successfully")
-                                time.sleep(0.5)
-                                st.rerun()
+                
+                # Show edit/delete buttons only for admins and super admins
+                if not is_read_only:
+                    with row_cam[2]:
+                        edit_cam_col, del_cam_col = st.columns(2)
+                        with edit_cam_col:
+                            if st.button("✏️", key=f"edit_cam_{cam_id}"):
+                                st.session_state["edit_camera_site_id"] = sid
+                                st.session_state["edit_camera_id"] = cam_id
+                                edit_camera_modal.open()
+                        with del_cam_col:
+                            delete_cam_key = f"delete_cam_{sid}_{cam_id}"
+                            if st.button("🗑️", key=delete_cam_key):
+                                # Delete camera
+                                if sid in config["sites"] and cam_id in config["sites"][sid]["cameras"]:
+                                    # First, delete the camera from the database
+                                    db.delete_camera(cam_id)
+                                    
+                                    # Then, update the in-memory config
+                                    del config["sites"][sid]["cameras"][cam_id]
+                                    
+                                    # Save the updated config
+                                    save_camera_config(config)
+                                    
+                                    st.success("Camera deleted successfully")
+                                    time.sleep(0.5)
+                                    st.rerun()
 
             # ----- Add Camera Modal -----
             add_camera_modal = Modal(key="add_camera_modal", title="Add Camera")
@@ -245,12 +290,18 @@ def sites_page():
             with row_cols[0]:
                 view_clicked = st.button(info["name"], key=f"view_{sid}", help="View Site Details")
             row_cols[1].write(len(info["cameras"]))
+            
+            # Show edit/delete buttons only for admins and super admins
             with row_cols[2]:
-                icon_edit_col, icon_delete_col = st.columns(2)
-                with icon_edit_col:
-                    edit_clicked = st.button("✏️", key=f"edit_{sid}", help="Edit Site")
-                with icon_delete_col:
-                    delete_clicked = st.button("🗑️", key=f"delete_{sid}", help="Delete Site")
+                if not is_read_only:
+                    icon_edit_col, icon_delete_col = st.columns(2)
+                    with icon_edit_col:
+                        edit_clicked = st.button("✏️", key=f"edit_{sid}", help="Edit Site")
+                    with icon_delete_col:
+                        delete_clicked = st.button("🗑️", key=f"delete_{sid}", help="Delete Site")
+                else:
+                    edit_clicked = False
+                    delete_clicked = False
 
             if view_clicked:
                 st.session_state["view_site_id"] = sid
