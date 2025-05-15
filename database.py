@@ -99,6 +99,15 @@ class User:
     token_expiry: int = None
 
 
+@dataclass
+class Screenshot:
+    camera_id: str
+    image: bytes
+    height: int
+    width: int
+    capture_time: int  # Unix timestamp
+
+
 class NullCursor:
     """A null object for cursor to safely handle failures"""
     def fetchone(self):
@@ -150,6 +159,20 @@ class Database:
                         sureview_camera boolean DEFAULT 0 NOT NULL,
                         new boolean DEFAULT 1 NOT NULL,
                         FOREIGN KEY(site_id) REFERENCES sites(id)
+                    )
+                """
+                )
+
+            # Screenshots table
+            self._execute_query(
+                    """
+                    CREATE TABLE IF NOT EXISTS screenshots (
+                        camera_id TEXT PRIMARY KEY,
+                        image BLOB NOT NULL,
+                        height INTEGER NOT NULL,
+                        width INTEGER NOT NULL,
+                        capture_time INTEGER NOT NULL,
+                        FOREIGN KEY(camera_id) REFERENCES cameras(id)
                     )
                 """
                 )
@@ -2086,6 +2109,103 @@ class Database:
             
         except Exception as e:
             logger.error(f"Error creating user: {e}")
+            return None
+
+    def add_or_update_screenshot(self, camera_id: str, image) -> bool:
+        """
+        Add or update a screenshot for a camera
+        
+        Args:
+            camera_id (str): The ID of the camera
+            image: OpenCV (cv2) image object
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            import cv2
+            import numpy as np
+            
+            if not camera_id or image is None:
+                logger.warning("Invalid camera_id or image provided to add_or_update_screenshot")
+                return False
+            
+            # Get image dimensions
+            height, width = image.shape[:2]
+            
+            # Convert image to bytes
+            _, img_encoded = cv2.imencode('.jpg', image)
+            img_bytes = img_encoded.tobytes()
+            
+            # Current time as Unix timestamp
+            capture_time = int(time.time())
+            
+            # Check if a screenshot already exists for this camera
+            check_query = "SELECT 1 FROM screenshots WHERE camera_id = ?"
+            result = self._execute_query(check_query, (camera_id,))
+            exists = result.fetchone() is not None
+            
+            if exists:
+                # Update existing screenshot
+                update_query = """
+                UPDATE screenshots
+                SET image = ?, height = ?, width = ?, capture_time = ?
+                WHERE camera_id = ?
+                """
+                self._execute_query(update_query, (img_bytes, height, width, capture_time, camera_id))
+                logger.info(f"Updated screenshot for camera {camera_id}")
+            else:
+                # Insert new screenshot
+                insert_query = """
+                INSERT INTO screenshots (camera_id, image, height, width, capture_time)
+                VALUES (?, ?, ?, ?, ?)
+                """
+                self._execute_query(insert_query, (camera_id, img_bytes, height, width, capture_time))
+                logger.info(f"Added screenshot for camera {camera_id}")
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error in add_or_update_screenshot: {e}")
+            return False
+
+    def get_screenshot(self, camera_id: str):
+        """
+        Get a screenshot for a camera
+        
+        Args:
+            camera_id (str): The ID of the camera
+            
+        Returns:
+            image: OpenCV (cv2) image object if found, None otherwise
+        """
+        try:
+            import cv2
+            import numpy as np
+            
+            if not camera_id:
+                logger.warning("Empty camera_id provided to get_screenshot")
+                return None
+            
+            query = "SELECT image FROM screenshots WHERE camera_id = ?"
+            result = self._execute_query(query, (camera_id,))
+            
+            if not result:
+                logger.error("Failed to execute query in get_screenshot")
+                return None
+            
+            row = result.fetchone()
+            if not row:
+                logger.debug(f"No screenshot found for camera {camera_id}")
+                return None
+            
+            # Convert bytes to image
+            img_bytes = row[0]
+            img_array = np.frombuffer(img_bytes, dtype=np.uint8)
+            image = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+            
+            return image
+        except Exception as e:
+            logger.error(f"Error in get_screenshot: {e}")
             return None
 
 def get_streaming_data():

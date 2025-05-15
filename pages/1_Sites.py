@@ -10,6 +10,13 @@ from utils.background_task import initialize_background_task, get_background_sta
 # Initialize the background task system
 initialize_background_task()
 
+# Display logo
+st.logo(
+    "assets/Horizontal-Logo.png", 
+    size="large",
+    icon_image="assets/Logomark.png"
+)
+
 def check_user_permission(required_role=None):
     """
     Check if the current user has the required role.

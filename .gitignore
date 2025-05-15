@@ -10,3 +10,5 @@ db_backup/
 
 outputs/*
 outputs/
+
+ec2_auth_key.*

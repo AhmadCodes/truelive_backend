@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 st.set_page_config(
     page_title="Accept Invitation",
-    page_icon="🛡️",
+    page_icon="assets/Logomark.png",
     layout="centered"
 )
 
