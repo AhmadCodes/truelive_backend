@@ -14,6 +14,13 @@ from utils.background_task import initialize_background_task, get_background_sta
 # Initialize the background task system
 initialize_background_task()
 
+# Display logo
+st.logo(
+    "assets/Horizontal-Logo.png", 
+    size="large",
+    icon_image="assets/Logomark.png"
+)
+
 def check_user_permission(required_role=None):
     """
     Check if the current user has the required role.
@@ -79,7 +86,7 @@ def cameras_page():
     
     if is_read_only:
         st.info("You have read-only access to camera information. Contact an administrator to make changes.")
-
+    
     # Load config
     config = load_camera_config()
     

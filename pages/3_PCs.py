@@ -31,6 +31,13 @@ logger = logging.getLogger('pcs_page')
 # Initialize the background task system
 initialize_background_task()
 
+# Display logo
+st.logo(
+    "assets/Horizontal-Logo.png", 
+    size="large",
+    icon_image="assets/Logomark.png"
+)
+
 db = Database()
 
 def get_websocket_server_url():

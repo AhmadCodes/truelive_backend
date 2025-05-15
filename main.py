@@ -21,9 +21,16 @@ logger = logging.getLogger(__name__)
 # Initialize Streamlit app configuration 
 st.set_page_config(
     page_title="Shomer Portal",
-    page_icon="🛡️",
+    page_icon="assets/Logomark.png",
     layout="centered",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="auto"
+)
+
+# Display logo
+st.logo(
+    "assets/Horizontal-Logo.png", 
+    size="large",
+    icon_image="assets/Logomark.png"
 )
 
 # Custom CSS
@@ -116,7 +123,8 @@ def set_invitation_token(token):
 def reset_password_form():
     """Handle password reset from invitation token"""
     
-    st.title("Set Your Password")
+    # Display logo in sidebar
+    
     
     # Get token from URL query parameters
     token = st.query_params.get("token", "")
@@ -262,6 +270,9 @@ def login(username, password):
 
 def login_form():
     """Display login form and handle authentication"""
+    # Display logo in sidebar
+    
+        
     # Check for notifications
     if "notifications" in st.session_state and st.session_state.notifications:
         for notification in st.session_state.notifications:
@@ -276,8 +287,7 @@ def login_form():
         # Clear notifications after displaying them
         st.session_state.notifications = []
     
-    # App title
-    st.markdown("<h1 class='centered-text'>🛡️ Shomer Portal</h1>", unsafe_allow_html=True)
+   
     
     # Check for logout request
     if st.query_params.get("logout"):
@@ -495,6 +505,9 @@ def check_auth():
 
 def main_app():
     """Display the main application dashboard with authentication verification"""
+    # Display logo in sidebar
+    
+        
     # Verify authentication is still valid
     if not check_auth():
         st.error("Authentication failed. Please log in again.")
@@ -502,6 +515,16 @@ def main_app():
         return
     
     st.title("Shomer Portal")
+    
+    # Display vertical logo
+    st.markdown(
+        """
+        <div style="position: absolute; top: 20px; right: 20px; z-index: 999;">
+            <img src="assets/Vertical-Logo.png" width="100">
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
     
     # Get database instance with error handling
     try:

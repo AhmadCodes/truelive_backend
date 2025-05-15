@@ -2,6 +2,7 @@ import threading
 import time
 import streamlit as st
 from utils.sureview_devices import run_in_background
+from utils.screenshot_utils import update_camera_screenshots
 
 # Global thread object outside of Streamlit's session state
 _background_thread = None
@@ -22,8 +23,12 @@ def background_worker():
     global _background_thread, _last_run_time
     
     try:
-        # Run the function
+        # Run the function for SureView devices
         run_in_background()
+        
+        # Also update camera screenshots
+        update_camera_screenshots()
+        
         # Update the last run time
         _last_run_time = time.time()
         st.session_state['last_fetch_time'] = _last_run_time

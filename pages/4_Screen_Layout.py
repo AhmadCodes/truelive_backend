@@ -13,9 +13,20 @@ import uuid
 import jwt
 import os
 import json
+import numpy as np
+import cv2
+from PIL import Image
+import io
 
 # Initialize the background task system
 initialize_background_task()
+
+# Display logo
+st.logo(
+    "assets/Horizontal-Logo.png", 
+    size="large",
+    icon_image="assets/Logomark.png"
+)
 
 # Set up logging
 logger = setup_logging(logging.DEBUG)
@@ -42,6 +53,20 @@ def get_db_instance() -> Database:
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
         st.error("Database connection failed. Please check your configuration.")
+        return None
+
+
+def convert_cv2_to_pil(cv2_img):
+    """Convert a CV2 image to PIL format for Streamlit display"""
+    if cv2_img is None:
+        return None
+    
+    try:
+        # Convert from BGR to RGB
+        rgb_img = cv2.cvtColor(cv2_img, cv2.COLOR_BGR2RGB)
+        return Image.fromarray(rgb_img)
+    except Exception as e:
+        logger.error(f"Error converting image: {e}")
         return None
 
 
@@ -193,7 +218,7 @@ def screen_layout_page():
         st.set_page_config(
             page_title="Screen Layout Configuration", layout="wide")
         st.title("Screen Layout Configuration")
-
+        
         rename_modal = Modal(key="rename_modal", title="Rename View")
         camera_modal = Modal(key="camera_select_modal", title="Select Camera")
 
@@ -382,6 +407,18 @@ def screen_layout_page():
                 st.session_state.selected_screen = screen_options[
                     selected_screen_index
                 ][0]
+
+                # Auto-select the first view when a screen is selected
+                views = db.get_views_by_screen(st.session_state.selected_screen)
+                if views and (st.session_state.selected_view_id is None or 
+                             not any(view.id == st.session_state.selected_view_id for view in views)):
+                    # Select the first view and load its configuration
+                    st.session_state.selected_view_id = views[0].id
+                    st.session_state.current_view_config = db.get_view_config(
+                        st.session_state.selected_pc,
+                        st.session_state.selected_screen,
+                        views[0].id
+                    )
 
                 # View management
                 if st.session_state.selected_screen:
@@ -598,6 +635,19 @@ def screen_layout_page():
                     st.info(f"Selected Camera: {selected_camera['name']}")
                     st.info(f"RTSP URL: {selected_camera['rtsp_url']}")
                     
+                    # Display camera screenshot if available
+                    camera_id = selected_camera["camera_id"]
+                    db = get_db_instance()
+                    if db:
+                        screenshot = db.get_screenshot(camera_id)
+                        if screenshot is not None:
+                            # Convert CV2 image to format suitable for Streamlit
+                            pil_image = convert_cv2_to_pil(screenshot)
+                            if pil_image:
+                                st.image(pil_image, caption=f"Camera Preview: {selected_camera['name']}", use_container_width=True)
+                        else:
+                            st.info("📷 Screenshot not available. It will be captured and available within a few minutes.")
+                    
                     # Action buttons
                     col1, col2 = st.columns(2)
                     with col1:
@@ -745,17 +795,32 @@ def screen_layout_page():
                                     camera_name = current_slot.get(
                                         "camera_name", "Unknown Camera"
                                     )
+                                    camera_id = current_slot.get("camera_id", "")
                                     rtsp_url = current_slot.get("rtsp_url", "N/A")
 
                                     st.markdown(
                                         f"""
                                         ### Slot {row}-{col}
+                                        """
 
-                                        **Site:** {site_name}
-                                        **Camera:** {camera_name}
-                                        **RTSP:** `{rtsp_url}`
-                                    """
+                                        
+                                    #     **RTSP:** `{rtsp_url}`
+                                    # """
                                     )
+                                    
+                                    # Display screenshot for the camera if available
+                                    if camera_id:
+                                        screenshot = db.get_screenshot(camera_id)
+                                        if screenshot is not None:
+                                            # Convert CV2 image to format suitable for Streamlit
+                                            pil_image = convert_cv2_to_pil(screenshot)
+                                            if pil_image:
+                                                st.image(pil_image, caption=f"Site: {site_name} | Camera: {camera_name}", use_container_width=True)
+                                        else:
+                                            st.markdown(
+                                                f"""Site: {site_name} | Camera: {camera_name}"""
+                                            )
+                                            st.info("📷 Screenshot not available. It will be captured and available within a few minutes.")
                                 else:
                                     st.markdown(f"### Slot {row}-{col}\n\nEmpty")
 

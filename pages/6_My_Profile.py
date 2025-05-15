@@ -11,6 +11,13 @@ logger = logging.getLogger(__name__)
 
 st.set_page_config(page_title="My Profile", page_icon="👤", layout="centered")
 
+# Display logo
+st.logo(
+    "assets/Horizontal-Logo.png", 
+    size="large",
+    icon_image="assets/Logomark.png"
+)
+
 # Check authentication
 check_authentication()
 

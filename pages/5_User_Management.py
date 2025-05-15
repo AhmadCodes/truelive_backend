@@ -15,6 +15,13 @@ logger = logging.getLogger(__name__)
 
 st.set_page_config(page_title="User Management", page_icon="👥", layout="wide")
 
+# Display logo
+st.logo(
+    "assets/Horizontal-Logo.png", 
+    size="large",
+    icon_image="assets/Logomark.png"
+)
+
 # Check if user has admin privileges
 if not check_role_permission('admin'):
     st.stop()  # Authentication check will handle displaying the error and stopping execution
