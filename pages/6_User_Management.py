@@ -523,8 +523,8 @@ try:
         st.subheader("Create a New User")
         
         # Create tabs for different creation methods
-        create_method_tab2 = st.tabs(["Manual Creation"])
-        
+        create_method_tabs = st.tabs(["Manual Creation"])
+        create_method_tab2 = create_method_tabs[0]
         
         
         with create_method_tab2:
@@ -708,6 +708,8 @@ try:
 except Exception as e:
     logger.error(f"Database connection error: {e}")
     st.error(f"Error connecting to database: {e}")
+    import traceback
+    traceback.print_exc()
 
 # Footer
 create_footer()

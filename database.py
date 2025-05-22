@@ -100,6 +100,23 @@ class User:
 
 
 @dataclass
+class SiteCamerasLayoutConfig:
+    site_id: str
+    site_name: str
+    n_rows: int
+    n_cols: int
+
+
+@dataclass
+class SiteCamerasLayout:
+    site_id: str
+    site_name: str
+    slot_row: int
+    slot_col: int
+    camera_id: str
+
+
+@dataclass
 class Screenshot:
     camera_id: str
     image: bytes
@@ -275,6 +292,34 @@ class Database:
             )
             """
             self._execute_query(invitation_tokens_table)
+            
+            # Site Cameras Layout Config table
+            site_cameras_layout_config_table = """
+            CREATE TABLE IF NOT EXISTS site_cameras_layout_config (
+                site_id TEXT NOT NULL,
+                site_name TEXT NOT NULL,
+                n_rows INTEGER NOT NULL,
+                n_cols INTEGER NOT NULL,
+                PRIMARY KEY (site_id),
+                FOREIGN KEY (site_id) REFERENCES sites(id)
+            )
+            """
+            self._execute_query(site_cameras_layout_config_table)
+            
+            # Site Cameras Layout table
+            site_cameras_layout_table = """
+            CREATE TABLE IF NOT EXISTS site_cameras_layout (
+                site_id TEXT NOT NULL,
+                site_name TEXT NOT NULL,
+                slot_row INTEGER NOT NULL,
+                slot_col INTEGER NOT NULL,
+                camera_id TEXT NOT NULL,
+                PRIMARY KEY (site_id, slot_row, slot_col),
+                FOREIGN KEY (site_id) REFERENCES sites(id),
+                FOREIGN KEY (camera_id) REFERENCES cameras(id)
+            )
+            """
+            self._execute_query(site_cameras_layout_table)
             
             # Create default super admin user if no users exist
             self.create_default_user()
@@ -2207,6 +2252,254 @@ class Database:
         except Exception as e:
             logger.error(f"Error in get_screenshot: {e}")
             return None
+
+    def add_site_cameras_layout_config(self, config: SiteCamerasLayoutConfig) -> bool:
+        """
+        Add or update site cameras layout configuration
+        
+        Args:
+            config (SiteCamerasLayoutConfig): The layout configuration to add
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Check if config already exists for this site
+            check_query = "SELECT 1 FROM site_cameras_layout_config WHERE site_id = ?"
+            result = self._execute_query(check_query, (config.site_id,))
+            exists = result.fetchone() is not None
+            
+            if exists:
+                # Update existing config
+                update_query = """
+                UPDATE site_cameras_layout_config
+                SET site_name = ?, n_rows = ?, n_cols = ?
+                WHERE site_id = ?
+                """
+                self._execute_query(update_query, (config.site_name, config.n_rows, config.n_cols, config.site_id))
+                logger.info(f"Updated site cameras layout config for site {config.site_id}")
+            else:
+                # Insert new config
+                insert_query = """
+                INSERT INTO site_cameras_layout_config (site_id, site_name, n_rows, n_cols)
+                VALUES (?, ?, ?, ?)
+                """
+                self._execute_query(insert_query, (config.site_id, config.site_name, config.n_rows, config.n_cols))
+                logger.info(f"Added site cameras layout config for site {config.site_id}")
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error in add_site_cameras_layout_config: {e}")
+            return False
+    
+    def get_site_cameras_layout_config(self, site_id: str) -> Optional[SiteCamerasLayoutConfig]:
+        """
+        Get the site cameras layout configuration for a site
+        
+        Args:
+            site_id (str): The ID of the site
+            
+        Returns:
+            SiteCamerasLayoutConfig: The layout configuration or None if not found
+        """
+        try:
+            query = "SELECT site_id, site_name, n_rows, n_cols FROM site_cameras_layout_config WHERE site_id = ?"
+            result = self._execute_query(query, (site_id,))
+            
+            row = result.fetchone()
+            if not row:
+                logger.debug(f"No layout config found for site {site_id}")
+                return None
+            
+            return SiteCamerasLayoutConfig(
+                site_id=row[0],
+                site_name=row[1],
+                n_rows=row[2],
+                n_cols=row[3]
+            )
+        except Exception as e:
+            logger.error(f"Error in get_site_cameras_layout_config: {e}")
+            return None
+    
+    def get_all_site_cameras_layout_configs(self) -> List[SiteCamerasLayoutConfig]:
+        """
+        Get all site cameras layout configurations
+        
+        Returns:
+            List[SiteCamerasLayoutConfig]: List of all configurations
+        """
+        try:
+            query = "SELECT site_id, site_name, n_rows, n_cols FROM site_cameras_layout_config"
+            result = self._execute_query(query)
+            
+            configs = []
+            for row in result:
+                configs.append(SiteCamerasLayoutConfig(
+                    site_id=row[0],
+                    site_name=row[1],
+                    n_rows=row[2],
+                    n_cols=row[3]
+                ))
+            
+            return configs
+        except Exception as e:
+            logger.error(f"Error in get_all_site_cameras_layout_configs: {e}")
+            return []
+    
+    def delete_site_cameras_layout_config(self, site_id: str) -> bool:
+        """
+        Delete a site cameras layout configuration
+        
+        Args:
+            site_id (str): The ID of the site
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # First delete all associated site_cameras_layout entries
+            delete_layouts_query = "DELETE FROM site_cameras_layout WHERE site_id = ?"
+            self._execute_query(delete_layouts_query, (site_id,))
+            
+            # Then delete the config
+            delete_query = "DELETE FROM site_cameras_layout_config WHERE site_id = ?"
+            self._execute_query(delete_query, (site_id,))
+            
+            logger.info(f"Deleted site cameras layout config for site {site_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error in delete_site_cameras_layout_config: {e}")
+            return False
+    
+    def add_site_cameras_layout(self, layout: SiteCamerasLayout) -> bool:
+        """
+        Add or update a site cameras layout entry
+        
+        Args:
+            layout (SiteCamerasLayout): The layout entry to add or update
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Check if entry already exists
+            check_query = "SELECT 1 FROM site_cameras_layout WHERE site_id = ? AND slot_row = ? AND slot_col = ?"
+            result = self._execute_query(check_query, (layout.site_id, layout.slot_row, layout.slot_col))
+            exists = result.fetchone() is not None
+            
+            if exists:
+                # Update existing entry
+                update_query = """
+                UPDATE site_cameras_layout
+                SET site_name = ?, camera_id = ?
+                WHERE site_id = ? AND slot_row = ? AND slot_col = ?
+                """
+                self._execute_query(update_query, (layout.site_name, layout.camera_id, 
+                                                 layout.site_id, layout.slot_row, layout.slot_col))
+                logger.info(f"Updated site cameras layout for site {layout.site_id} at row {layout.slot_row}, col {layout.slot_col}")
+            else:
+                # Insert new entry
+                insert_query = """
+                INSERT INTO site_cameras_layout (site_id, site_name, slot_row, slot_col, camera_id)
+                VALUES (?, ?, ?, ?, ?)
+                """
+                self._execute_query(insert_query, (layout.site_id, layout.site_name, 
+                                                 layout.slot_row, layout.slot_col, layout.camera_id))
+                logger.info(f"Added site cameras layout for site {layout.site_id} at row {layout.slot_row}, col {layout.slot_col}")
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error in add_site_cameras_layout: {e}")
+            return False
+    
+    def get_site_cameras_layout(self, site_id: str) -> List[SiteCamerasLayout]:
+        """
+        Get all cameras layout entries for a site
+        
+        Args:
+            site_id (str): The ID of the site
+            
+        Returns:
+            List[SiteCamerasLayout]: List of layout entries
+        """
+        try:
+            query = "SELECT site_id, site_name, slot_row, slot_col, camera_id FROM site_cameras_layout WHERE site_id = ?"
+            result = self._execute_query(query, (site_id,))
+            
+            layouts = []
+            for row in result:
+                layouts.append(SiteCamerasLayout(
+                    site_id=row[0],
+                    site_name=row[1],
+                    slot_row=row[2],
+                    slot_col=row[3],
+                    camera_id=row[4]
+                ))
+            
+            return layouts
+        except Exception as e:
+            logger.error(f"Error in get_site_cameras_layout: {e}")
+            return []
+    
+    def get_camera_layout_position(self, site_id: str, camera_id: str) -> Optional[Tuple[int, int]]:
+        """
+        Get the row and column position of a camera in a site's layout
+        
+        Args:
+            site_id (str): The ID of the site
+            camera_id (str): The ID of the camera
+            
+        Returns:
+            Tuple[int, int]: (row, col) if found, None otherwise
+        """
+        try:
+            query = "SELECT slot_row, slot_col FROM site_cameras_layout WHERE site_id = ? AND camera_id = ?"
+            result = self._execute_query(query, (site_id, camera_id))
+            
+            row = result.fetchone()
+            if not row:
+                logger.debug(f"No layout position found for camera {camera_id} in site {site_id}")
+                return None
+            
+            return (row[0], row[1])
+        except Exception as e:
+            logger.error(f"Error in get_camera_layout_position: {e}")
+            return None
+    
+    def delete_site_cameras_layout(self, site_id: str, slot_row: int = None, slot_col: int = None) -> bool:
+        """
+        Delete site cameras layout entries
+        
+        Args:
+            site_id (str): The ID of the site
+            slot_row (int, optional): The row to delete. If None, all rows for the site are deleted.
+            slot_col (int, optional): The column to delete. If None, all columns for the given row are deleted.
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            if slot_row is not None and slot_col is not None:
+                # Delete specific slot
+                delete_query = "DELETE FROM site_cameras_layout WHERE site_id = ? AND slot_row = ? AND slot_col = ?"
+                self._execute_query(delete_query, (site_id, slot_row, slot_col))
+                logger.info(f"Deleted site cameras layout for site {site_id} at row {slot_row}, col {slot_col}")
+            elif slot_row is not None:
+                # Delete entire row
+                delete_query = "DELETE FROM site_cameras_layout WHERE site_id = ? AND slot_row = ?"
+                self._execute_query(delete_query, (site_id, slot_row))
+                logger.info(f"Deleted site cameras layout for site {site_id} at row {slot_row}")
+            else:
+                # Delete all entries for site
+                delete_query = "DELETE FROM site_cameras_layout WHERE site_id = ?"
+                self._execute_query(delete_query, (site_id,))
+                logger.info(f"Deleted all site cameras layout for site {site_id}")
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error in delete_site_cameras_layout: {e}")
+            return False
+
 
 def get_streaming_data():
     """
