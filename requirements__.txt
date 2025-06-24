@@ -1,0 +1,24 @@
+cryptography==44.0.2
+eventlet==0.39.1
+Flask==3.1.0
+numpy==2.2.4
+opencv_python==4.10.0.84
+openpyxl==3.1.5
+pandas==2.2.3
+Pillow==11.1.0
+PyJWT==2.10.1
+PyJWT==2.10.1
+pystray==0.19.5
+python-dotenv==1.1.0
+python-socketio==5.12.1
+qrcode==8.0
+Requests==2.32.3
+selenium==4.30.0
+streamlit==1.41.1
+streamlit_modal==0.1.2
+webdriver_manager==4.0.2
+websockets==14.1
+pyjwt
+aiohttp
+
+sudo docker run -d  --name shomer_portal -e AWS_WS_URL=http://18.204.201.19:8080  --network=host   --restart unless-stopped   ahmadcontainers/shomer_portal_v4   streamlit run main.py --server.port 80 --server.address 0.0.0.0
