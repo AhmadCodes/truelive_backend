@@ -125,6 +125,19 @@ class Screenshot:
     capture_time: int  # Unix timestamp
 
 
+@dataclass
+class SiteCategory:
+    id: str  # UUID
+    name: str
+    color: int  # Unsigned long in hex format (e.g., 0xFF00FF00)
+
+
+@dataclass
+class SiteCategoryMapping:
+    site_id: str
+    category_id: str
+
+
 class NullCursor:
     """A null object for cursor to safely handle failures"""
     def fetchone(self):
@@ -279,6 +292,30 @@ class Database:
             )
             """
             self._execute_query(users_table)
+            
+            # Site Categories table
+            self._execute_query(
+                    """
+                    CREATE TABLE IF NOT EXISTS site_categories (
+                        id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        color INTEGER NOT NULL
+                    )
+                """
+                )
+            
+            # Site Category Mappings table
+            self._execute_query(
+                    """
+                    CREATE TABLE IF NOT EXISTS site_category_mappings (
+                        site_id TEXT NOT NULL,
+                        category_id TEXT NOT NULL,
+                        PRIMARY KEY(site_id, category_id),
+                        FOREIGN KEY(site_id) REFERENCES sites(id),
+                        FOREIGN KEY(category_id) REFERENCES site_categories(id)
+                    )
+                """
+                )
             
             # Create invitation tokens table
             invitation_tokens_table = """
@@ -2498,6 +2535,270 @@ class Database:
             return True
         except Exception as e:
             logger.error(f"Error in delete_site_cameras_layout: {e}")
+            return False
+    
+    # Site Categories CRUD Methods
+    
+    def add_site_category(self, category: SiteCategory) -> bool:
+        """
+        Add a new site category to the database
+        
+        Args:
+            category (SiteCategory): The site category to add
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            insert_query = "INSERT INTO site_categories (id, name, color) VALUES (?, ?, ?)"
+            self._execute_query(insert_query, (category.id, category.name, category.color))
+            logger.info(f"Added site category {category.name} with ID {category.id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error in add_site_category: {e}")
+            return False
+    
+    def get_site_category(self, category_id: str) -> Optional[SiteCategory]:
+        """
+        Get a site category by its ID
+        
+        Args:
+            category_id (str): The ID of the category to retrieve
+            
+        Returns:
+            Optional[SiteCategory]: The site category if found, None otherwise
+        """
+        try:
+            query = "SELECT id, name, color FROM site_categories WHERE id = ?"
+            result = self._execute_query(query, (category_id,))
+            
+            row = result.fetchone()
+            if not row:
+                logger.debug(f"No site category found with ID {category_id}")
+                return None
+            
+            return SiteCategory(
+                id=row[0],
+                name=row[1],
+                color=row[2]
+            )
+        except Exception as e:
+            logger.error(f"Error in get_site_category: {e}")
+            return None
+    
+    def get_all_site_categories(self) -> List[SiteCategory]:
+        """
+        Get all site categories
+        
+        Returns:
+            List[SiteCategory]: List of all site categories
+        """
+        try:
+            query = "SELECT id, name, color FROM site_categories"
+            result = self._execute_query(query)
+            
+            categories = []
+            for row in result.fetchall():
+                categories.append(SiteCategory(
+                    id=row[0],
+                    name=row[1],
+                    color=row[2]
+                ))
+            
+            return categories
+        except Exception as e:
+            logger.error(f"Error in get_all_site_categories: {e}")
+            return []
+    
+    def update_site_category(self, category_id: str, name: str = None, color: int = None) -> bool:
+        """
+        Update a site category
+        
+        Args:
+            category_id (str): The ID of the category to update
+            name (str, optional): New name for the category
+            color (int, optional): New color for the category
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Build update parts dynamically based on provided parameters
+            update_parts = []
+            params = []
+            
+            if name is not None:
+                update_parts.append("name = ?")
+                params.append(name)
+            
+            if color is not None:
+                update_parts.append("color = ?")
+                params.append(color)
+            
+            if not update_parts:
+                logger.warning(f"No update parameters provided for site category {category_id}")
+                return False
+            
+            # Add the category_id to params
+            params.append(category_id)
+            
+            update_query = f"UPDATE site_categories SET {', '.join(update_parts)} WHERE id = ?"
+            self._execute_query(update_query, tuple(params))
+            logger.info(f"Updated site category {category_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error in update_site_category: {e}")
+            return False
+    
+    def delete_site_category(self, category_id: str) -> bool:
+        """
+        Delete a site category and its mappings
+        
+        Args:
+            category_id (str): The ID of the category to delete
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # First delete any mappings for this category
+            delete_mappings_query = "DELETE FROM site_category_mappings WHERE category_id = ?"
+            self._execute_query(delete_mappings_query, (category_id,))
+            
+            # Then delete the category itself
+            delete_query = "DELETE FROM site_categories WHERE id = ?"
+            self._execute_query(delete_query, (category_id,))
+            logger.info(f"Deleted site category {category_id} and its mappings")
+            return True
+        except Exception as e:
+            logger.error(f"Error in delete_site_category: {e}")
+            return False
+    
+    # Site Category Mappings CRUD Methods
+    
+    def add_site_category_mapping(self, mapping: SiteCategoryMapping) -> bool:
+        """
+        Add a new site category mapping
+        
+        Args:
+            mapping (SiteCategoryMapping): The mapping to add
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            insert_query = "INSERT OR REPLACE INTO site_category_mappings (site_id, category_id) VALUES (?, ?)"
+            self._execute_query(insert_query, (mapping.site_id, mapping.category_id))
+            logger.info(f"Added site category mapping between site {mapping.site_id} and category {mapping.category_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error in add_site_category_mapping: {e}")
+            return False
+    
+    def get_site_categories_for_site(self, site_id: str) -> List[SiteCategory]:
+        """
+        Get all categories for a site
+        
+        Args:
+            site_id (str): The ID of the site
+            
+        Returns:
+            List[SiteCategory]: List of categories for the site
+        """
+        try:
+            query = """
+                SELECT c.id, c.name, c.color 
+                FROM site_categories c 
+                JOIN site_category_mappings m ON c.id = m.category_id 
+                WHERE m.site_id = ?
+            """
+            result = self._execute_query(query, (site_id,))
+            
+            categories = []
+            for row in result.fetchall():
+                categories.append(SiteCategory(
+                    id=row[0],
+                    name=row[1],
+                    color=row[2]
+                ))
+            
+            return categories
+        except Exception as e:
+            logger.error(f"Error in get_site_categories_for_site: {e}")
+            return []
+    
+    def get_sites_for_category(self, category_id: str) -> List[Site]:
+        """
+        Get all sites for a category
+        
+        Args:
+            category_id (str): The ID of the category
+            
+        Returns:
+            List[Site]: List of sites for the category
+        """
+        try:
+            query = """
+                SELECT s.id, s.name, s.nvr_username, s.nvr_password, s.sureview_site, s.new 
+                FROM sites s 
+                JOIN site_category_mappings m ON s.id = m.site_id 
+                WHERE m.category_id = ?
+            """
+            result = self._execute_query(query, (category_id,))
+            
+            sites = []
+            for row in result.fetchall():
+                sites.append(Site(
+                    id=row[0],
+                    name=row[1],
+                    nvr_username=row[2],
+                    nvr_password=row[3],
+                    sureview_site=bool(row[4]),
+                    new=bool(row[5])
+                ))
+            
+            return sites
+        except Exception as e:
+            logger.error(f"Error in get_sites_for_category: {e}")
+            return []
+    
+    def delete_site_category_mapping(self, site_id: str, category_id: str) -> bool:
+        """
+        Delete a site category mapping
+        
+        Args:
+            site_id (str): The ID of the site
+            category_id (str): The ID of the category
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            delete_query = "DELETE FROM site_category_mappings WHERE site_id = ? AND category_id = ?"
+            self._execute_query(delete_query, (site_id, category_id))
+            logger.info(f"Deleted mapping between site {site_id} and category {category_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error in delete_site_category_mapping: {e}")
+            return False
+    
+    def delete_all_category_mappings_for_site(self, site_id: str) -> bool:
+        """
+        Delete all category mappings for a site
+        
+        Args:
+            site_id (str): The ID of the site
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            delete_query = "DELETE FROM site_category_mappings WHERE site_id = ?"
+            self._execute_query(delete_query, (site_id,))
+            logger.info(f"Deleted all category mappings for site {site_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error in delete_all_category_mappings_for_site: {e}")
             return False
 
 

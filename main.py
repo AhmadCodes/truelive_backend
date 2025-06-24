@@ -272,7 +272,25 @@ def login_form():
     """Display login form and handle authentication"""
     # Display logo in sidebar
     
-        
+    # Display vertical logo at the top middle using base64 encoding
+    import os
+    import base64
+    
+    def get_base64_encoded_image(image_path):
+        with open(image_path, "rb") as img_file:
+            return base64.b64encode(img_file.read()).decode()
+    
+    logo_path = os.path.join(os.path.dirname(__file__), "assets", "Vertical-Logo.png")
+    if os.path.exists(logo_path):
+        img_base64 = get_base64_encoded_image(logo_path)
+        st.markdown(
+            f'''
+            <div style="display: flex; justify-content: center; align-items: center; margin-bottom: 1.5rem;">
+                <img src="data:image/png;base64,{img_base64}" width="130" style="margin: 0 auto;">
+            </div>
+            ''',
+            unsafe_allow_html=True
+        )
     # Check for notifications
     if "notifications" in st.session_state and st.session_state.notifications:
         for notification in st.session_state.notifications:
@@ -514,17 +532,27 @@ def main_app():
         login_form()
         return
     
-    st.title("Shomer Portal")
+    # Display vertical logo at the top middle using base64 encoding
+    import os
+    import base64
     
-    # Display vertical logo
-    st.markdown(
-        """
-        <div style="position: absolute; top: 20px; right: 20px; z-index: 999;">
-            <img src="assets/Vertical-Logo.png" width="100">
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+    def get_base64_encoded_image(image_path):
+        with open(image_path, "rb") as img_file:
+            return base64.b64encode(img_file.read()).decode()
+    
+    logo_path = os.path.join(os.path.dirname(__file__), "assets", "Vertical-Logo.png")
+    if os.path.exists(logo_path):
+        img_base64 = get_base64_encoded_image(logo_path)
+        st.markdown(
+            f'''
+            <div style="display: flex; justify-content: center; align-items: center; margin-bottom: 1.5rem;">
+                <img src="data:image/png;base64,{img_base64}" width="130" style="margin: 0 auto;">
+            </div>
+            ''',
+            unsafe_allow_html=True
+        )
+    
+    st.title("Shomer Portal")
     
     # Get database instance with error handling
     try:

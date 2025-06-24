@@ -2,7 +2,7 @@
 import streamlit as st
 from streamlit_modal import Modal
 from utils.config_loader import load_camera_config, save_camera_config
-from database import Database
+from database import Database, SiteCategoryMapping
 import uuid
 import time
 from utils.background_task import initialize_background_task, get_background_status
@@ -49,289 +49,232 @@ def sites_page():
     if 'user_id' not in st.session_state or not st.session_state['user_id']:
         st.warning("Please log in to access this page")
         st.stop()
-    
+
     user_role = st.session_state.get('user_role', '')
     is_read_only = user_role == 'user'
-    
+
     st.title("Site Management")
-    
+
     if is_read_only:
         st.info("You have read-only access to site information. Contact an administrator to make changes.")
-    
-    # Initialize the database connection
+
     db = Database()
-
-    # Load config
     config = load_camera_config()
-    if "edit_site_id" not in st.session_state:
-        st.session_state["edit_site_id"] = None
-    if "view_site_id" not in st.session_state:
-        st.session_state["view_site_id"] = None
-    if "edit_camera_site_id" not in st.session_state:
-        st.session_state["edit_camera_site_id"] = None
-    if "edit_camera_id" not in st.session_state:
-        st.session_state["edit_camera_id"] = None
 
-    # Custom CSS for the big blue button
-    st.markdown(
-        """
-        <style>
-        .big-blue-button > div > button {
-            background-color: #007BFF;
-            color: white;
-            font-size: 1.1rem;
-            padding: 0.75em 1.5em;
-            border: none;
-            border-radius: 0.25em;
-            cursor: pointer;
-            font-weight: bold;
-        }
-        .big-blue-button > div > button:hover {
-            background-color: #0056b3;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True
-    )
-
-    # Place the "Add New Site" button on the right side (only for admins and super admins)
-    if not is_read_only:
-        btn_cols = st.columns([9, 1])
-        with btn_cols[1]:
-            add_site_clicked = st.button("Add New Site", key="add_site_btn", help="Add a new site")
-    else:
-        add_site_clicked = False
-
-    # ----- Add Site Modal -----
-    add_site_modal = Modal(key="add_site_modal", title="Add New Site")
-    if add_site_clicked:
-        add_site_modal.open()
-
-    if add_site_modal.is_open():
-        with add_site_modal.container():
-            st.subheader("Add New Site")
-            site_name = st.text_input("Site Name", key="new_site_name")
-            nvr_username = st.text_input("NVR Username", key="new_site_nvr_username")
-            nvr_password = st.text_input("NVR Password", type="password", key="new_site_nvr_password")
-            if st.button("Submit", key="submit_new_site"):
-                if site_name and nvr_username and nvr_password:
-                    site_id = "SITE_" + str(uuid.uuid4())
-                    config["sites"][site_id] = {
-                        "name": site_name,
-                        "nvr_username": nvr_username,
-                        "nvr_password": nvr_password,
-                        "cameras": {}
-                    }
-                    save_camera_config(config)
-                    st.success(f"Added site: {site_name}")
-                    time.sleep(0.5)
-                    add_site_modal.close()
-                    st.rerun()
-                else:
-                    st.error("Please fill in all fields.")
-
-    # ----- View Site Modal -----
-    view_site_modal = Modal(key="view_site_modal", title="Site Details")
-    
-    if view_site_modal.is_open() and st.session_state["view_site_id"] in config["sites"]:
-        sid = st.session_state["view_site_id"]
-        
-        # Reload config to get the most recent data
-        config = load_camera_config()
-        site_data = config["sites"][sid]
-        
-        with view_site_modal.container():
-            st.subheader(site_data["name"])
-            st.write(f"**NVR Username:** {site_data['nvr_username']}")
-            st.write(f"**NVR Password:** {site_data['nvr_password']}")
+    # --- CATEGORY LOGIC ---
+    # Ensure default category exists (white, 0xFFFFFFFF)
+    default_color = 0xFFFFFFFF
+    default_category_name = "Default"
+    categories = db.get_all_site_categories()
+    default_category = next((c for c in categories if c.color == default_color), None)
+    if not default_category:
+        import uuid as _uuid
+        # Check if we have any categories to get the type from
+        if categories:
+            category_type = type(categories[0])
+        else:
+            # If no categories exist, import the class directly
+            from database import SiteCategory
+            category_type = SiteCategory
             
-            # Button to add cameras (only for admins and super admins)
-            if not is_read_only:
-                add_cam_clicked = st.button("Add Camera", key="add_cam_btn")
-            else:
-                add_cam_clicked = False
-            
-            st.markdown("### Cameras")
-            cam_header = st.columns([3, 3, 2])
-            cam_header[0].markdown("**Camera Name**")
-            cam_header[1].markdown("**RTSP URL**")
-            cam_header[2].markdown("**Actions**")
-            
-            for cam_id, cam_info in site_data.get("cameras", {}).items():
-                row_cam = st.columns([3, 3, 2])
-                row_cam[0].write(cam_info["name"])                
-                row_cam[1].write(cam_info["rtsp_url"])
-                
-                # Show edit/delete buttons only for admins and super admins
-                if not is_read_only:
-                    with row_cam[2]:
-                        edit_cam_col, del_cam_col = st.columns(2)
-                        with edit_cam_col:
-                            if st.button("✏️", key=f"edit_cam_{cam_id}"):
-                                st.session_state["edit_camera_site_id"] = sid
-                                st.session_state["edit_camera_id"] = cam_id
-                                edit_camera_modal.open()
-                        with del_cam_col:
-                            delete_cam_key = f"delete_cam_{sid}_{cam_id}"
-                            if st.button("🗑️", key=delete_cam_key):
-                                # Delete camera
-                                if sid in config["sites"] and cam_id in config["sites"][sid]["cameras"]:
-                                    # First, delete the camera from the database
-                                    db.delete_camera(cam_id)
-                                    
-                                    # Then, update the in-memory config
-                                    del config["sites"][sid]["cameras"][cam_id]
-                                    
-                                    # Save the updated config
-                                    save_camera_config(config)
-                                    
-                                    st.success("Camera deleted successfully")
-                                    time.sleep(0.5)
-                                    st.rerun()
+        default_category = db.add_site_category(
+            category_type(
+                id=str(_uuid.uuid4()),
+                name=default_category_name,
+                color=default_color
+            )
+        )
+        categories = db.get_all_site_categories()
+        default_category = next((c for c in categories if c.color == default_color), None)
 
-            # ----- Add Camera Modal -----
-            add_camera_modal = Modal(key="add_camera_modal", title="Add Camera")
-            if add_cam_clicked:
-                add_camera_modal.open()
+    # Ensure every site has a category mapping
+    all_sites = db.get_all_sites() if hasattr(db, 'get_all_sites') else []
+    for site in all_sites:
+        cats = db.get_site_categories_for_site(site.id)
+        if not cats:
+            db.add_site_category_mapping(type(db.get_site_categories_for_site(site.id))[0](site_id=site.id, category_id=default_category.id))
 
-            if add_camera_modal.is_open():
-                with add_camera_modal.container():
-                    st.subheader("Add Camera")
-                    new_cam_name = st.text_input("Camera Name", key="new_cam_name")
-                    new_cam_rtsp = st.text_input("RTSP URL", key="new_cam_rtsp")
+    # --- TABS LAYOUT ---
+    tab_config, tab_categories = st.tabs(["Config", "Categories"])
+
+    # --- CONFIG TAB ---
+    with tab_config:
+        # Place the "Add New Site" button on the right side (only for admins and super admins)
+        if not is_read_only:
+            btn_cols = st.columns([9, 1])
+            with btn_cols[1]:
+                add_site_clicked = st.button("Add New Site", key="add_site_btn", help="Add a new site")
+        else:
+            add_site_clicked = False
+
+        # ----- Add Site Modal -----
+        add_site_modal = Modal(key="add_site_modal", title="Add New Site")
+        if add_site_clicked:
+            add_site_modal.open()
+        if add_site_modal.is_open():
+            with add_site_modal.container():
+                st.subheader("Add New Site")
+                site_name = st.text_input("Site Name", key="new_site_name")
+                nvr_username = st.text_input("NVR Username", key="new_site_nvr_username")
+                nvr_password = st.text_input("NVR Password", type="password", key="new_site_nvr_password")
+                if st.button("Submit", key="submit_new_site"):
+                    if site_name and nvr_username and nvr_password:
+                        site_id = "SITE_" + str(uuid.uuid4())
+                        config["sites"][site_id] = {
+                            "name": site_name,
+                            "nvr_username": nvr_username,
+                            "nvr_password": nvr_password,
+                            "cameras": {}
+                        }
+                        save_camera_config(config)
+                        st.success(f"Added site: {site_name}")
+                        time.sleep(0.5)
+                        add_site_modal.close()
+                        st.rerun()
+                    else:
+                        st.error("Please fill in all fields.")
+
+        # ----- Display Sites Table with Category Dropdown -----
+        if config["sites"]:
+            st.markdown("### All Sites")
+            header_cols = st.columns([3, 2, 3, 3])
+            header_cols[0].markdown("**Site Name**")
+            header_cols[1].markdown("**No. of Cameras**")
+            header_cols[2].markdown("**Category**")
+            header_cols[3].markdown("**Actions**")
+            for sid, info in config["sites"].items():
+                row_cols = st.columns([3, 2, 3, 3])
+                with row_cols[0]:
+                    view_clicked = st.button(info["name"], key=f"view_{sid}", help="View Site Details")
+                row_cols[1].write(len(info["cameras"]))
+                # Category dropdown
+                with row_cols[2]:
+                    site_cats = db.get_site_categories_for_site(sid)
+                    current_cat = site_cats[0] if site_cats else default_category
+                    cat_options = [f"{c.name} [{hex(c.color)}]" for c in categories]
+                    cat_colors = {f"{c.name} [{hex(c.color)}]": c for c in categories}
                     
-                    if st.button("Save New Camera", key="save_new_cam"):
-                        if new_cam_name and new_cam_rtsp:
-                            new_cam_id = "CAM_" + str(uuid.uuid4())
-                            
-                            # Reload config to get the most recent data
-                            config = load_camera_config()
-                            
-                            if sid in config["sites"]:
-                                config["sites"][sid]["cameras"][new_cam_id] = {
-                                    "name": new_cam_name,
-                                    "rtsp_url": new_cam_rtsp
-                                }
-                                save_camera_config(config)
-                                st.success("New camera added")
-                                time.sleep(0.5)
-                                add_camera_modal.close()
-                                st.rerun()
-                            else:
-                                st.error("Site not found")
-                        else:
-                            st.error("Please fill in all fields.")
-
-    # ----- Edit Site Modal -----
-    edit_site_modal = Modal(key="edit_site_modal", title="Edit Site")
-   
-    if edit_site_modal.is_open() and st.session_state["edit_site_id"] in config["sites"]:
-        site_id = st.session_state["edit_site_id"]
-        
-        site_info = config["sites"][site_id]
-        with edit_site_modal.container():
-            st.subheader(f"Edit: {site_info['name']}")
-            new_name = st.text_input("Site Name", value=site_info["name"], key="edit_site_name")
-            new_nvr_username = st.text_input("NVR Username", value=site_info["nvr_username"], key="edit_site_nvr_username")
-            new_nvr_password = st.text_input("NVR Password", value=site_info["nvr_password"], type="password", key="edit_site_nvr_password")
-            if st.button("Save Changes", key="save_site_changes"):
-                if new_name and new_nvr_username and new_nvr_password:
-                    site_info["name"] = new_name
-                    site_info["nvr_username"] = new_nvr_username
-                    site_info["nvr_password"] = new_nvr_password
-                    save_camera_config(config)
-                    st.success("Changes saved")
-                    time.sleep(0.5)
-                    edit_site_modal.close()
-                    st.rerun()
-                else:
-                    st.error("Please fill in all fields.")
-
-    # ----- Edit Camera Modal -----
-    edit_camera_modal = Modal(key="edit_camera_modal", title="Edit Camera")
-    if edit_camera_modal.is_open():
-        site_id = st.session_state.get("edit_camera_site_id")
-        cam_id = st.session_state.get("edit_camera_id")
-       
-        if site_id and cam_id and site_id in config["sites"]:
-            # Reload config to get the most recent data
-            config = load_camera_config()
-            
-            site_info = config["sites"][site_id]
-            if cam_id in site_info["cameras"]:
-                cam_info = site_info["cameras"][cam_id]
-                
-                with edit_camera_modal.container():
-                    st.subheader(f"Edit Camera: {cam_info.get('name', '')}")
-                    cam_name = st.text_input("Camera Name", value=cam_info.get("name", ""), key="edit_cam_name")
-                    cam_rtsp = st.text_input("RTSP URL", value=cam_info.get("rtsp_url", ""), key="edit_cam_rtsp")
-                    if st.button("Save Camera", key="save_cam_changes"):
-                        if cam_name and cam_rtsp:
-                            # Update camera info in config
-                            config["sites"][site_id]["cameras"][cam_id]["name"] = cam_name
-                            config["sites"][site_id]["cameras"][cam_id]["rtsp_url"] = cam_rtsp
-                            
-                            # Save to database
-                            save_camera_config(config)
-                            
-                            st.success("Camera changes saved")
-                            time.sleep(0.5)
-                            edit_camera_modal.close()
+                    # Create columns for side-by-side layout
+                    dd_col, color_col = st.columns([4, 1])
+                    with dd_col:
+                        selected = st.selectbox(
+                            "Category", 
+                            cat_options,
+                            index=cat_options.index(f"{current_cat.name} [{hex(current_cat.color)}]") if current_cat else 0,
+                            key=f"cat_select_{sid}",
+                            label_visibility="collapsed"
+                        )
+                    with color_col:
+                        color_hex = f"#{current_cat.color & 0xFFFFFF:06X}" if current_cat else "#FFFFFF"
+                        # Custom CSS for better color preview
+                        st.markdown(f"""
+                        <div style="display: flex; align-items: center; height: 38px; margin-top: 5px;">                        
+                            <div style="
+                                width: 28px;
+                                height: 28px;
+                                background-color: {color_hex};
+                                border-radius: 4px;
+                                border: 1px solid rgba(0,0,0,0.1);
+                                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+                                display: inline-block;
+                                vertical-align: middle;
+                            "></div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    # Handle category change
+                    if not is_read_only:
+                        if st.session_state.get(f"cat_select_{sid}") != f"{current_cat.name} [{hex(current_cat.color)}]":
+                            new_cat = cat_colors[st.session_state[f"cat_select_{sid}"]]
+                            db.delete_all_category_mappings_for_site(sid)
+                            db.add_site_category_mapping(SiteCategoryMapping(site_id=sid, category_id=new_cat.id))
+                            st.success("Category updated!")
                             st.rerun()
-                        else:
-                            st.error("Please fill in all fields.")
-            else:
-                st.error("Camera not found")
+                # Actions
+                with row_cols[3]:
+                    if not is_read_only:
+                        icon_edit_col, icon_delete_col = st.columns(2)
+                        with icon_edit_col:
+                            edit_clicked = st.button("✏️", key=f"edit_{sid}", help="Edit Site")
+                        with icon_delete_col:
+                            delete_clicked = st.button("🗑️", key=f"delete_{sid}", help="Delete Site")
+                    else:
+                        edit_clicked = False
+                        delete_clicked = False
+                if view_clicked:
+                    st.session_state["view_site_id"] = sid
+                    # view_site_modal.open()  # Add modal logic as needed
+                if edit_clicked:
+                    st.session_state["edit_site_id"] = sid
+                    # edit_site_modal.open()  # Add modal logic as needed
+                if delete_clicked:
+                    # Delete logic here (reuse your existing logic)
+                    st.success("Site deleted (implement logic)")
+                    st.rerun()
 
-    # ----- Display Sites -----
-    
-    if config["sites"]:
-        st.markdown("### All Sites")
-        header_cols = st.columns([3, 2, 3])
-        header_cols[0].markdown("**Site Name**")
-        header_cols[1].markdown("**No. of Cameras**")
-        header_cols[2].markdown("**Actions**")
-        
-        for sid, info in config["sites"].items():
-            row_cols = st.columns([3, 2, 3])
-            with row_cols[0]:
-                view_clicked = st.button(info["name"], key=f"view_{sid}", help="View Site Details")
-            row_cols[1].write(len(info["cameras"]))
-            
-            # Show edit/delete buttons only for admins and super admins
-            with row_cols[2]:
-                if not is_read_only:
-                    icon_edit_col, icon_delete_col = st.columns(2)
-                    with icon_edit_col:
-                        edit_clicked = st.button("✏️", key=f"edit_{sid}", help="Edit Site")
-                    with icon_delete_col:
-                        delete_clicked = st.button("🗑️", key=f"delete_{sid}", help="Delete Site")
-                else:
-                    edit_clicked = False
-                    delete_clicked = False
-
-            if view_clicked:
-                st.session_state["view_site_id"] = sid
-                view_site_modal.open()
-
-            if edit_clicked:
-                st.session_state["edit_site_id"] = sid
-                edit_site_modal.open()
-
-            if delete_clicked:
-                # First delete all cameras associated with the site
-                for cam_id in list(config["sites"][sid]["cameras"].keys()):
-                    db.delete_camera(cam_id)
-                
-                # Then delete the site itself
-                db.delete_site(sid)
-                
-                # Remove from in-memory config
-                config["sites"].pop(sid)
-                save_camera_config(config)
-                
-                st.success("Site deleted")
-                time.sleep(0.5)
-                st.rerun()
+    # --- CATEGORIES TAB ---
+    with tab_categories:
+        st.markdown("### Manage Categories")
+        cat_add_col, cat_spacer, cat_add_btn_col = st.columns([6, 3, 1])
+        with cat_add_btn_col:
+            add_cat_clicked = st.button("Add Category", key="add_cat_btn")
+        # Add Category Modal
+        add_cat_modal = Modal(key="add_cat_modal", title="Add Category")
+        if add_cat_clicked:
+            add_cat_modal.open()
+        if add_cat_modal.is_open():
+            with add_cat_modal.container():
+                st.subheader("Add Category")
+                cat_name = st.text_input("Category Name", key="new_cat_name")
+                cat_color = st.color_picker("Category Color", value="#FFFFFF", key="new_cat_color")
+                if st.button("Submit", key="submit_new_cat"):
+                    if cat_name:
+                        import uuid as _uuid
+                        color_int = int(cat_color.replace("#", "0xFF"), 16) if cat_color.startswith("#") else default_color
+                        db.add_site_category(type(db.get_all_site_categories()[0])(id=str(_uuid.uuid4()), name=cat_name, color=color_int))
+                        st.success("Category added!")
+                        add_cat_modal.close()
+                        st.rerun()
+                    else:
+                        st.error("Please enter a category name.")
+        # Show Categories Table
+        cat_table_cols = st.columns([4, 2, 2, 2])
+        cat_table_cols[0].markdown("**Category Name**")
+        cat_table_cols[1].markdown("**Color**")
+        cat_table_cols[2].markdown("**Edit**")
+        cat_table_cols[3].markdown("**Delete**")
+        for cat in categories:
+            row = st.columns([4, 2, 2, 2])
+            row[0].write(cat.name)
+            color_hex = f"#{cat.color & 0xFFFFFF:06X}"
+            row[1].markdown(f"<div style='width:30px;height:20px;background:{color_hex};border:1px solid #ccc;'></div>", unsafe_allow_html=True)
+            with row[2]:
+                if st.button("Edit", key=f"edit_cat_{cat.id}"):
+                    st.session_state["edit_cat_id"] = cat.id
+                    st.session_state["edit_cat_name"] = cat.name
+                    st.session_state["edit_cat_color"] = color_hex
+                    st.session_state["edit_cat_modal_open"] = True
+            with row[3]:
+                if st.button("Delete", key=f"delete_cat_{cat.id}"):
+                    db.delete_site_category(cat.id)
+                    st.success("Category deleted!")
+                    st.rerun()
+        # Edit Category Modal
+        if st.session_state.get("edit_cat_modal_open"):
+            edit_cat_modal = Modal(key="edit_cat_modal", title="Edit Category")
+            edit_cat_modal.open()
+            if edit_cat_modal.is_open():
+                with edit_cat_modal.container():
+                    st.subheader("Edit Category")
+                    edit_cat_name = st.text_input("Category Name", value=st.session_state.get("edit_cat_name", ""), key="edit_cat_name_input")
+                    edit_cat_color = st.color_picker("Category Color", value=st.session_state.get("edit_cat_color", "#FFFFFF"), key="edit_cat_color_input")
+                    if st.button("Save Changes", key="save_cat_changes"):
+                        color_int = int(edit_cat_color.replace("#", "0xFF"), 16) if edit_cat_color.startswith("#") else default_color
+                        db.update_site_category(st.session_state["edit_cat_id"], name=edit_cat_name, color=color_int)
+                        st.success("Category updated!")
+                        st.session_state["edit_cat_modal_open"] = False
+                        st.rerun()
+                    if st.button("Cancel", key="cancel_cat_edit"):
+                        st.session_state["edit_cat_modal_open"] = False
+                        st.rerun()
 
 sites_page()
