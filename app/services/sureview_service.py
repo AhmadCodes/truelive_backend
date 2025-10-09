@@ -207,6 +207,54 @@ def get_devices_by_server_id(
         return None
 
 
+def get_group_details(
+    cookies: List[Dict[str, str]],
+    group_id: int
+) -> Optional[Dict[str, Any]]:
+    """
+    Get group details by group ID from SureView API.
+
+    This fetches additional site information including:
+    - referenceId (customer_id)
+    - address
+    - telephone, telephone2
+    - telephonePolice, telephoneFire
+    - notes
+    - latLong
+
+    Args:
+        cookies: Authentication cookies
+        group_id: SureView group identifier
+
+    Returns:
+        Group details dict if successful, None otherwise
+    """
+    if not cookies:
+        logger.error("No cookies available, aborting request.")
+        return None
+
+    cookie_dict = {cookie["name"]: cookie["value"] for cookie in cookies}
+    headers = {"Accept": "application/json"}
+    url = f"https://us.sureviewops.com/api/groups/{group_id}"
+    params = {"liveData": "false"}
+
+    try:
+        logger.info(f"Fetching group details for group ID {group_id} from SureView API...")
+        response = requests.get(url, headers=headers, cookies=cookie_dict, params=params, timeout=30)
+
+        if response.status_code == 200:
+            logger.info(f"Group details for {group_id} retrieved successfully.")
+            return response.json()
+        else:
+            logger.error(f"API request failed. Status Code: {response.status_code}")
+            logger.error(f"Response: {response.text}")
+            return None
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"API request failed: {e}")
+        return None
+
+
 def sync_sureview_devices(db: Session) -> Dict[str, int]:
     """
     Sync devices from SureView API to database.
@@ -267,6 +315,11 @@ def sync_sureview_devices(db: Session) -> Dict[str, int]:
                 site_id = str(server["serverID"])
                 current_site_ids.add(site_id)
 
+                # Fetch group details for this server to get additional site information
+                group_data = None
+                if "groupID" in server and server["groupID"]:
+                    group_data = get_group_details(cookies, server["groupID"])
+
                 # Update or create site
                 site = db.query(Site).filter(Site.id == site_id).first()
 
@@ -276,6 +329,17 @@ def sync_sureview_devices(db: Session) -> Dict[str, int]:
                     site.nvr_username = server["username"]
                     site.nvr_password = server["password"]
                     site.sureview_site = True
+
+                    # Update group details if available
+                    if group_data:
+                        site.customer_id = group_data.get("referenceId")
+                        site.address = group_data.get("address")
+                        site.telephone = group_data.get("telephone")
+                        site.telephone2 = group_data.get("telephone2")
+                        site.telephone_police = group_data.get("telephonePolice")
+                        site.telephone_fire = group_data.get("telephoneFire")
+                        site.notes = group_data.get("notes")
+                        site.lat_long = group_data.get("latLong")
                 else:
                     # Create new
                     site = Site(
@@ -286,6 +350,18 @@ def sync_sureview_devices(db: Session) -> Dict[str, int]:
                         sureview_site=True,
                         new=True
                     )
+
+                    # Add group details if available
+                    if group_data:
+                        site.customer_id = group_data.get("referenceId")
+                        site.address = group_data.get("address")
+                        site.telephone = group_data.get("telephone")
+                        site.telephone2 = group_data.get("telephone2")
+                        site.telephone_police = group_data.get("telephonePolice")
+                        site.telephone_fire = group_data.get("telephoneFire")
+                        site.notes = group_data.get("notes")
+                        site.lat_long = group_data.get("latLong")
+
                     db.add(site)
 
                 results["sites_updated"] += 1

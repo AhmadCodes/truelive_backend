@@ -58,6 +58,49 @@ class Site(BaseModel):
         comment="Whether this is a newly added site"
     )
 
+    # SureView additional fields
+    customer_id = Column(
+        String(50),
+        nullable=True,
+        index=True,
+        comment="Customer ID from SureView (referenceId)"
+    )
+    address = Column(
+        String(500),
+        nullable=True,
+        comment="Physical address of the site"
+    )
+    telephone = Column(
+        String(255),
+        nullable=True,
+        comment="Primary contact telephone"
+    )
+    telephone2 = Column(
+        String(255),
+        nullable=True,
+        comment="Secondary contact telephone"
+    )
+    telephone_police = Column(
+        String(100),
+        nullable=True,
+        comment="Police contact telephone"
+    )
+    telephone_fire = Column(
+        String(100),
+        nullable=True,
+        comment="Fire department contact telephone"
+    )
+    notes = Column(
+        Text,
+        nullable=True,
+        comment="Site notes and instructions"
+    )
+    lat_long = Column(
+        String(100),
+        nullable=True,
+        comment="Latitude and longitude coordinates"
+    )
+
     # Relationships
     cameras = relationship(
         "Camera",
@@ -90,6 +133,7 @@ class Site(BaseModel):
     __table_args__ = (
         Index("idx_sites_name", "name"),
         Index("idx_sites_sureview", "sureview_site"),
+        Index("idx_sites_customer_id", "customer_id"),
         Index("idx_sites_created_at", "created_at", postgresql_ops={"created_at": "DESC"}),
     )
 
