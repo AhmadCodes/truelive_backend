@@ -3,9 +3,9 @@ SQLAlchemy models for site camera layout configuration and layout.
 """
 
 from sqlalchemy import (
-    Column, String, Integer, ForeignKey, CheckConstraint, Index, UniqueConstraint
+    Column, String, Integer, ForeignKey, ForeignKeyConstraint, CheckConstraint, Index, UniqueConstraint
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, foreign
 from app.models.base import BaseModel
 
 
@@ -60,6 +60,7 @@ class SiteCamerasLayoutConfig(BaseModel):
     layout_slots = relationship(
         "SiteCamerasLayout",
         back_populates="config",
+        primaryjoin="SiteCamerasLayoutConfig.site_id == foreign(SiteCamerasLayout.site_id)",
         cascade="all, delete-orphan",
         lazy="select"
     )
@@ -114,14 +115,16 @@ class SiteCamerasLayout(BaseModel):
 
     # Constraints and indexes
     __table_args__ = (
-        # Foreign keys
-        ForeignKey(
-            'sites.id',
+        # Foreign key constraints
+        ForeignKeyConstraint(
+            ['site_id'],
+            ['sites.id'],
             name='fk_site_cameras_layout_site',
             ondelete='CASCADE'
         ),
-        ForeignKey(
-            'cameras.id',
+        ForeignKeyConstraint(
+            ['camera_id'],
+            ['cameras.id'],
             name='fk_site_cameras_layout_camera',
             ondelete='CASCADE'
         ),
@@ -146,9 +149,23 @@ class SiteCamerasLayout(BaseModel):
 
     # Relationships
     # Note: Assumes 'Site' and 'Camera' models exist
+    site = relationship(
+        "Site",
+        back_populates="layout_slots",
+        lazy="select"
+    )
+
+    camera = relationship(
+        "Camera",
+        back_populates="layout_slots",
+        lazy="select"
+    )
+
     config = relationship(
         "SiteCamerasLayoutConfig",
         back_populates="layout_slots",
+        foreign_keys=[site_id],
+        primaryjoin="SiteCamerasLayout.site_id == SiteCamerasLayoutConfig.site_id",
         lazy="select"
     )
 

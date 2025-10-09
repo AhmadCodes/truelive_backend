@@ -2,11 +2,12 @@
 SureView API endpoints for site and camera management.
 """
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, BackgroundTasks
 from typing import List
 from sqlalchemy import func
+import logging
 
-from app.api.deps import DBSession, CurrentUser
+from app.api.deps import DBSession, CurrentUser, AdminUser
 from app.models.site import Site
 from app.models.camera import Camera
 from app.schemas.sureview import (
@@ -18,7 +19,9 @@ from app.schemas.sureview import (
     GetCamerasRequest,
     CameraDetail
 )
+from app.services.sureview_service import sync_sureview_devices
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -170,3 +173,49 @@ async def get_cameras(
         camera_details.append(camera_detail)
 
     return camera_details
+
+
+@router.post("/sync")
+async def trigger_sync(
+    current_user: AdminUser,
+    db: DBSession
+):
+    """
+    Manually trigger SureView device synchronization.
+
+    This endpoint triggers an immediate sync of all SureView sites and cameras.
+    The sync process:
+    1. Authenticates to SureView via Selenium
+    2. Fetches all servers and their devices
+    3. Updates or creates sites and cameras in the database
+    4. Fetches group details for additional site information
+
+    Only admins and super admins can trigger sync.
+
+    Args:
+        current_user: Current authenticated admin user
+        db: Database session
+
+    Returns:
+        Sync result summary with counts of updated/removed items
+    """
+    logger.info(f"Manual SureView sync triggered by user {current_user.username}")
+
+    try:
+        # Execute sync synchronously
+        result = sync_sureview_devices(db=db)
+
+        logger.info(f"Manual sync completed: {result}")
+
+        return {
+            "success": result.get("errors", 0) == 0,
+            "message": "SureView sync completed",
+            "result": result
+        }
+
+    except Exception as e:
+        logger.error(f"Error during manual sync: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Sync failed: {str(e)}"
+        )

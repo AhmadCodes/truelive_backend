@@ -89,6 +89,14 @@ class Camera(BaseModel):
         lazy="select"
     )
 
+    # Relationship to screen mappings
+    screen_mappings = relationship(
+        "ScreenMapping",
+        back_populates="camera",
+        cascade="all, delete-orphan",
+        lazy="select"
+    )
+
     def __repr__(self):
         return (
             f"<Camera("

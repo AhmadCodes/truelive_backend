@@ -178,3 +178,5 @@ temp/
 # Static files (uncomment if needed)
 # staticfiles/
 # static/
+
+USER_MANAGEMENT_API.md

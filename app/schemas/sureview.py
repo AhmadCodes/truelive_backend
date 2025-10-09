@@ -2,7 +2,7 @@
 Pydantic schemas for SureView API endpoints.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, RootModel, Field
 from typing import List, Optional
 
 
@@ -55,10 +55,8 @@ class CustomerSitesGroup(BaseModel):
     customer_sites: List[CustomerSiteSummary]
 
 
-class GetAllSitesResponse(BaseModel):
-    """Response schema for get_all_sites endpoint (root is array)."""
-
-    __root__: List[CustomerSitesGroup]
+# Use alias for backward compatibility - the response is just a list
+GetAllSitesResponse = List[CustomerSitesGroup]
 
 
 # Camera-related schemas
@@ -79,10 +77,8 @@ class GetCamerasRequest(BaseModel):
     site_id: str = Field(..., description="Site ID to get cameras for")
 
 
-class GetCamerasResponse(BaseModel):
-    """Response schema for get_cameras endpoint (root is array)."""
-
-    __root__: List[CameraDetail]
+# Use alias for backward compatibility - the response is just a list
+GetCamerasResponse = List[CameraDetail]
 
 
 # SureView API integration schemas (for internal use)
