@@ -67,11 +67,11 @@ class Settings(BaseSettings):
     SUREVIEW_API_URL: Optional[str] = None
     SUREVIEW_LOGIN_URL: Optional[str] = None
 
-    # Screenshot Configuration
-    SCREENSHOT_MAX_AGE_HOURS: int = 24
-    SCREENSHOT_CAPTURE_TIMEOUT: int = 10
-    SCREENSHOT_MAX_WORKERS: int = 5
-    SCREENSHOT_BATCH_TIME_LIMIT: int = 300
+    # Snapshot Configuration
+    SNAPSHOT_MAX_AGE_HOURS: int = 24
+    SNAPSHOT_CAPTURE_TIMEOUT: int = 10
+    SNAPSHOT_MAX_WORKERS: int = 5
+    SNAPSHOT_BATCH_TIME_LIMIT: int = 300
 
     # Background Tasks
     BACKGROUND_TASK_INTERVAL: int = 600  # 10 minutes

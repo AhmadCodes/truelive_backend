@@ -34,8 +34,8 @@ celery_app.conf.update(
 
 # Beat schedule for periodic tasks
 celery_app.conf.beat_schedule = {
-    'update-screenshots': {
-        'task': 'app.tasks.screenshot_tasks.update_screenshots',
+    'update-snapshots': {
+        'task': 'app.tasks.snapshot_tasks.update_snapshots',
         'schedule': settings.BACKGROUND_TASK_INTERVAL,  # 10 minutes
         'options': {
             'expires': 300  # Task expires after 5 minutes if not picked up
@@ -63,6 +63,6 @@ def debug_task(self):
 # Import tasks to register them with Celery
 # This must be at the end to avoid circular imports
 try:
-    from app.tasks import screenshot_tasks, sureview_tasks
+    from app.tasks import snapshot_tasks, sureview_tasks
 except ImportError as e:
     logger.warning(f"Could not import task modules: {e}")

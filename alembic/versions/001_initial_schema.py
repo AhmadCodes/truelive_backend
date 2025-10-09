@@ -15,7 +15,7 @@ from app.database import Base
 from app.models import (
     User, InvitationToken, AuditLog,
     SiteCategory, SiteCategoryMapping,
-    Site, Camera, Screenshot,
+    Site, Camera, Snapshot,
     SiteCamerasLayoutConfig, SiteCamerasLayout,
     PC, Screen, View, ScreenMapping
 )

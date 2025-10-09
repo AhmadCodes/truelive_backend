@@ -72,9 +72,9 @@ class Camera(BaseModel):
         lazy="select"
     )
 
-    # Relationship to screenshot (one-to-one)
-    screenshot = relationship(
-        "Screenshot",
+    # Relationship to snapshot (one-to-one)
+    snapshot = relationship(
+        "Snapshot",
         back_populates="camera",
         uselist=False,
         cascade="all, delete-orphan",
