@@ -4,10 +4,14 @@ Allows triggering snapshot captures for cameras.
 """
 
 from fastapi import APIRouter, HTTPException, status, BackgroundTasks
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import func
 from typing import List, Optional
 import time
 import logging
+import base64
+import zipfile
+import io
 
 from app.api.deps import AdminUser, DBSession, CurrentUser
 from app.models.camera import Camera
@@ -226,9 +230,67 @@ async def get_camera_snapshot(
     db: DBSession
 ):
     """
-    Get the latest snapshot for a camera.
+    Get the latest snapshot image for a camera.
 
+    Returns the actual image data as PNG.
     All authenticated users can view snapshots.
+
+    Args:
+        camera_id: Camera ID
+        current_user: Current authenticated user
+        db: Database session
+
+    Returns:
+        PNG image binary data
+
+    Raises:
+        HTTPException: If camera or snapshot not found
+    """
+    # Verify camera exists
+    camera = db.query(Camera).filter(Camera.id == camera_id).first()
+    if not camera:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Camera with ID '{camera_id}' not found"
+        )
+
+    # Get snapshot
+    snapshot = db.query(Snapshot).filter(Snapshot.camera_id == camera_id).first()
+
+    if not snapshot:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No snapshot found for camera '{camera.name}'"
+        )
+
+    if not snapshot.image:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Snapshot exists but image data is missing for camera '{camera.name}'"
+        )
+
+    # Return image as PNG
+    return Response(
+        content=snapshot.image,
+        media_type="image/png",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0"
+        }
+    )
+
+
+@router.get("/camera/{camera_id}/info")
+async def get_camera_snapshot_info(
+    camera_id: str,
+    current_user: CurrentUser,
+    db: DBSession
+):
+    """
+    Get snapshot metadata for a camera (without image data).
+
+    All authenticated users can view snapshot info.
 
     Args:
         camera_id: Camera ID
@@ -344,6 +406,168 @@ async def get_site_snapshots(
         "cameras_without_snapshots": sum(1 for s in snapshots_data if not s.get("has_snapshot")),
         "snapshots": snapshots_data
     }
+
+
+@router.get("/site/{site_id}/images")
+async def get_site_snapshots_images(
+    site_id: str,
+    current_user: CurrentUser,
+    db: DBSession
+):
+    """
+    Get all snapshot images for cameras at a site as base64-encoded JSON.
+
+    Returns all camera snapshots with their images encoded in base64.
+    Useful for displaying multiple camera feeds in a web/mobile app.
+
+    All authenticated users can view snapshots.
+
+    Args:
+        site_id: Site ID
+        current_user: Current authenticated user
+        db: Database session
+
+    Returns:
+        JSON with base64-encoded images for all cameras
+
+    Raises:
+        HTTPException: If site not found
+    """
+    # Verify site exists
+    site = db.query(Site).filter(Site.id == site_id).first()
+    if not site:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Site with ID '{site_id}' not found"
+        )
+
+    # Get all cameras with their snapshots
+    cameras = db.query(Camera).filter(Camera.site_id == site_id).all()
+
+    current_time = int(time.time())
+    snapshots_data = []
+
+    for camera in cameras:
+        snapshot = db.query(Snapshot).filter(Snapshot.camera_id == camera.id).first()
+
+        if snapshot and snapshot.image:
+            age_seconds = current_time - snapshot.capture_time
+            age_hours = age_seconds / 3600
+
+            # Encode image as base64
+            image_base64 = base64.b64encode(snapshot.image).decode('utf-8')
+
+            snapshots_data.append({
+                "camera_id": camera.id,
+                "camera_name": camera.name,
+                "has_snapshot": True,
+                "width": snapshot.width,
+                "height": snapshot.height,
+                "capture_time": snapshot.capture_time,
+                "age_seconds": age_seconds,
+                "age_hours": round(age_hours, 2),
+                "image_size_bytes": len(snapshot.image),
+                "image_format": "png",
+                "image_data": image_base64
+            })
+        else:
+            snapshots_data.append({
+                "camera_id": camera.id,
+                "camera_name": camera.name,
+                "has_snapshot": False,
+                "image_data": None
+            })
+
+    return {
+        "site_id": site_id,
+        "site_name": site.name,
+        "total_cameras": len(cameras),
+        "cameras_with_snapshots": sum(1 for s in snapshots_data if s.get("has_snapshot")),
+        "cameras_without_snapshots": sum(1 for s in snapshots_data if not s.get("has_snapshot")),
+        "snapshots": snapshots_data
+    }
+
+
+@router.get("/site/{site_id}/zip")
+async def get_site_snapshots_zip(
+    site_id: str,
+    current_user: CurrentUser,
+    db: DBSession
+):
+    """
+    Download all snapshot images for a site as a ZIP file.
+
+    Returns a ZIP file containing PNG images for all cameras at the site.
+    Each image is named with the camera ID and name.
+
+    All authenticated users can download snapshots.
+
+    Args:
+        site_id: Site ID
+        current_user: Current authenticated user
+        db: Database session
+
+    Returns:
+        ZIP file containing all snapshot images
+
+    Raises:
+        HTTPException: If site not found or no snapshots available
+    """
+    # Verify site exists
+    site = db.query(Site).filter(Site.id == site_id).first()
+    if not site:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Site with ID '{site_id}' not found"
+        )
+
+    # Get all cameras with their snapshots
+    cameras = db.query(Camera).filter(Camera.site_id == site_id).all()
+
+    if not cameras:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No cameras found for site '{site.name}'"
+        )
+
+    # Create ZIP file in memory
+    zip_buffer = io.BytesIO()
+
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        snapshot_count = 0
+
+        for camera in cameras:
+            snapshot = db.query(Snapshot).filter(Snapshot.camera_id == camera.id).first()
+
+            if snapshot and snapshot.image:
+                # Create a safe filename
+                safe_camera_name = "".join(c for c in camera.name if c.isalnum() or c in (' ', '-', '_')).strip()
+                filename = f"{camera.id}_{safe_camera_name}.png"
+
+                # Add image to ZIP
+                zip_file.writestr(filename, snapshot.image)
+                snapshot_count += 1
+
+    if snapshot_count == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No snapshots available for site '{site.name}'"
+        )
+
+    # Prepare ZIP for download
+    zip_buffer.seek(0)
+
+    # Create a safe site name for the ZIP filename
+    safe_site_name = "".join(c for c in site.name if c.isalnum() or c in (' ', '-', '_')).strip()
+    zip_filename = f"snapshots_{site_id}_{safe_site_name}.zip"
+
+    return StreamingResponse(
+        io.BytesIO(zip_buffer.read()),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{zip_filename}"'
+        }
+    )
 
 
 @router.get("/stats")

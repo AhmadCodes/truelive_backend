@@ -178,7 +178,7 @@ def process_camera(
     return result
 
 
-async def batch_update_snapshots(
+def batch_update_snapshots(
     db: Session,
     max_time: int = 300
 ) -> Dict[str, int]:
