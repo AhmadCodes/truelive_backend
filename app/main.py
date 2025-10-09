@@ -13,7 +13,7 @@ import logging
 
 from app.core.config import settings
 from app.database import check_db_health
-from app.api.v1 import auth, sites, cameras, pcs, screens, users, categories, sureview
+from app.api.v1 import auth, sites, cameras, pcs, screens, users, categories, sureview, screenshots
 
 
 # Configure logging
@@ -171,6 +171,12 @@ app.include_router(
     sureview.router,
     prefix=f"{settings.API_V1_PREFIX}/sureview",
     tags=["SureView"]
+)
+
+app.include_router(
+    screenshots.router,
+    prefix=f"{settings.API_V1_PREFIX}/screenshots",
+    tags=["Screenshots"]
 )
 
 
