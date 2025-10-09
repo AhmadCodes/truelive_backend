@@ -1,103 +1,76 @@
-# Use the official Python 3.12 image
-FROM python:3.12-slim
+# Multi-stage Dockerfile for Shomer Portal Backend
 
-# Install required dependencies for OpenCV
-RUN apt-get update && apt-get install -y \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
-    libgl1-mesa-glx
+# Stage 1: Base image with dependencies
+FROM python:3.11-slim as base
 
-# Install necessary dependencies
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
-    wget \
+    gcc \
+    g++ \
+    libpq-dev \
     curl \
-    unzip \
-    libnss3 \
-    libx11-xcb1 \
-    libxcb1 \
-    libxcomposite1 \
-    libxcursor1 \
-    libxdamage1 \
-    libxfixes3 \
-    libxi6 \
-    libxrandr2 \
-    libxrender1 \
-    libxss1 \
-    libxtst6 \
-    libatk1.0-0 \
-    libcups2 \
-    libdbus-1-3 \
-    libdrm2 \
-    libexpat1 \
-    libfontconfig1 \
-    libgbm1 \
-    libglib2.0-0 \
-    libgtk-3-0 \
-    libpango-1.0-0 \
-    libxshmfence1 \
-    ca-certificates \
-    fonts-liberation \
+    wget \
+    chromium \
+    chromium-driver \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Google Chrome
-RUN wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
-    && dpkg -i google-chrome-stable_current_amd64.deb || apt-get -fy install \
-    && rm google-chrome-stable_current_amd64.deb
+# Set Chrome environment variables for Selenium
+ENV CHROME_BIN=/usr/bin/chromium \
+    CHROMEDRIVER_PATH=/usr/bin/chromedriver
 
-# Install ChromeDriver
-RUN CHROMEDRIVER_VERSION=$(curl -sS https://chromedriver.storage.googleapis.com/LATEST_RELEASE) && \
-    wget -q "https://chromedriver.storage.googleapis.com/$CHROMEDRIVER_VERSION/chromedriver_linux64.zip" && \
-    unzip chromedriver_linux64.zip && \
-    mv chromedriver /usr/local/bin/ && \
-    chmod +x /usr/local/bin/chromedriver && \
-    rm chromedriver_linux64.zip
-
-
-
-RUN apt-get update && apt-get install -y gnupg gnupg2 gnupg1
-RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add -
-RUN echo 'deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list
-RUN apt-get update && apt-get install -y google-chrome-stable
-
-RUN apt-get install -y chromium-driver
-
-
-# RUN get-chrome-driver --auto-download --extract
-RUN chmod +x /usr/local/bin/chromedriver
-
-RUN pip install webdriver-manager
-
-ENV TZ=America/New_York
-RUN apt-get update && \
-    apt-get install -y tzdata && \
-    ln -sf /usr/share/zoneinfo/$TZ /etc/localtime && \
-    echo $TZ > /etc/timezone
-
-
-
-
-
-    # Set up Selenium WebDriver environment
-ENV DISPLAY=:99
-ENV AM_I_IN_A_DOCKER_CONTAINER=True
-
-
-
-
-
-
-
+# Set working directory
 WORKDIR /app
+
+# Copy requirements
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
 
+# Install Python dependencies
+RUN pip install --upgrade pip && \
+    pip install -r requirements.txt
+
+# Stage 2: Development
+FROM base as development
+
+# Install development dependencies
+RUN pip install pytest pytest-asyncio pytest-cov black flake8 mypy isort ipython
+
+# Copy application code
 COPY . .
-COPY .streamlit /app/.streamlit
 
-EXPOSE 8501
-EXPOSE 9022
+# Expose ports
+EXPOSE 8000 8080
 
+# Default command for development
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
+# Stage 3: Production
+FROM base as production
 
-CMD ["streamlit", "run", "main.py", "--server.port=8501", "--server.address=0.0.0.0"]
+# Create non-root user
+RUN useradd -m -u 1000 appuser && \
+    mkdir -p /app/uploads /app/logs && \
+    chown -R appuser:appuser /app
+
+# Copy application code
+COPY --chown=appuser:appuser ./app /app/app
+COPY --chown=appuser:appuser ./alembic /app/alembic
+COPY --chown=appuser:appuser ./alembic.ini /app/alembic.ini
+
+# Switch to non-root user
+USER appuser
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD curl -f http://localhost:8000/health || exit 1
+
+# Expose ports
+EXPOSE 8000 8080
+
+# Default command for production
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
