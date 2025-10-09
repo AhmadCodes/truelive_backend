@@ -7,7 +7,7 @@ from app.models.user import User, InvitationToken, AuditLog
 from app.models.category import SiteCategory, SiteCategoryMapping
 from app.models.site import Site
 from app.models.camera import Camera
-from app.models.screenshot import Screenshot
+from app.models.snapshot import Snapshot
 from app.models.site_camera_layout import SiteCamerasLayoutConfig, SiteCamerasLayout
 from app.models.pc import PC
 from app.models.screen import Screen
@@ -31,7 +31,7 @@ __all__ = [
     # Site models
     "Site",
     "Camera",
-    "Screenshot",
+    "Snapshot",
     "SiteCamerasLayoutConfig",
     "SiteCamerasLayout",
 
