@@ -909,3 +909,361 @@ async def delete_screen_mapping(
     db.commit()
 
     logger.info(f"Screen mapping {mapping_id} deleted by user {current_user.username}")
+
+
+# ==================== Additional View and Mapping Endpoints ====================
+
+@router.get("/views/{view_id}/slot/{row}/{col}", response_model=CameraMappingInfo)
+async def get_camera_at_slot(
+    view_id: str,
+    row: int,
+    col: int,
+    current_user: CurrentUser,
+    db: DBSession
+):
+    """
+    Get camera assigned to a specific slot in a view.
+
+    All authenticated users can view mappings.
+
+    Args:
+        view_id: View ID
+        row: Slot row (1-indexed)
+        col: Slot column (1-indexed)
+        current_user: Current authenticated user
+        db: DBSession: Database session
+
+    Returns:
+        Camera mapping info for the slot, or empty slot if no camera assigned
+
+    Raises:
+        HTTPException: If view not found or slot out of bounds
+    """
+    # Verify view exists
+    view = db.query(View).filter(View.id == view_id).first()
+    if not view:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"View with ID '{view_id}' not found"
+        )
+
+    # Validate slot position
+    if row > view.layout_rows or row < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid row {row}. Must be between 1 and {view.layout_rows}"
+        )
+
+    if col > view.layout_columns or col < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid col {col}. Must be between 1 and {view.layout_columns}"
+        )
+
+    # Get mapping for this slot
+    mapping = db.query(ScreenMapping).filter(
+        ScreenMapping.view_id == view_id,
+        ScreenMapping.slot_row == row,
+        ScreenMapping.slot_col == col
+    ).first()
+
+    if not mapping:
+        # Return empty slot info
+        return CameraMappingInfo(
+            slot_row=row,
+            slot_col=col,
+            site_id=None,
+            site_name=None,
+            camera_id=None,
+            camera_name=None,
+            playing_state=False
+        )
+
+    # Return mapping info with site and camera names
+    mapping_info = CameraMappingInfo(
+        slot_row=mapping.slot_row,
+        slot_col=mapping.slot_col,
+        site_id=mapping.site_id,
+        camera_id=mapping.camera_id,
+        playing_state=mapping.playing_state
+    )
+
+    if mapping.site:
+        mapping_info.site_name = mapping.site.name
+    if mapping.camera:
+        mapping_info.camera_name = mapping.camera.name
+
+    return mapping_info
+
+
+@router.patch("/views/{view_id}/rename")
+async def rename_view(
+    view_id: str,
+    new_name: str = Query(..., min_length=1, max_length=50, description="New view name"),
+    current_user: AdminUser = None,
+    db: DBSession = None
+):
+    """
+    Rename a view (convenience endpoint).
+
+    Only admins and super admins can rename views.
+
+    Args:
+        view_id: View ID
+        new_name: New name for the view
+        current_user: Current authenticated admin or super admin
+        db: Database session
+
+    Returns:
+        Updated view
+
+    Raises:
+        HTTPException: If view not found
+    """
+    view = db.query(View).filter(View.id == view_id).first()
+    if not view:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"View with ID '{view_id}' not found"
+        )
+
+    old_name = view.name
+    view.name = new_name
+
+    db.commit()
+    db.refresh(view)
+
+    logger.info(f"View '{view_id}' renamed from '{old_name}' to '{new_name}' by user {current_user.username}")
+    return ViewResponse.model_validate(view)
+
+
+@router.get("/pc/{pc_id}/all-views", response_model=List[ScreenLayoutResponse])
+async def get_all_views_for_pc(
+    pc_id: str,
+    current_user: CurrentUser,
+    db: DBSession
+):
+    """
+    Get all views with mappings for all screens of a PC.
+
+    All authenticated users can view this information.
+
+    Args:
+        pc_id: PC ID
+        current_user: Current authenticated user
+        db: Database session
+
+    Returns:
+        List of screen layouts with views and camera mappings
+
+    Raises:
+        HTTPException: If PC not found
+    """
+    # Verify PC exists
+    pc = db.query(PC).filter(PC.id == pc_id).first()
+    if not pc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"PC with ID '{pc_id}' not found"
+        )
+
+    # Get all screens for this PC
+    screens = db.query(Screen).filter(Screen.pc_id == pc_id).order_by(Screen.name).all()
+
+    results = []
+    for screen in screens:
+        # Get views with mappings for each screen
+        views = db.query(View).filter(View.screen_id == screen.id).order_by(View.view_number).all()
+
+        views_with_mappings = []
+        for view in views:
+            # Get mappings for this view
+            mappings = db.query(ScreenMapping).filter(ScreenMapping.view_id == view.id).all()
+
+            mapping_infos = []
+            for mapping in mappings:
+                mapping_info = CameraMappingInfo(
+                    slot_row=mapping.slot_row,
+                    slot_col=mapping.slot_col,
+                    site_id=mapping.site_id,
+                    camera_id=mapping.camera_id,
+                    playing_state=mapping.playing_state
+                )
+
+                # Add site and camera names
+                if mapping.site:
+                    mapping_info.site_name = mapping.site.name
+                if mapping.camera:
+                    mapping_info.camera_name = mapping.camera.name
+
+                mapping_infos.append(mapping_info)
+
+            view_with_mappings = ViewWithMappings.model_validate(view)
+            view_with_mappings.mappings = mapping_infos
+            views_with_mappings.append(view_with_mappings)
+
+        # Build screen layout response
+        screen_layout = ScreenLayoutResponse.model_validate(screen)
+        if screen.pc:
+            screen_layout.pc = PCInfo.model_validate(screen.pc)
+        screen_layout.views = views_with_mappings
+        screen_layout.view_count = len(views_with_mappings)
+
+        results.append(screen_layout)
+
+    return results
+
+
+@router.delete("/views/{view_id}/slot/{row}/{col}", status_code=status.HTTP_204_NO_CONTENT)
+async def clear_slot(
+    view_id: str,
+    row: int,
+    col: int,
+    current_user: AdminUser,
+    db: DBSession
+):
+    """
+    Remove camera from a specific slot (clear the slot).
+
+    Only admins and super admins can clear slots.
+
+    Args:
+        view_id: View ID
+        row: Slot row (1-indexed)
+        col: Slot column (1-indexed)
+        current_user: Current authenticated admin or super admin
+        db: Database session
+
+    Raises:
+        HTTPException: If view or mapping not found
+    """
+    # Verify view exists
+    view = db.query(View).filter(View.id == view_id).first()
+    if not view:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"View with ID '{view_id}' not found"
+        )
+
+    # Get mapping for this slot
+    mapping = db.query(ScreenMapping).filter(
+        ScreenMapping.view_id == view_id,
+        ScreenMapping.slot_row == row,
+        ScreenMapping.slot_col == col
+    ).first()
+
+    if not mapping:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No camera assigned to slot ({row}, {col}) in view '{view_id}'"
+        )
+
+    db.delete(mapping)
+    db.commit()
+
+    logger.info(f"Slot ({row}, {col}) cleared in view '{view_id}' by user {current_user.username}")
+
+
+@router.put("/views/{view_id}/slot/{row}/{col}")
+async def assign_camera_to_slot(
+    view_id: str,
+    row: int,
+    col: int,
+    camera_id: str = Query(..., description="Camera ID to assign"),
+    site_id: str = Query(None, description="Site ID (optional)"),
+    playing_state: bool = Query(False, description="Playing state"),
+    current_user: AdminUser = None,
+    db: DBSession = None
+):
+    """
+    Assign or update camera in a specific slot.
+
+    Only admins and super admins can assign cameras.
+
+    Args:
+        view_id: View ID
+        row: Slot row (1-indexed)
+        col: Slot column (1-indexed)
+        camera_id: Camera ID to assign
+        site_id: Optional site ID
+        playing_state: Playing state
+        current_user: Current authenticated admin or super admin
+        db: Database session
+
+    Returns:
+        Screen mapping
+
+    Raises:
+        HTTPException: If view or camera not found, or slot out of bounds
+    """
+    # Verify view exists
+    view = db.query(View).filter(View.id == view_id).first()
+    if not view:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"View with ID '{view_id}' not found"
+        )
+
+    # Validate slot position
+    if row > view.layout_rows or row < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid row {row}. Must be between 1 and {view.layout_rows}"
+        )
+
+    if col > view.layout_columns or col < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid col {col}. Must be between 1 and {view.layout_columns}"
+        )
+
+    # Verify camera exists
+    camera = db.query(Camera).filter(Camera.id == camera_id).first()
+    if not camera:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Camera with ID '{camera_id}' not found"
+        )
+
+    # Verify site if provided
+    if site_id:
+        site = db.query(Site).filter(Site.id == site_id).first()
+        if not site:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Site with ID '{site_id}' not found"
+            )
+
+    # Check if mapping already exists for this slot
+    existing_mapping = db.query(ScreenMapping).filter(
+        ScreenMapping.view_id == view_id,
+        ScreenMapping.slot_row == row,
+        ScreenMapping.slot_col == col
+    ).first()
+
+    if existing_mapping:
+        # Update existing mapping
+        existing_mapping.camera_id = camera_id
+        existing_mapping.site_id = site_id
+        existing_mapping.playing_state = playing_state
+        db.commit()
+        db.refresh(existing_mapping)
+        logger.info(f"Camera '{camera_id}' assigned to slot ({row}, {col}) in view '{view_id}' by user {current_user.username}")
+        return ScreenMappingResponse.model_validate(existing_mapping)
+    else:
+        # Create new mapping
+        new_mapping = ScreenMapping(
+            pc_id=view.screen.pc_id,
+            screen_id=view.screen_id,
+            view_id=view_id,
+            slot_row=row,
+            slot_col=col,
+            site_id=site_id,
+            camera_id=camera_id,
+            playing_state=playing_state
+        )
+        db.add(new_mapping)
+        db.commit()
+        db.refresh(new_mapping)
+        logger.info(f"Camera '{camera_id}' assigned to slot ({row}, {col}) in view '{view_id}' by user {current_user.username}")
+        return ScreenMappingResponse.model_validate(new_mapping)
