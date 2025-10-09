@@ -150,6 +150,7 @@ cython_debug/
 
 # Claude AI folder
 .claude/
+CLAUDE.md
 
 # Logs and databases
 *.log

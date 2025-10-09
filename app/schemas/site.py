@@ -13,6 +13,14 @@ class SiteBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     nvr_username: str = Field(..., min_length=1, max_length=255)
     nvr_password: str = Field(..., min_length=1)
+    customer_id: Optional[str] = Field(None, max_length=50)
+    address: Optional[str] = Field(None, max_length=500)
+    telephone: Optional[str] = Field(None, max_length=255)
+    telephone2: Optional[str] = Field(None, max_length=255)
+    telephone_police: Optional[str] = Field(None, max_length=100)
+    telephone_fire: Optional[str] = Field(None, max_length=100)
+    notes: Optional[str] = None
+    lat_long: Optional[str] = Field(None, max_length=100)
 
 
 class SiteCreate(SiteBase):
@@ -25,6 +33,14 @@ class SiteUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     nvr_username: Optional[str] = Field(None, min_length=1, max_length=255)
     nvr_password: Optional[str] = Field(None, min_length=1)
+    customer_id: Optional[str] = Field(None, max_length=50)
+    address: Optional[str] = Field(None, max_length=500)
+    telephone: Optional[str] = Field(None, max_length=255)
+    telephone2: Optional[str] = Field(None, max_length=255)
+    telephone_police: Optional[str] = Field(None, max_length=100)
+    telephone_fire: Optional[str] = Field(None, max_length=100)
+    notes: Optional[str] = None
+    lat_long: Optional[str] = Field(None, max_length=100)
 
 
 class CategoryAssignment(BaseModel):
@@ -48,6 +64,14 @@ class SiteResponse(SiteBase):
     id: str
     sureview_site: bool = False
     new: bool = True
+    customer_id: Optional[str] = None
+    address: Optional[str] = None
+    telephone: Optional[str] = None
+    telephone2: Optional[str] = None
+    telephone_police: Optional[str] = None
+    telephone_fire: Optional[str] = None
+    notes: Optional[str] = None
+    lat_long: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

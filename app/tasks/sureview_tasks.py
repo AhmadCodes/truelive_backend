@@ -63,7 +63,8 @@ def sync_single_server(server_id: int):
         from app.services.sureview_service import (
             automate_login,
             get_server_list,
-            get_devices_by_server_id
+            get_devices_by_server_id,
+            get_group_details
         )
         from app.models.site import Site
         from app.models.camera import Camera
@@ -101,6 +102,11 @@ def sync_single_server(server_id: int):
             result["errors"] += 1
             return result
 
+        # Fetch group details for additional site information
+        group_data = None
+        if "groupID" in target_server and target_server["groupID"]:
+            group_data = get_group_details(cookies, target_server["groupID"])
+
         # Update or create site
         site_id = str(target_server["serverID"])
         site = db.query(Site).filter(Site.id == site_id).first()
@@ -111,6 +117,17 @@ def sync_single_server(server_id: int):
             site.nvr_username = target_server["username"]
             site.nvr_password = target_server["password"]
             site.sureview_site = True
+
+            # Update group details if available
+            if group_data:
+                site.customer_id = group_data.get("referenceId")
+                site.address = group_data.get("address")
+                site.telephone = group_data.get("telephone")
+                site.telephone2 = group_data.get("telephone2")
+                site.telephone_police = group_data.get("telephonePolice")
+                site.telephone_fire = group_data.get("telephoneFire")
+                site.notes = group_data.get("notes")
+                site.lat_long = group_data.get("latLong")
         else:
             # Create new
             site = Site(
@@ -121,6 +138,18 @@ def sync_single_server(server_id: int):
                 sureview_site=True,
                 new=True
             )
+
+            # Add group details if available
+            if group_data:
+                site.customer_id = group_data.get("referenceId")
+                site.address = group_data.get("address")
+                site.telephone = group_data.get("telephone")
+                site.telephone2 = group_data.get("telephone2")
+                site.telephone_police = group_data.get("telephonePolice")
+                site.telephone_fire = group_data.get("telephoneFire")
+                site.notes = group_data.get("notes")
+                site.lat_long = group_data.get("latLong")
+
             db.add(site)
 
         # Get devices for this server
