@@ -8,7 +8,8 @@ from typing import Dict, Any, Optional, List
 from sqlalchemy.orm import Session
 
 from app.utils.url_processor import try_encode_rtsp_password
-from app.models.site import Site, SiteCategory
+from app.models.site import Site
+from app.models.category import SiteCategory
 from app.models.camera import Camera
 from app.models.screen import Screen
 from app.models.site_camera_layout import SiteCamerasLayout
@@ -104,17 +105,19 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
         for screen_id, screen_data in screens.items():
             layout = screen_data.get("layout", {})
 
-            # Get screen name/title from database
+            # Get screen name/title and display_idx from database
             try:
                 screen = db.query(Screen).filter(Screen.id == screen_id).first()
                 screen_title = screen.name if screen else f"Screen {len(config['screens']) + 1}"
+                display_idx = screen.display_idx if screen else len(config["screens"])
             except Exception as e:
                 logger.error(f"Error getting screen title for screen {screen_id}: {e}")
                 screen_title = f"Screen {len(config['screens']) + 1}"
+                display_idx = len(config["screens"])
 
             screen_config = {
-                "id": screen_id,
-                "display_idx": len(config["screens"]),
+                "id": f"pc{pc_id}_screen_{screen_id}",
+                "display_idx": display_idx,
                 "switchInterval": screen_data.get("switching_interval", 10),
                 "title": screen_title,
                 "source_groups": []
@@ -150,6 +153,13 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
                             valid_views[view_key] = view_data
 
             if valid_views:
+                # Sort views by key (numeric keys first, then string keys)
+                # This ensures view_1, view_2, view_3, etc. are in correct rotation order
+                sorted_view_keys = sorted(
+                    valid_views.keys(),
+                    key=lambda x: (isinstance(x, str), x)
+                )
+
                 # Process each slot position across all views
                 for slot_num in range(1, layout["rows"] * layout["columns"] + 1):
                     slot_sources = []
@@ -157,7 +167,8 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
                     col_num = (slot_num - 1) % layout["columns"]
                     slot_key = f"slot_{row_num + 1}_{col_num + 1}"
 
-                    for view_key, view_data in valid_views.items():
+                    for view_key in sorted_view_keys:
+                        view_data = valid_views[view_key]
                         slot_data = view_data.get(slot_key)
 
                         if slot_data:
@@ -226,7 +237,7 @@ def _get_site_color(site_id: str, db: Session) -> str:
             ).first()
 
             if category:
-                # Format as 0xFFGGBBAA
+                # Format as 0xAARRGGBB (ARGB: Alpha, Red, Green, Blue)
                 return f"0x{category.color:08X}"
 
         return "0xFFFFFFFF"  # Default white
@@ -266,7 +277,9 @@ def _get_location_uris(site_id: str, db: Session) -> List[str]:
                 ).first()
 
                 if camera and camera.rtsp_url:
-                    location_uris.append(camera.rtsp_url)
+                    # URL-encode the password in RTSP URL
+                    encoded_url = try_encode_rtsp_password(camera.rtsp_url)
+                    location_uris.append(encoded_url)
 
             except Exception as e:
                 logger.error(f"Error getting camera for LocationUris: {e}")
