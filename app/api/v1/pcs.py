@@ -436,3 +436,93 @@ async def delete_pc(
     db.commit()
 
     logger.info(f"PC '{pc_id}' deleted by user {current_user.username}")
+
+
+@router.post("/{pc_id}/deploy")
+async def deploy_config(
+    pc_id: str,
+    current_user: AdminUser,
+    db: DBSession
+):
+    """
+    Deploy configuration to a PC via WebSocket.
+
+    Generates the device configuration and sends it to the target PC
+    if it's currently connected.
+
+    Args:
+        pc_id: PC ID
+        current_user: Current authenticated admin or super admin
+        db: Database session
+
+    Returns:
+        Deployment status
+
+    Raises:
+        HTTPException: If PC not found or WebSocket connection fails
+    """
+    from app.services.config_loader import load_pc_config
+    from app.services.config_generator import generate_config
+    import socketio as sio_client
+    from app.core.config import settings
+
+    # Verify PC exists
+    pc = db.query(PC).filter(PC.id == pc_id).first()
+    if not pc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"PC with ID '{pc_id}' not found"
+        )
+
+    try:
+        # Load PC configuration from database
+        logger.info(f"Loading configuration for PC {pc_id}")
+        site_config = load_pc_config(pc_id, db)
+
+        # Generate device JSON config
+        logger.info(f"Generating device config for PC {pc_id}")
+        device_config = generate_config(site_config, db)
+
+        # Send config via WebSocket
+        logger.info(f"Sending config to PC {pc_id} via WebSocket")
+
+        # Create Socket.IO client
+        sio = sio_client.Client()
+
+        # Connect to WebSocket server
+        # Use 'websocket' service name when running in Docker, localhost otherwise
+        websocket_host = "websocket" if settings.WEBSOCKET_HOST == "0.0.0.0" else settings.WEBSOCKET_HOST
+        websocket_url = f"http://{websocket_host}:{settings.WEBSOCKET_PORT}"
+        logger.info(f"Connecting to WebSocket at {websocket_url}")
+        sio.connect(websocket_url)
+
+        # Send config message to target PC
+        sio.emit('message', {
+            'type': 'config',
+            'targetId': pc_id,
+            'content': device_config
+        })
+
+        # Wait for acknowledgment (with timeout)
+        import time
+        time.sleep(1)  # Give time for delivery
+
+        # Disconnect
+        sio.disconnect()
+
+        logger.info(f"Configuration deployed to PC {pc_id}")
+
+        return {
+            'pc_id': pc_id,
+            'status': 'deployed',
+            'message': f'Configuration deployed to PC {pc_id}',
+            'screens': len(device_config.get('screens', [])),
+            'config': device_config
+        }
+
+    except Exception as e:
+        logger.error(f"Error deploying config to PC {pc_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to deploy configuration: {str(e)}"
+        )
