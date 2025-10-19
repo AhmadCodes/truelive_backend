@@ -16,6 +16,14 @@ from app.schemas.site import (
     SiteListResponse,
     CategoryAssignment
 )
+from app.schemas.site_camera_layout import (
+    AutoPopulateResponse,
+    BulkAutoPopulateResponse
+)
+from app.services.site_camera_layout_service import (
+    auto_populate_site_cameras,
+    auto_populate_all_sites
+)
 
 router = APIRouter()
 
@@ -222,3 +230,78 @@ async def assign_category_to_site(
         db.commit()
 
     return {"message": "Category assigned successfully"}
+
+
+@router.post("/{site_id}/auto-populate-cameras", response_model=AutoPopulateResponse)
+async def auto_populate_site_camera_layout(
+    site_id: str,
+    db: DBSession,
+    current_user: AdminUser
+):
+    """
+    Auto-populate camera layout for a single site.
+
+    Creates or updates:
+    - SiteCamerasLayoutConfig with optimal grid dimensions based on camera count
+    - SiteCamerasLayout entries for each camera in row-major order
+
+    Grid sizing logic:
+    - 1 camera → 1×1 grid
+    - 2 cameras → 1×2 grid
+    - 3-4 cameras → 2×2 grid
+    - 5-6 cameras → 2×3 grid
+    - 7-9 cameras → 3×3 grid
+    - 10-12 cameras → 3×4 grid
+    - 13-16 cameras → 4×4 grid
+
+    Maximum of 16 cameras can be assigned to site camera layout.
+
+    Requires admin or super_admin privileges.
+    """
+    try:
+        result = auto_populate_site_cameras(site_id, db)
+        return result
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to auto-populate site cameras: {str(e)}"
+        )
+
+
+@router.post("/auto-populate-all-cameras", response_model=BulkAutoPopulateResponse)
+async def auto_populate_all_site_cameras(
+    db: DBSession,
+    current_user: AdminUser
+):
+    """
+    Auto-populate camera layouts for all sites that have cameras.
+
+    Processes each site that has cameras and creates/updates:
+    - SiteCamerasLayoutConfig with optimal grid dimensions
+    - SiteCamerasLayout entries for each camera
+
+    Sites without cameras are skipped.
+
+    Returns summary including:
+    - Total sites found
+    - Sites successfully processed
+    - Sites skipped (no cameras or errors)
+    - Total cameras populated across all sites
+    - Individual site results
+    - Any errors encountered
+
+    Requires admin or super_admin privileges.
+    """
+    try:
+        result = auto_populate_all_sites(db)
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to auto-populate all site cameras: {str(e)}"
+        )
