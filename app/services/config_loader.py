@@ -10,7 +10,9 @@ from sqlalchemy.orm import Session
 from app.models.site import Site
 from app.models.camera import Camera
 from app.models.pc import PC
-from app.models.screen import Screen, View, ScreenMapping
+from app.models.screen import Screen
+from app.models.screen_mapping import ScreenMapping
+from app.models.view import View
 
 logger = logging.getLogger(__name__)
 
