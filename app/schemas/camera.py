@@ -40,6 +40,7 @@ class CameraResponse(BaseModel):
 
     id: str
     site_id: str
+    site_name: Optional[str] = None
     name: str
     rtsp_url: str
     main_stream_url: Optional[str]
