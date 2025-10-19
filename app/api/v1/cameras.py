@@ -76,7 +76,19 @@ async def create_camera(
     db.commit()
     db.refresh(new_camera)
 
-    return new_camera
+    # Return camera with site_name
+    return {
+        "id": new_camera.id,
+        "site_id": new_camera.site_id,
+        "site_name": site.name,
+        "name": new_camera.name,
+        "rtsp_url": new_camera.rtsp_url,
+        "main_stream_url": new_camera.main_stream_url,
+        "sureview_camera": new_camera.sureview_camera,
+        "new": new_camera.new,
+        "created_at": new_camera.created_at,
+        "updated_at": new_camera.updated_at
+    }
 
 
 @router.get("", response_model=List[CameraDetailResponse])
@@ -106,9 +118,11 @@ async def list_cameras(
         search: Search by camera name or ID
 
     Returns:
-        List of cameras
+        List of cameras with site names
     """
-    query = db.query(Camera)
+    from sqlalchemy.orm import joinedload
+
+    query = db.query(Camera).options(joinedload(Camera.site))
 
     # Apply filters
     if site_id:
@@ -133,7 +147,24 @@ async def list_cameras(
     # Apply pagination
     cameras = query.offset(skip).limit(limit).all()
 
-    return cameras
+    # Add site_name to each camera
+    result = []
+    for camera in cameras:
+        camera_dict = {
+            "id": camera.id,
+            "site_id": camera.site_id,
+            "site_name": camera.site.name if camera.site else None,
+            "name": camera.name,
+            "rtsp_url": camera.rtsp_url,
+            "main_stream_url": camera.main_stream_url,
+            "sureview_camera": camera.sureview_camera,
+            "new": camera.new,
+            "created_at": camera.created_at,
+            "updated_at": camera.updated_at
+        }
+        result.append(camera_dict)
+
+    return result
 
 
 @router.get("/count")
@@ -190,12 +221,14 @@ async def get_camera(
         db: Database session
 
     Returns:
-        Camera details
+        Camera details with site name
 
     Raises:
         HTTPException: If camera not found
     """
-    camera = db.query(Camera).filter(Camera.id == camera_id).first()
+    from sqlalchemy.orm import joinedload
+
+    camera = db.query(Camera).options(joinedload(Camera.site)).filter(Camera.id == camera_id).first()
 
     if not camera:
         raise HTTPException(
@@ -203,7 +236,19 @@ async def get_camera(
             detail=f"Camera with ID '{camera_id}' not found"
         )
 
-    return camera
+    # Add site_name to response
+    return {
+        "id": camera.id,
+        "site_id": camera.site_id,
+        "site_name": camera.site.name if camera.site else None,
+        "name": camera.name,
+        "rtsp_url": camera.rtsp_url,
+        "main_stream_url": camera.main_stream_url,
+        "sureview_camera": camera.sureview_camera,
+        "new": camera.new,
+        "created_at": camera.created_at,
+        "updated_at": camera.updated_at
+    }
 
 
 @router.put("/{camera_id}", response_model=CameraDetailResponse)
@@ -267,7 +312,22 @@ async def update_camera(
     db.commit()
     db.refresh(camera)
 
-    return camera
+    # Reload site relationship and return with site_name
+    from sqlalchemy.orm import joinedload
+    camera = db.query(Camera).options(joinedload(Camera.site)).filter(Camera.id == camera_id).first()
+
+    return {
+        "id": camera.id,
+        "site_id": camera.site_id,
+        "site_name": camera.site.name if camera.site else None,
+        "name": camera.name,
+        "rtsp_url": camera.rtsp_url,
+        "main_stream_url": camera.main_stream_url,
+        "sureview_camera": camera.sureview_camera,
+        "new": camera.new,
+        "created_at": camera.created_at,
+        "updated_at": camera.updated_at
+    }
 
 
 @router.delete("/{camera_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -400,11 +460,13 @@ async def get_cameras_by_site(
         db: Database session
 
     Returns:
-        List of cameras for the site
+        List of cameras for the site with site names
 
     Raises:
         HTTPException: If site not found
     """
+    from sqlalchemy.orm import joinedload
+
     # Verify site exists
     site = db.query(Site).filter(Site.id == site_id).first()
     if not site:
@@ -414,6 +476,23 @@ async def get_cameras_by_site(
         )
 
     # Get cameras for the site
-    cameras = db.query(Camera).filter(Camera.site_id == site_id).order_by(Camera.created_at.desc()).all()
+    cameras = db.query(Camera).options(joinedload(Camera.site)).filter(Camera.site_id == site_id).order_by(Camera.created_at.desc()).all()
 
-    return cameras
+    # Add site_name to each camera
+    result = []
+    for camera in cameras:
+        camera_dict = {
+            "id": camera.id,
+            "site_id": camera.site_id,
+            "site_name": camera.site.name if camera.site else None,
+            "name": camera.name,
+            "rtsp_url": camera.rtsp_url,
+            "main_stream_url": camera.main_stream_url,
+            "sureview_camera": camera.sureview_camera,
+            "new": camera.new,
+            "created_at": camera.created_at,
+            "updated_at": camera.updated_at
+        }
+        result.append(camera_dict)
+
+    return result
