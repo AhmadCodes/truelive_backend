@@ -19,7 +19,9 @@ from app.schemas.pc import (
     PCWithManager,
     PCWithControlled,
     PCWithScreens,
-    ScreenSummary
+    ScreenSummary,
+    ConfigurePCScreensRequest,
+    ConfigurePCScreensResponse
 )
 import logging
 
@@ -525,4 +527,105 @@ async def deploy_config(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to deploy configuration: {str(e)}"
+        )
+
+
+@router.post(
+    "/{pc_id}/configure-screens",
+    response_model=ConfigurePCScreensResponse,
+    status_code=status.HTTP_200_OK,
+    responses={
+        404: {
+            "description": "PC or camera IDs not found"
+        }
+    }
+)
+async def configure_pc_screens(
+    pc_id: str,
+    request: ConfigurePCScreensRequest,
+    db: DBSession,
+    current_user: AdminUser
+):
+    """
+    Configure screens, views, and camera mappings for a PC.
+
+    Creates or updates screens based on screen name matching, creates views
+    for each screen, and distributes cameras across views sequentially.
+
+    **Validation:**
+    - PC must exist
+    - ALL camera IDs must exist in database
+    - Returns 404 error with list of invalid camera IDs if any don't exist
+
+    **Screen Handling:**
+    - If screen with same name exists for this PC: UPDATE (delete old views/mappings)
+    - If screen name is new: CREATE new screen
+
+    **Camera Distribution:**
+    - Cameras distributed sequentially across screens and views
+    - Fill View 1 completely, then View 2, etc.
+    - Fill Screen 1 completely, then Screen 2, etc.
+    - Empty slots are NOT created (no mappings without cameras)
+
+    **Screen Dimensions:**
+    - Screen rows/columns: capped at 4x4 (physical display limit)
+    - View layout: can be up to 10x10 (virtual grid)
+
+    Only admins and super admins can configure PC screens.
+
+    Args:
+        pc_id: PC identifier
+        request: Screen configuration request with camera list
+        current_user: Current authenticated admin or super admin
+        db: Database session
+
+    Returns:
+        Configuration statistics (screens created/updated, views, mappings, cameras used)
+
+    Raises:
+        HTTPException 404: PC not found or invalid camera IDs
+        HTTPException 500: Configuration error
+    """
+    from app.services.pc_screen_configurator import (
+        validate_camera_ids,
+        configure_pc_screens as configure_screens
+    )
+
+    try:
+        # 1. Validate PC exists
+        pc = db.query(PC).filter(PC.id == pc_id).first()
+        if not pc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"PC with ID '{pc_id}' not found"
+            )
+
+        # 2. Validate ALL camera IDs exist - FAIL FAST
+        invalid_ids = validate_camera_ids(request.camera_ids, db)
+        if invalid_ids:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "detail": "Some camera IDs not found in database",
+                    "invalid_camera_ids": invalid_ids
+                }
+            )
+
+        # 3. Only proceed if all validations pass
+        result = configure_screens(pc_id, request, db)
+
+        return result
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Error configuring screens for PC {pc_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to configure PC screens: {str(e)}"
         )
