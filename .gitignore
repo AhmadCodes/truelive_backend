@@ -154,7 +154,6 @@ cython_debug/
 
 # Claude AI folder
 .claude/
-CLAUDE.md
 
 # Logs and databases
 *.log
@@ -179,7 +178,12 @@ temp/
 # staticfiles/
 # static/
 
+# Experiments and tests (all test scripts, results, and reports)
+experiments/
+
 USER_MANAGEMENT_API.md
 CAMERA_MANAGEMENT_API.md
 SCREENSHOT_API.md
 SITE_CATEGORIES_API.md
+
+json_format.json
