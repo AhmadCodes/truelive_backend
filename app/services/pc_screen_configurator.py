@@ -1,0 +1,319 @@
+"""
+Service for configuring PC screens, views, and camera mappings.
+
+Handles creation and updates of screens, views, and screen mappings
+for a PC based on provided camera list and layout specifications.
+"""
+
+import logging
+from typing import List, Dict, Any, Tuple, Optional
+from sqlalchemy.orm import Session
+
+from app.models.pc import PC
+from app.models.screen import Screen
+from app.models.view import View
+from app.models.screen_mapping import ScreenMapping
+from app.models.camera import Camera
+from app.schemas.pc import ScreenConfigRequest
+
+logger = logging.getLogger(__name__)
+
+
+def validate_camera_ids(camera_ids: List[str], db: Session) -> List[str]:
+    """
+    Validate that camera IDs exist in the database.
+
+    Args:
+        camera_ids: List of camera IDs to validate
+        db: Database session
+
+    Returns:
+        List of camera IDs that don't exist in database (empty if all valid)
+    """
+    if not camera_ids:
+        return []
+
+    # Query for existing cameras
+    existing_cameras = db.query(Camera.id).filter(Camera.id.in_(camera_ids)).all()
+    existing_ids = {cam.id for cam in existing_cameras}
+
+    # Find IDs that don't exist
+    invalid_ids = [cam_id for cam_id in camera_ids if cam_id not in existing_ids]
+
+    return invalid_ids
+
+
+def get_or_create_screen(
+    pc_id: str,
+    screen_config: ScreenConfigRequest,
+    screen_index: int,
+    db: Session
+) -> Tuple[Screen, bool]:
+    """
+    Get existing screen by name or create new one.
+    If screen exists, delete all its views and mappings.
+
+    Args:
+        pc_id: PC identifier
+        screen_config: Screen configuration
+        screen_index: Index for generating screen ID
+        db: Database session
+
+    Returns:
+        Tuple of (Screen object, is_new boolean)
+    """
+    # Check if screen with same name exists for this PC
+    existing_screen = db.query(Screen).filter(
+        Screen.pc_id == pc_id,
+        Screen.name == screen_config.name
+    ).first()
+
+    if existing_screen:
+        logger.info(f"Found existing screen '{screen_config.name}' for PC {pc_id}, updating...")
+
+        # Delete all views (which cascades to screen_mappings)
+        db.query(View).filter(View.screen_id == existing_screen.id).delete()
+        db.commit()
+
+        # Update screen properties
+        existing_screen.rows = min(screen_config.layout_rows, 4)
+        existing_screen.columns = min(screen_config.layout_cols, 4)
+        existing_screen.switching_interval = screen_config.switch_interval
+        db.commit()
+
+        return existing_screen, False
+    else:
+        logger.info(f"Creating new screen '{screen_config.name}' for PC {pc_id}...")
+
+        # Generate screen ID
+        screen_id = f"{pc_id}_screen_{screen_index}"
+
+        # Create new screen
+        new_screen = Screen(
+            id=screen_id,
+            pc_id=pc_id,
+            name=screen_config.name,
+            rows=min(screen_config.layout_rows, 4),
+            columns=min(screen_config.layout_cols, 4),
+            switching_interval=screen_config.switch_interval
+        )
+
+        db.add(new_screen)
+        db.commit()
+        db.refresh(new_screen)
+
+        return new_screen, True
+
+
+def create_views_for_screen(
+    screen: Screen,
+    screen_config: ScreenConfigRequest,
+    db: Session
+) -> List[View]:
+    """
+    Create views for a screen.
+
+    Args:
+        screen: Screen object
+        screen_config: Screen configuration
+        db: Database session
+
+    Returns:
+        List of created View objects
+    """
+    views = []
+
+    for view_number in range(1, screen_config.num_views + 1):
+        view_id = f"{screen.id}_view_{view_number}"
+
+        view = View(
+            id=view_id,
+            screen_id=screen.id,
+            name=f"{screen.name} - View {view_number}",
+            layout_rows=screen_config.layout_rows,
+            layout_columns=screen_config.layout_cols,
+            view_number=view_number
+        )
+
+        db.add(view)
+        views.append(view)
+
+    db.commit()
+
+    logger.info(f"Created {len(views)} views for screen '{screen.name}'")
+
+    return views
+
+
+def distribute_cameras_and_create_mappings(
+    screens_views: List[Tuple[Screen, List[View]]],
+    camera_ids: List[str],
+    pc_id: str,
+    db: Session
+) -> int:
+    """
+    Distribute cameras across screens and views, creating screen mappings.
+
+    Cameras are distributed sequentially:
+    - Fill Screen 1, View 1 completely (all slots)
+    - Then Screen 1, View 2
+    - Then Screen 2, View 1
+    - etc.
+
+    Empty slots are NOT created (no mappings for slots without cameras).
+
+    Args:
+        screens_views: List of (Screen, List[View]) tuples
+        camera_ids: List of camera IDs to distribute
+        pc_id: PC identifier
+        db: Database session
+
+    Returns:
+        Number of mappings created
+    """
+    camera_index = 0
+    mappings_created = 0
+
+    # Get all cameras with their site_ids in one query
+    cameras = db.query(Camera).filter(Camera.id.in_(camera_ids)).all()
+    camera_dict = {cam.id: cam for cam in cameras}
+
+    for screen, views in screens_views:
+        for view in views:
+            # Calculate total slots for this view
+            total_slots = view.layout_rows * view.layout_columns
+
+            # Fill slots in row-major order
+            for row in range(1, view.layout_rows + 1):
+                for col in range(1, view.layout_columns + 1):
+                    # Check if we have more cameras to assign
+                    if camera_index >= len(camera_ids):
+                        logger.info(
+                            f"Ran out of cameras at view '{view.name}' slot ({row},{col}). "
+                            f"Created {mappings_created} mappings total."
+                        )
+                        return mappings_created
+
+                    # Get camera
+                    camera_id = camera_ids[camera_index]
+                    camera = camera_dict.get(camera_id)
+
+                    if not camera:
+                        logger.warning(f"Camera {camera_id} not found, skipping...")
+                        camera_index += 1
+                        continue
+
+                    # Create screen mapping
+                    mapping = ScreenMapping(
+                        pc_id=pc_id,
+                        screen_id=screen.id,
+                        view_id=view.id,
+                        slot_row=row,
+                        slot_col=col,
+                        site_id=camera.site_id,
+                        camera_id=camera.id,
+                        playing_state=False
+                    )
+
+                    db.add(mapping)
+                    camera_index += 1
+                    mappings_created += 1
+
+    db.commit()
+
+    logger.info(f"Created {mappings_created} camera mappings across all screens and views")
+
+    return mappings_created
+
+
+def configure_pc_screens(
+    pc_id: str,
+    request: 'ConfigurePCScreensRequest',
+    db: Session
+) -> Dict[str, Any]:
+    """
+    Main orchestration function for configuring PC screens.
+
+    Args:
+        pc_id: PC identifier
+        request: Screen configuration request
+        db: Database session
+
+    Returns:
+        Dictionary with configuration statistics
+
+    Raises:
+        ValueError: If PC not found or validation fails
+    """
+    # Verify PC exists
+    pc = db.query(PC).filter(PC.id == pc_id).first()
+    if not pc:
+        raise ValueError(f"PC with ID '{pc_id}' not found")
+
+    logger.info(f"Configuring screens for PC '{pc.name}' ({pc_id})")
+
+    # Get highest existing screen index for this PC to avoid ID conflicts
+    existing_screens = db.query(Screen).filter(Screen.pc_id == pc_id).all()
+    existing_indices = []
+    for screen in existing_screens:
+        # Extract index from ID like "PC001_screen_3"
+        if "_screen_" in screen.id:
+            try:
+                index = int(screen.id.split("_screen_")[-1])
+                existing_indices.append(index)
+            except ValueError:
+                pass
+
+    next_screen_index = max(existing_indices) + 1 if existing_indices else 1
+
+    # Track statistics
+    screens_created = 0
+    screens_updated = 0
+    views_created = 0
+    screens_views = []
+
+    # Process each screen configuration
+    for screen_config in request.screens:
+        # Get or create screen
+        screen, is_new = get_or_create_screen(pc_id, screen_config, next_screen_index, db)
+
+        # Only increment index if we created a new screen
+        if is_new:
+            next_screen_index += 1
+
+        if is_new:
+            screens_created += 1
+        else:
+            screens_updated += 1
+
+        # Create views for this screen
+        views = create_views_for_screen(screen, screen_config, db)
+        views_created += len(views)
+
+        # Collect for camera distribution
+        screens_views.append((screen, views))
+
+    # Distribute cameras and create mappings
+    mappings_created = distribute_cameras_and_create_mappings(
+        screens_views,
+        request.camera_ids,
+        pc_id,
+        db
+    )
+
+    # Calculate cameras used (may be less than total if we ran out of slots)
+    cameras_used = min(len(request.camera_ids), mappings_created)
+
+    result = {
+        "pc_id": pc_id,
+        "screens_created": screens_created,
+        "screens_updated": screens_updated,
+        "views_created": views_created,
+        "mappings_created": mappings_created,
+        "cameras_used": cameras_used,
+        "message": f"PC screens configured successfully: {screens_created} created, {screens_updated} updated"
+    }
+
+    logger.info(f"Configuration complete: {result}")
+
+    return result
