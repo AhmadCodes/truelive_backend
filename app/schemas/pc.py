@@ -120,3 +120,50 @@ class PCWithScreens(PCWithScreenCount):
 
     class Config:
         from_attributes = True
+
+
+# Screen Configuration Schemas
+
+class ScreenConfigRequest(BaseModel):
+    """Configuration for a single screen in PC setup."""
+
+    layout_rows: int = Field(..., ge=1, le=10, description="Number of rows in view grid (1-10)")
+    layout_cols: int = Field(..., ge=1, le=10, description="Number of columns in view grid (1-10)")
+    num_views: int = Field(..., ge=1, description="Number of views per screen (rotation depth)")
+    name: str = Field(..., min_length=1, max_length=100, description="Screen name")
+    switch_interval: int = Field(..., ge=1, description="Seconds between view rotations")
+
+
+class ConfigurePCScreensRequest(BaseModel):
+    """Request body for configuring PC screens and camera mappings."""
+
+    screens: List[ScreenConfigRequest] = Field(
+        ...,
+        description="Screen configurations"
+    )
+    camera_ids: List[str] = Field(
+        ...,
+        description="List of camera IDs to distribute across screens and views"
+    )
+    width: Optional[int] = Field(None, description="Display width (optional, for future use)")
+    height: Optional[int] = Field(None, description="Display height (optional, for future use)")
+
+    @field_validator('camera_ids')
+    @classmethod
+    def deduplicate_camera_ids(cls, v):
+        """Remove duplicate camera IDs while preserving order."""
+        if v is not None:
+            return list(dict.fromkeys(v))
+        return v
+
+
+class ConfigurePCScreensResponse(BaseModel):
+    """Response for PC screen configuration."""
+
+    pc_id: str = Field(..., description="PC identifier")
+    screens_created: int = Field(..., description="Number of new screens created")
+    screens_updated: int = Field(..., description="Number of existing screens updated")
+    views_created: int = Field(..., description="Total number of views created")
+    mappings_created: int = Field(..., description="Total number of camera mappings created")
+    cameras_used: int = Field(..., description="Number of cameras actually mapped")
+    message: str = Field(..., description="Status message")
