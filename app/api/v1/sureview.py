@@ -319,7 +319,7 @@ async def get_sync_status(
         )
 
     return SyncJobResponse(
-        id=sync_job.id,
+        id=str(sync_job.id),
         status=sync_job.status,
         progress=sync_job.progress,
         progress_message=sync_job.progress_message,
@@ -328,7 +328,7 @@ async def get_sync_status(
         created_at=sync_job.created_at,
         result=sync_job.result,
         error_message=sync_job.error_message,
-        triggered_by=sync_job.triggered_by
+        triggered_by=str(sync_job.triggered_by) if sync_job.triggered_by else None
     )
 
 
@@ -367,7 +367,7 @@ async def get_last_sync(
         )
 
     return SyncJobResponse(
-        id=last_sync.id,
+        id=str(last_sync.id),
         status=last_sync.status,
         progress=last_sync.progress,
         progress_message=last_sync.progress_message,
@@ -376,7 +376,7 @@ async def get_last_sync(
         created_at=last_sync.created_at,
         result=last_sync.result,
         error_message=last_sync.error_message,
-        triggered_by=last_sync.triggered_by
+        triggered_by=str(last_sync.triggered_by) if last_sync.triggered_by else None
     )
 
 
@@ -406,7 +406,7 @@ async def get_user_sync_jobs(
         List of sync jobs ordered by creation time (newest first)
     """
     query = db.query(SyncJob).filter(
-        SyncJob.triggered_by == str(current_user.user_id)
+        SyncJob.triggered_by == current_user.user_id
     )
 
     # If not including completed, only show pending/in_progress
@@ -421,7 +421,7 @@ async def get_user_sync_jobs(
 
     return [
         SyncJobResponse(
-            id=job.id,
+            id=str(job.id),
             status=job.status,
             progress=job.progress,
             progress_message=job.progress_message,
@@ -430,7 +430,7 @@ async def get_user_sync_jobs(
             created_at=job.created_at,
             result=job.result,
             error_message=job.error_message,
-            triggered_by=job.triggered_by
+            triggered_by=str(job.triggered_by) if job.triggered_by else None
         )
         for job in jobs
     ]

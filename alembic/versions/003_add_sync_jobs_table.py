@@ -21,14 +21,20 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     """Create sync_jobs table for tracking async SureView sync operations."""
 
-    # Create enum type for job status
-    op.execute("CREATE TYPE syncjobstatus AS ENUM ('pending', 'in_progress', 'completed', 'failed')")
+    # Create enum type for job status using DO block to avoid "already exists" errors
+    op.execute("""
+        DO $$ BEGIN
+            CREATE TYPE syncjobstatus AS ENUM ('pending', 'in_progress', 'completed', 'failed');
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+    """)
 
     # Create sync_jobs table
     op.create_table(
         'sync_jobs',
-        sa.Column('id', sa.String(255), nullable=False, comment='Unique identifier for the sync job (UUID)'),
-        sa.Column('status', postgresql.ENUM('pending', 'in_progress', 'completed', 'failed', name='syncjobstatus'),
+        sa.Column('id', postgresql.UUID(as_uuid=True), nullable=False, server_default=sa.text('gen_random_uuid()'), comment='Unique identifier for the sync job (UUID)'),
+        sa.Column('status', postgresql.ENUM('pending', 'in_progress', 'completed', 'failed', name='syncjobstatus', create_type=False),
                   nullable=False, comment='Current status of the sync job'),
         sa.Column('progress', sa.Integer(), nullable=False, server_default='0',
                   comment='Progress percentage (0-100)'),
@@ -42,7 +48,7 @@ def upgrade() -> None:
                   comment='Sync results (sites_updated, cameras_updated, etc.)'),
         sa.Column('error_message', sa.Text(), nullable=True,
                   comment='Error message if sync failed'),
-        sa.Column('triggered_by', sa.String(255), nullable=True,
+        sa.Column('triggered_by', postgresql.UUID(as_uuid=True), nullable=True,
                   comment='User who triggered the sync'),
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'),
                   nullable=False, comment='When sync job was created'),

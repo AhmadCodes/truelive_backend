@@ -7,9 +7,11 @@ Tracks asynchronous SureView sync operations for status monitoring and history.
 from sqlalchemy import (
     Column, String, Text, Enum, Integer, DateTime, ForeignKey, JSON
 )
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from app.models.base import BaseModel
 import enum
+import uuid as uuid_lib
 
 
 class SyncJobStatus(str, enum.Enum):
@@ -30,8 +32,9 @@ class SyncJob(BaseModel):
     __tablename__ = "sync_jobs"
 
     id = Column(
-        String(255),
+        UUID(as_uuid=True),
         primary_key=True,
+        default=uuid_lib.uuid4,
         comment="Unique identifier for the sync job (UUID)"
     )
 
@@ -80,10 +83,10 @@ class SyncJob(BaseModel):
     )
 
     triggered_by = Column(
-        String(255),
+        UUID(as_uuid=True),
         ForeignKey('users.user_id', ondelete='SET NULL'),
         nullable=True,
-        comment="User who triggered the sync"
+        comment="User who triggered the sync (NULL for system-triggered)"
     )
 
     # Relationships
@@ -105,7 +108,7 @@ class SyncJob(BaseModel):
     def to_dict(self):
         """Convert sync job to dictionary for API responses."""
         return {
-            "id": self.id,
+            "id": str(self.id) if self.id else None,
             "status": self.status.value if isinstance(self.status, SyncJobStatus) else self.status,
             "progress": self.progress,
             "progress_message": self.progress_message,
@@ -114,5 +117,5 @@ class SyncJob(BaseModel):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "result": self.result,
             "error_message": self.error_message,
-            "triggered_by": self.triggered_by
+            "triggered_by": str(self.triggered_by) if self.triggered_by else None
         }

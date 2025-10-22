@@ -37,19 +37,18 @@ def sync_devices():
 
     try:
         # Create sync job record for tracking
-        job_id = str(uuid.uuid4())
         sync_job = SyncJob(
-            id=job_id,
             status=SyncJobStatus.IN_PROGRESS,
             progress=0,
             progress_message="Scheduled sync started",
-            triggered_by="system",  # Indicates automatic background sync
+            triggered_by=None,  # NULL indicates automatic background sync
             started_at=datetime.now(timezone.utc)
         )
         db.add(sync_job)
         db.commit()
+        db.refresh(sync_job)  # Refresh to get the auto-generated UUID
 
-        logger.info(f"Created scheduled sync job {job_id}")
+        logger.info(f"Created scheduled sync job {sync_job.id}")
 
         # Run sync
         sync_job.progress = 20
@@ -78,8 +77,7 @@ def sync_devices():
 
         # Update job status to failed
         try:
-            sync_job = db.query(SyncJob).filter(SyncJob.id == job_id).first()
-            if sync_job:
+            if sync_job and sync_job.id:
                 sync_job.status = SyncJobStatus.FAILED
                 sync_job.progress = 100
                 sync_job.progress_message = "Scheduled sync failed with error"
