@@ -23,21 +23,72 @@ def sync_devices():
     4. Updates database with sites and cameras
     5. Removes stale entries
 
+    Creates a SyncJob record for tracking, with triggered_by='system'
+    to indicate automatic background sync.
+
     Returns:
         dict: Summary of operations performed
     """
-    logger.info("Starting SureView device sync task")
+    from app.models.sync_job import SyncJob, SyncJobStatus
+    import uuid
+
+    logger.info("Starting scheduled SureView device sync task")
     db = SessionLocal()
 
     try:
+        # Create sync job record for tracking
+        job_id = str(uuid.uuid4())
+        sync_job = SyncJob(
+            id=job_id,
+            status=SyncJobStatus.IN_PROGRESS,
+            progress=0,
+            progress_message="Scheduled sync started",
+            triggered_by="system",  # Indicates automatic background sync
+            started_at=datetime.now(timezone.utc)
+        )
+        db.add(sync_job)
+        db.commit()
+
+        logger.info(f"Created scheduled sync job {job_id}")
+
         # Run sync
+        sync_job.progress = 20
+        sync_job.progress_message = "Authenticating to SureView..."
+        db.commit()
+
         result = sync_sureview_devices(db=db)
 
-        logger.info(f"SureView sync task completed: {result}")
+        # Update job with results
+        sync_job.status = SyncJobStatus.COMPLETED if result.get("errors", 0) == 0 else SyncJobStatus.FAILED
+        sync_job.progress = 100
+        sync_job.progress_message = "Scheduled sync completed successfully" if sync_job.status == SyncJobStatus.COMPLETED else "Scheduled sync completed with errors"
+        sync_job.completed_at = datetime.now(timezone.utc)
+        sync_job.result = result
+
+        if result.get("errors", 0) > 0:
+            sync_job.error_message = f"Sync completed with {result['errors']} errors"
+
+        db.commit()
+
+        logger.info(f"Scheduled sync task completed: {result}")
         return result
 
     except Exception as e:
-        logger.error(f"Error in SureView sync task: {e}")
+        logger.error(f"Error in scheduled sync task: {e}")
+
+        # Update job status to failed
+        try:
+            sync_job = db.query(SyncJob).filter(SyncJob.id == job_id).first()
+            if sync_job:
+                sync_job.status = SyncJobStatus.FAILED
+                sync_job.progress = 100
+                sync_job.progress_message = "Scheduled sync failed with error"
+                sync_job.completed_at = datetime.now(timezone.utc)
+                sync_job.error_message = str(e)
+                db.commit()
+        except Exception as update_error:
+            logger.error(f"Failed to update job status: {update_error}")
+
         raise
 
     finally:
