@@ -330,3 +330,107 @@ async def get_sync_status(
         error_message=sync_job.error_message,
         triggered_by=sync_job.triggered_by
     )
+
+
+@router.get("/sync/last", response_model=SyncJobResponse)
+async def get_last_sync(
+    current_user: CurrentUser,
+    db: DBSession
+):
+    """
+    Get the most recent completed sync job.
+
+    This endpoint returns the timestamp and details of the last successful
+    sync operation, useful for displaying "Last synced: X minutes ago" in UI.
+
+    Args:
+        current_user: Current authenticated user
+        db: Database session
+
+    Returns:
+        Most recent completed sync job with timestamp
+
+    Raises:
+        404: If no completed sync jobs found
+    """
+    # Get most recent completed sync (either COMPLETED or FAILED status)
+    last_sync = db.query(SyncJob).filter(
+        SyncJob.status.in_([SyncJobStatus.COMPLETED, SyncJobStatus.FAILED])
+    ).order_by(
+        SyncJob.completed_at.desc()
+    ).first()
+
+    if not last_sync:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No completed sync jobs found"
+        )
+
+    return SyncJobResponse(
+        id=last_sync.id,
+        status=last_sync.status,
+        progress=last_sync.progress,
+        progress_message=last_sync.progress_message,
+        started_at=last_sync.started_at,
+        completed_at=last_sync.completed_at,
+        created_at=last_sync.created_at,
+        result=last_sync.result,
+        error_message=last_sync.error_message,
+        triggered_by=last_sync.triggered_by
+    )
+
+
+@router.get("/sync/jobs", response_model=List[SyncJobResponse])
+async def get_user_sync_jobs(
+    current_user: CurrentUser,
+    db: DBSession,
+    limit: int = 10,
+    include_completed: bool = True
+):
+    """
+    Get sync jobs for the current user.
+
+    This endpoint returns recent sync jobs started by the current user,
+    allowing the frontend to:
+    - Recover active jobs after page refresh
+    - Display sync history
+    - Show currently running syncs
+
+    Args:
+        current_user: Current authenticated user
+        db: Database session
+        limit: Maximum number of jobs to return (default: 10)
+        include_completed: Include completed/failed jobs (default: true)
+
+    Returns:
+        List of sync jobs ordered by creation time (newest first)
+    """
+    query = db.query(SyncJob).filter(
+        SyncJob.triggered_by == str(current_user.user_id)
+    )
+
+    # If not including completed, only show pending/in_progress
+    if not include_completed:
+        query = query.filter(
+            SyncJob.status.in_([SyncJobStatus.PENDING, SyncJobStatus.IN_PROGRESS])
+        )
+
+    jobs = query.order_by(
+        SyncJob.created_at.desc()
+    ).limit(limit).all()
+
+    return [
+        SyncJobResponse(
+            id=job.id,
+            status=job.status,
+            progress=job.progress,
+            progress_message=job.progress_message,
+            started_at=job.started_at,
+            completed_at=job.completed_at,
+            created_at=job.created_at,
+            result=job.result,
+            error_message=job.error_message,
+            triggered_by=job.triggered_by
+        )
+        for job in jobs
+    ]
