@@ -36,7 +36,7 @@ class SyncJob(BaseModel):
     )
 
     status = Column(
-        Enum(SyncJobStatus),
+        Enum(SyncJobStatus, values_callable=lambda x: [e.value for e in x]),
         nullable=False,
         default=SyncJobStatus.PENDING,
         comment="Current status of the sync job"
