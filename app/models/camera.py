@@ -73,11 +73,13 @@ class Camera(BaseModel):
     )
 
     # Relationship to snapshot (one-to-one)
+    # Note: Using "save-update" cascade to preserve snapshots when cameras are removed
+    # Snapshots should be manually cleaned up if needed, not automatically deleted
     snapshot = relationship(
         "Snapshot",
         back_populates="camera",
         uselist=False,
-        cascade="all, delete-orphan",
+        cascade="save-update",
         lazy="select"
     )
 
