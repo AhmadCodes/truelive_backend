@@ -13,7 +13,7 @@ import logging
 
 from app.core.config import settings
 from app.database import check_db_health
-from app.api.v1 import auth, sites, cameras, pcs, screens, users, categories, sureview, snapshots, configs
+from app.api.v1 import auth, sites, cameras, pcs, screens, views, users, categories, sureview, snapshots, configs, stream, invitations, audit_logs
 
 
 # Configure logging
@@ -42,6 +42,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 
@@ -68,11 +69,27 @@ async def add_process_time_header(request: Request, call_next):
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Handle validation errors with detailed error messages."""
+    # Process errors to ensure they are JSON serializable
+    errors = []
+    for error in exc.errors():
+        # Convert any non-serializable objects to strings
+        processed_error = {}
+        for key, value in error.items():
+            if key == "ctx" and isinstance(value, dict):
+                # Recursively process context dict
+                processed_error[key] = {k: str(v) if not isinstance(v, (str, int, float, bool, type(None))) else v
+                                       for k, v in value.items()}
+            elif not isinstance(value, (str, int, float, bool, list, dict, type(None))):
+                processed_error[key] = str(value)
+            else:
+                processed_error[key] = value
+        errors.append(processed_error)
+
     return JSONResponse(
         status_code=422,
         content={
             "detail": "Validation error",
-            "errors": exc.errors(),
+            "errors": errors,
         }
     )
 
@@ -132,6 +149,12 @@ app.include_router(
 )
 
 app.include_router(
+    invitations.router,
+    prefix=f"{settings.API_V1_PREFIX}/invitations",
+    tags=["Invitations"]
+)
+
+app.include_router(
     sites.router,
     prefix=f"{settings.API_V1_PREFIX}/sites",
     tags=["Sites"]
@@ -156,9 +179,21 @@ app.include_router(
 )
 
 app.include_router(
+    views.router,
+    prefix=f"{settings.API_V1_PREFIX}/views",
+    tags=["Views"]
+)
+
+app.include_router(
     users.router,
     prefix=f"{settings.API_V1_PREFIX}/users",
     tags=["Users"]
+)
+
+app.include_router(
+    audit_logs.router,
+    prefix=f"{settings.API_V1_PREFIX}/audit-logs",
+    tags=["Audit Logs"]
 )
 
 app.include_router(
@@ -183,6 +218,12 @@ app.include_router(
     configs.router,
     prefix=f"{settings.API_V1_PREFIX}/configs",
     tags=["Configurations"]
+)
+
+app.include_router(
+    stream.router,
+    prefix=f"{settings.API_V1_PREFIX}/stream",
+    tags=["Streaming"]
 )
 
 

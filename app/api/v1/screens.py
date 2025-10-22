@@ -97,7 +97,7 @@ async def create_screen(
     return new_screen
 
 
-@router.get("", response_model=List[ScreenWithPC])
+@router.get("", response_model=List[ScreenWithViews])
 async def list_screens(
     current_user: CurrentUser,
     db: DBSession,
@@ -116,7 +116,7 @@ async def list_screens(
         search: Optional search term for name
 
     Returns:
-        List of screens with PC information
+        List of screens with PC information and view counts
     """
     query = db.query(Screen)
 
@@ -130,12 +130,17 @@ async def list_screens(
 
     screens = query.order_by(Screen.name).all()
 
-    # Convert to response format with PC info
+    # Convert to response format with PC info and view count
     result = []
     for screen in screens:
-        screen_data = ScreenWithPC.model_validate(screen)
+        screen_data = ScreenWithViews.model_validate(screen)
         if screen.pc:
             screen_data.pc = PCInfo.model_validate(screen.pc)
+
+        # Count views for this screen
+        view_count = db.query(func.count(View.id)).filter(View.screen_id == screen.id).scalar() or 0
+        screen_data.view_count = view_count
+
         result.append(screen_data)
 
     return result

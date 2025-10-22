@@ -218,3 +218,218 @@ def auto_populate_all_sites(db: Session) -> Dict[str, Any]:
         "results": results,
         "errors": errors
     }
+
+
+# Manual layout management functions
+
+def get_site_camera_layout(site_id: str, db: Session) -> Dict[str, Any]:
+    """
+    Get the camera layout configuration for a site.
+
+    Args:
+        site_id: Site identifier
+        db: Database session
+
+    Returns:
+        Dict with layout configuration and camera slots
+
+    Raises:
+        ValueError: If site or layout not found
+    """
+    # Get site
+    site = db.query(Site).filter(Site.id == site_id).first()
+    if not site:
+        raise ValueError(f"Site {site_id} not found")
+
+    # Get layout config
+    config = db.query(SiteCamerasLayoutConfig).filter(
+        SiteCamerasLayoutConfig.site_id == site_id
+    ).first()
+
+    if not config:
+        raise ValueError(f"No layout configuration found for site {site_id}")
+
+    # Get layout slots with camera names
+    layout_slots = db.query(
+        SiteCamerasLayout.slot_row,
+        SiteCamerasLayout.slot_col,
+        SiteCamerasLayout.camera_id,
+        Camera.name.label('camera_name')
+    ).join(
+        Camera, Camera.id == SiteCamerasLayout.camera_id
+    ).filter(
+        SiteCamerasLayout.site_id == site_id
+    ).order_by(
+        SiteCamerasLayout.slot_row,
+        SiteCamerasLayout.slot_col
+    ).all()
+
+    # Format camera slots
+    cameras = [
+        {
+            "slot_row": slot.slot_row,
+            "slot_col": slot.slot_col,
+            "camera_id": slot.camera_id,
+            "camera_name": slot.camera_name
+        }
+        for slot in layout_slots
+    ]
+
+    return {
+        "site_id": site_id,
+        "site_name": config.site_name,
+        "n_rows": config.n_rows,
+        "n_cols": config.n_cols,
+        "total_slots": config.n_rows * config.n_cols,
+        "cameras_populated": len(cameras),
+        "cameras": cameras,
+        "created_at": config.created_at,
+        "updated_at": config.updated_at
+    }
+
+
+def save_site_camera_layout(
+    site_id: str,
+    n_rows: int,
+    n_cols: int,
+    camera_slots: List[Dict[str, Any]],
+    db: Session
+) -> Dict[str, Any]:
+    """
+    Manually save or update camera layout configuration for a site.
+
+    Args:
+        site_id: Site identifier
+        n_rows: Number of rows in grid (1-4)
+        n_cols: Number of columns in grid (1-4)
+        camera_slots: List of camera slot assignments
+        db: Database session
+
+    Returns:
+        Dict with summary of saved layout
+
+    Raises:
+        ValueError: If site not found, cameras don't belong to site, or validation fails
+    """
+    # Get site
+    site = db.query(Site).filter(Site.id == site_id).first()
+    if not site:
+        raise ValueError(f"Site {site_id} not found")
+
+    # Validate all camera IDs exist and belong to this site
+    if camera_slots:
+        camera_ids = [slot['camera_id'] for slot in camera_slots]
+        cameras = db.query(Camera).filter(
+            Camera.id.in_(camera_ids)
+        ).all()
+
+        # Check all cameras exist
+        found_camera_ids = {cam.id for cam in cameras}
+        for camera_id in camera_ids:
+            if camera_id not in found_camera_ids:
+                raise ValueError(f"Camera {camera_id} not found")
+
+        # Check all cameras belong to this site
+        for camera in cameras:
+            if camera.site_id != site_id:
+                raise ValueError(
+                    f"Camera {camera.id} does not belong to site {site_id}"
+                )
+
+    logger.info(
+        f"Saving manual layout for site {site_id} ({site.name}): "
+        f"{n_rows}×{n_cols} grid with {len(camera_slots)} cameras"
+    )
+
+    try:
+        # Delete existing layout entries
+        db.query(SiteCamerasLayout).filter(
+            SiteCamerasLayout.site_id == site_id
+        ).delete()
+
+        # Delete existing config
+        db.query(SiteCamerasLayoutConfig).filter(
+            SiteCamerasLayoutConfig.site_id == site_id
+        ).delete()
+
+        # Create new config
+        config = SiteCamerasLayoutConfig(
+            site_id=site_id,
+            site_name=site.name,
+            n_rows=n_rows,
+            n_cols=n_cols
+        )
+        db.add(config)
+
+        # Create new layout entries
+        for slot in camera_slots:
+            layout_entry = SiteCamerasLayout(
+                site_id=site_id,
+                site_name=site.name,
+                slot_row=slot['slot_row'],
+                slot_col=slot['slot_col'],
+                camera_id=slot['camera_id']
+            )
+            db.add(layout_entry)
+
+        # Commit transaction
+        db.commit()
+
+        logger.info(
+            f"Successfully saved layout for site {site_id}: "
+            f"{len(camera_slots)} cameras in {n_rows}×{n_cols} grid"
+        )
+
+        return {
+            "site_id": site_id,
+            "site_name": site.name,
+            "n_rows": n_rows,
+            "n_cols": n_cols,
+            "total_slots": n_rows * n_cols,
+            "cameras_populated": len(camera_slots),
+            "message": f"Camera layout saved successfully"
+        }
+
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error saving layout for site {site_id}: {e}")
+        raise
+
+
+def delete_site_camera_layout(site_id: str, db: Session) -> None:
+    """
+    Delete the camera layout configuration for a site.
+
+    Args:
+        site_id: Site identifier
+        db: Database session
+
+    Raises:
+        ValueError: If site not found or no layout exists
+    """
+    # Check if site exists
+    site = db.query(Site).filter(Site.id == site_id).first()
+    if not site:
+        raise ValueError(f"Site {site_id} not found")
+
+    # Check if layout exists
+    config = db.query(SiteCamerasLayoutConfig).filter(
+        SiteCamerasLayoutConfig.site_id == site_id
+    ).first()
+
+    if not config:
+        raise ValueError(f"No layout configuration found for site {site_id}")
+
+    logger.info(f"Deleting layout for site {site_id} ({site.name})")
+
+    try:
+        # Delete config (will cascade to layout slots)
+        db.delete(config)
+        db.commit()
+
+        logger.info(f"Successfully deleted layout for site {site_id}")
+
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error deleting layout for site {site_id}: {e}")
+        raise

@@ -3,7 +3,7 @@ User management API endpoints.
 Only super admins can create, update, and delete users.
 """
 
-from fastapi import APIRouter, HTTPException, status, Query
+from fastapi import APIRouter, HTTPException, status, Query, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import List, Optional
@@ -19,6 +19,7 @@ from app.schemas.auth import (
     PasswordReset
 )
 from app.core.security import get_password_hash, validate_password_strength
+from app.services.audit_service import log_user_action, AuditAction, ResourceType
 
 
 router = APIRouter()
@@ -28,7 +29,8 @@ router = APIRouter()
 async def create_user(
     user_data: UserCreate,
     current_user: SuperAdminUser,
-    db: DBSession
+    db: DBSession,
+    request: Request
 ):
     """
     Create a new user.
@@ -75,6 +77,7 @@ async def create_user(
     new_user = User(
         user_id=uuid.uuid4(),
         username=user_data.username,
+        full_name=user_data.full_name,
         email=user_data.email,
         password_hash=get_password_hash(user_data.password),
         role=user_data.role,
@@ -85,6 +88,23 @@ async def create_user(
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
+
+    # Log user creation
+    log_user_action(
+        db=db,
+        request=request,
+        action=AuditAction.USER_CREATED,
+        resource_type=ResourceType.USER,
+        user_id=current_user.user_id,
+        resource_id=str(new_user.user_id),
+        changes={
+            "username": user_data.username,
+            "full_name": user_data.full_name,
+            "email": user_data.email,
+            "role": user_data.role,
+            "is_active": user_data.is_active
+        }
+    )
 
     return new_user
 
@@ -134,6 +154,7 @@ async def list_users(
         search_filter = f"%{search}%"
         query = query.filter(
             (User.username.ilike(search_filter)) |
+            (User.full_name.ilike(search_filter)) |
             (User.email.ilike(search_filter))
         )
 
@@ -211,15 +232,16 @@ async def get_user(
     return user
 
 
-@router.put("/{user_id}", response_model=UserDetailResponse)
+@router.patch("/{user_id}", response_model=UserDetailResponse)
 async def update_user(
     user_id: uuid.UUID,
     user_data: UserUpdate,
     current_user: SuperAdminUser,
-    db: DBSession
+    db: DBSession,
+    request: Request
 ):
     """
-    Update user details.
+    Update user details (partial update supported).
 
     Only super admins can update users.
 
@@ -257,6 +279,15 @@ async def update_user(
             detail="Cannot deactivate your own account"
         )
 
+    # Track changes for audit log
+    changes = {"old": {}, "new": {}}
+
+    # Update full_name if provided
+    if user_data.full_name:
+        changes["old"]["full_name"] = user.full_name
+        changes["new"]["full_name"] = user_data.full_name
+        user.full_name = user_data.full_name
+
     # Update email if provided
     if user_data.email:
         # Check if email already exists for another user
@@ -271,18 +302,36 @@ async def update_user(
                 detail="Email already registered"
             )
 
+        changes["old"]["email"] = user.email
+        changes["new"]["email"] = user_data.email
         user.email = user_data.email
 
     # Update role if provided
     if user_data.role:
+        changes["old"]["role"] = user.role
+        changes["new"]["role"] = user_data.role
         user.role = user_data.role
 
     # Update is_active if provided
     if user_data.is_active is not None:
+        changes["old"]["is_active"] = user.is_active
+        changes["new"]["is_active"] = user_data.is_active
         user.is_active = user_data.is_active
 
     db.commit()
     db.refresh(user)
+
+    # Log user update if there were changes
+    if changes["old"]:
+        log_user_action(
+            db=db,
+            request=request,
+            action=AuditAction.USER_UPDATED,
+            resource_type=ResourceType.USER,
+            user_id=current_user.user_id,
+            resource_id=str(user.user_id),
+            changes=changes
+        )
 
     return user
 
@@ -291,7 +340,8 @@ async def update_user(
 async def delete_user(
     user_id: uuid.UUID,
     current_user: SuperAdminUser,
-    db: DBSession
+    db: DBSession,
+    request: Request
 ):
     """
     Delete a user.
@@ -322,6 +372,21 @@ async def delete_user(
             detail="Cannot delete your own account"
         )
 
+    # Log user deletion before deleting
+    log_user_action(
+        db=db,
+        request=request,
+        action=AuditAction.USER_DELETED,
+        resource_type=ResourceType.USER,
+        user_id=current_user.user_id,
+        resource_id=str(user.user_id),
+        changes={
+            "username": user.username,
+            "email": user.email,
+            "role": user.role
+        }
+    )
+
     db.delete(user)
     db.commit()
 
@@ -333,7 +398,8 @@ async def reset_user_password(
     user_id: uuid.UUID,
     password_data: PasswordReset,
     current_user: SuperAdminUser,
-    db: DBSession
+    db: DBSession,
+    request: Request
 ):
     """
     Reset a user's password.
@@ -372,6 +438,17 @@ async def reset_user_password(
     user.password_hash = get_password_hash(password_data.new_password)
     db.commit()
 
+    # Log password reset
+    log_user_action(
+        db=db,
+        request=request,
+        action=AuditAction.USER_PASSWORD_RESET,
+        resource_type=ResourceType.USER,
+        user_id=current_user.user_id,
+        resource_id=str(user.user_id),
+        changes={"username": user.username}
+    )
+
     return {"message": f"Password reset successfully for user {user.username}"}
 
 
@@ -379,7 +456,8 @@ async def reset_user_password(
 async def activate_user(
     user_id: uuid.UUID,
     current_user: SuperAdminUser,
-    db: DBSession
+    db: DBSession,
+    request: Request
 ):
     """
     Activate a user account.
@@ -409,6 +487,17 @@ async def activate_user(
     db.commit()
     db.refresh(user)
 
+    # Log user activation
+    log_user_action(
+        db=db,
+        request=request,
+        action=AuditAction.USER_ACTIVATED,
+        resource_type=ResourceType.USER,
+        user_id=current_user.user_id,
+        resource_id=str(user.user_id),
+        changes={"username": user.username}
+    )
+
     return {"message": f"User {user.username} activated successfully", "user": user}
 
 
@@ -416,7 +505,8 @@ async def activate_user(
 async def deactivate_user(
     user_id: uuid.UUID,
     current_user: SuperAdminUser,
-    db: DBSession
+    db: DBSession,
+    request: Request
 ):
     """
     Deactivate a user account.
@@ -453,5 +543,16 @@ async def deactivate_user(
     user.is_active = False
     db.commit()
     db.refresh(user)
+
+    # Log user deactivation
+    log_user_action(
+        db=db,
+        request=request,
+        action=AuditAction.USER_DEACTIVATED,
+        resource_type=ResourceType.USER,
+        user_id=current_user.user_id,
+        resource_id=str(user.user_id),
+        changes={"username": user.username}
+    )
 
     return {"message": f"User {user.username} deactivated successfully", "user": user}

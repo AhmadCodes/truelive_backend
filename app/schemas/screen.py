@@ -63,7 +63,7 @@ class PCInfo(BaseModel):
 
     id: str
     name: str
-    ip_address: str
+    ip_address: Optional[str] = None
     role: str
 
     class Config:

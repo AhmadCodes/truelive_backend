@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y \
     wget \
     chromium \
     chromium-driver \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Set Chrome environment variables for Selenium

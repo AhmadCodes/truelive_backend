@@ -96,7 +96,7 @@ async def list_cameras(
     current_user: CurrentUser,
     db: DBSession,
     skip: int = Query(0, ge=0, description="Number of records to skip"),
-    limit: int = Query(50, ge=1, le=500, description="Number of records to return"),
+    limit: int = Query(50, ge=1, le=1000, description="Number of records to return"),
     site_id: Optional[str] = Query(None, description="Filter by site ID"),
     sureview_camera: Optional[bool] = Query(None, description="Filter by SureView camera flag"),
     new: Optional[bool] = Query(None, description="Filter by new camera flag"),

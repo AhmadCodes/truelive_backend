@@ -105,15 +105,16 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
         for screen_id, screen_data in screens.items():
             layout = screen_data.get("layout", {})
 
-            # Get screen name/title and display_idx from database
+            # Get screen name/title from database
             try:
                 screen = db.query(Screen).filter(Screen.id == screen_id).first()
                 screen_title = screen.name if screen else f"Screen {len(config['screens']) + 1}"
-                display_idx = screen.display_idx if screen else len(config["screens"])
             except Exception as e:
                 logger.error(f"Error getting screen title for screen {screen_id}: {e}")
                 screen_title = f"Screen {len(config['screens']) + 1}"
-                display_idx = len(config["screens"])
+
+            # Calculate display_idx based on current screen count
+            display_idx = len(config["screens"])
 
             screen_config = {
                 "id": f"pc{pc_id}_screen_{screen_id}",
@@ -126,31 +127,50 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
             screen_views = mappings.get(pc_id, {}).get(screen_id, {})
             valid_views = {}
 
-            # Filter views that have actual camera data
-            for view_key, view_data in screen_views.items():
-                if view_data:  # Check if view exists
-                    has_data = False
+            logger.info(f"Processing screen {screen_id}, found {len(screen_views)} views in mappings")
 
-                    # Check if any slot has camera data
+            # Filter views that have at least one camera (omit entirely empty views)
+            for view_key, view_data in screen_views.items():
+                logger.info(f"Found view '{view_key}', view_data type: {type(view_data)}, bool: {bool(view_data)}")
+                if view_data:  # Check if view exists
+                    has_camera = False
+                    logger.info(f"Checking view '{view_key}', has {len(view_data)} slots")
+
+                    # Check if any slot has actual camera data (not empty)
                     for slot_num in range(1, layout["rows"] * layout["columns"] + 1):
                         row_num = (slot_num - 1) // layout["columns"] + 1
                         col_num = (slot_num - 1) % layout["columns"] + 1
                         slot_key = f"slot_{row_num}_{col_num}"
 
-                        if view_data.get(slot_key):
-                            has_data = True
-                            break
+                        slot_data = view_data.get(slot_key)
+                        if slot_data:
+                            logger.info(f"Slot {slot_key} has data: {list(slot_data.keys())}")
+                            if slot_data.get('camera_id'):  # Has actual camera
+                                logger.info(f"Slot {slot_key} has camera_id: {slot_data.get('camera_id')}")
+                                has_camera = True
+                                break
 
-                    if has_data:
-                        # For numbered views (view_1, view_2, etc.)
-                        if view_key.startswith('view_'):
+                    if has_camera:
+                        logger.info(f"View '{view_key}' has cameras, adding to valid_views")
+                        # Extract view number for sorting (handles both "view_1" and "view 1" formats)
+                        view_lower = view_key.lower()
+                        if view_lower.startswith('view'):
                             try:
-                                view_num = int(view_key.split('_')[1])
-                                valid_views[view_num] = view_data
+                                # Try to extract number from "view_1" or "view 1" format
+                                view_parts = view_key.replace('_', ' ').split()
+                                if len(view_parts) >= 2:
+                                    view_num = int(view_parts[1])
+                                    valid_views[view_num] = view_data
+                                else:
+                                    valid_views[view_key] = view_data
                             except (ValueError, IndexError):
                                 valid_views[view_key] = view_data
                         else:  # For named views
                             valid_views[view_key] = view_data
+                    else:
+                        logger.info(f"View '{view_key}' has no cameras, omitting")
+
+            logger.info(f"Screen {screen_id} has {len(valid_views)} valid views after filtering")
 
             if valid_views:
                 # Sort views by key (numeric keys first, then string keys)
@@ -167,11 +187,12 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
                     col_num = (slot_num - 1) % layout["columns"]
                     slot_key = f"slot_{row_num + 1}_{col_num + 1}"
 
+                    # Build sources for this slot from all valid views
                     for view_key in sorted_view_keys:
                         view_data = valid_views[view_key]
                         slot_data = view_data.get(slot_key)
 
-                        if slot_data:
+                        if slot_data and slot_data.get('camera_id'):
                             # Get site category color
                             osd_color = _get_site_color(
                                 slot_data.get('site_id', ''), db
@@ -195,14 +216,14 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
                                 slot_sources.append(source_entry)
                             except Exception as e:
                                 logger.error(f"Error creating slot source entry: {e}")
-                                # Add minimal placeholder
+                                # On error, add empty to maintain alignment
                                 slot_sources.append(_create_empty_source())
                         else:
-                            # Empty slot
+                            # View doesn't have camera for this slot - add empty for alignment
                             slot_sources.append(_create_empty_source())
 
-                    if slot_sources:  # Only add if there are sources
-                        screen_config["source_groups"].append(slot_sources)
+                    # Add slot to source_groups
+                    screen_config["source_groups"].append(slot_sources)
 
                 config["screens"].append(screen_config)
 
@@ -262,12 +283,17 @@ def _get_location_uris(site_id: str, db: Session) -> List[str]:
 
     try:
         if not site_id:
+            logger.warning("_get_location_uris called with empty site_id")
             return location_uris
+
+        logger.debug(f"Getting LocationUris for site_id: {site_id}")
 
         # Get all site_cameras_layout entries for this site
         site_layouts = db.query(SiteCamerasLayout).filter(
             SiteCamerasLayout.site_id == site_id
         ).all()
+
+        logger.debug(f"Found {len(site_layouts)} site_cameras_layout entries for site {site_id}")
 
         # Extract camera URLs
         for site_layout in site_layouts:
@@ -280,10 +306,15 @@ def _get_location_uris(site_id: str, db: Session) -> List[str]:
                     # URL-encode the password in RTSP URL
                     encoded_url = try_encode_rtsp_password(camera.rtsp_url)
                     location_uris.append(encoded_url)
+                    logger.debug(f"Added camera {camera.id} URL to LocationUris for site {site_id}")
+                else:
+                    logger.warning(f"Camera {site_layout.camera_id} not found or has no RTSP URL for site {site_id}")
 
             except Exception as e:
                 logger.error(f"Error getting camera for LocationUris: {e}")
                 continue
+
+        logger.info(f"Total LocationUris for site {site_id}: {len(location_uris)}")
 
     except Exception as e:
         logger.error(f"Error getting LocationUris for site {site_id}: {e}")

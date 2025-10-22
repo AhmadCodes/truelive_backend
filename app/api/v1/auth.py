@@ -2,9 +2,9 @@
 Authentication API endpoints.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from app.database import get_db
@@ -17,7 +17,7 @@ from app.core.security import (
     validate_password_strength
 )
 from app.core.config import settings
-from app.models.user import User
+from app.models.user import User, InvitationToken
 from app.schemas.auth import (
     Login,
     Token,
@@ -27,7 +27,9 @@ from app.schemas.auth import (
     PasswordChange,
     EmailUpdate
 )
+from app.schemas.invitation import RegisterWithInvitationRequest
 from app.api.deps import CurrentUser, DBSession
+from app.services.audit_service import log_user_action, AuditAction, ResourceType
 
 
 router = APIRouter()
@@ -36,7 +38,8 @@ router = APIRouter()
 @router.post("/login", response_model=Token)
 async def login(
     login_data: Login,
-    db: DBSession
+    db: DBSession,
+    request: Request
 ):
     """
     User login endpoint.
@@ -46,6 +49,15 @@ async def login(
     user = db.query(User).filter(User.username == login_data.username).first()
 
     if not user or not verify_password(login_data.password, user.password_hash):
+        # Log failed login attempt
+        log_user_action(
+            db=db,
+            request=request,
+            action=AuditAction.LOGIN_FAILED,
+            resource_type=ResourceType.AUTH,
+            user_id=None,
+            changes={"username": login_data.username}
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
@@ -59,8 +71,18 @@ async def login(
         )
 
     # Update last login timestamp
-    user.last_login = datetime.utcnow()
+    user.last_login = datetime.now(timezone.utc)
     db.commit()
+
+    # Log successful login
+    log_user_action(
+        db=db,
+        request=request,
+        action=AuditAction.LOGIN_SUCCESS,
+        resource_type=ResourceType.AUTH,
+        user_id=user.user_id,
+        changes={"username": user.username}
+    )
 
     # Create tokens
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -84,6 +106,91 @@ async def login(
         token_type="bearer",
         expires_in=int(access_token_expires.total_seconds())
     )
+
+
+@router.post("/register-with-invitation", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+async def register_with_invitation(
+    registration_data: RegisterWithInvitationRequest,
+    db: DBSession
+):
+    """
+    Register a new user using an invitation token.
+
+    Validates the invitation token and creates a new user account.
+    """
+    # Find the invitation token
+    invitation = db.query(InvitationToken).filter(
+        InvitationToken.token == registration_data.token
+    ).first()
+
+    if not invitation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="This invitation link is no longer valid. It may have expired, been revoked, or replaced with a newer invitation. Please contact your administrator for a new invitation."
+        )
+
+    # Check if token is already used
+    if invitation.is_used:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This invitation has already been used"
+        )
+
+    # Check if token is expired
+    if invitation.expires_at < datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This invitation has expired"
+        )
+
+    # Check if username already exists
+    existing_user = db.query(User).filter(User.username == registration_data.username).first()
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Username '{registration_data.username}' already exists"
+        )
+
+    # Check if email already registered (shouldn't happen but double-check)
+    existing_email = db.query(User).filter(User.email == invitation.email).first()
+    if existing_email:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Email '{invitation.email}' is already registered"
+        )
+
+    # Validate password strength
+    is_valid, error_msg = validate_password_strength(registration_data.password)
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_msg
+        )
+
+    # Create new user
+    new_user = User(
+        username=registration_data.username,
+        full_name=registration_data.full_name,
+        email=invitation.email,
+        password_hash=get_password_hash(registration_data.password),
+        role=invitation.role,
+        is_active=True,
+        created_by=invitation.invited_by_id
+    )
+
+    db.add(new_user)
+    db.flush()  # Get the user_id before committing
+
+    # Mark invitation as used
+    invitation.is_used = True
+    invitation.used_at = datetime.now(timezone.utc)
+    invitation.user_id = new_user.user_id
+    # Note: IP address tracking would require request object
+
+    db.commit()
+    db.refresh(new_user)
+
+    return new_user
 
 
 @router.post("/refresh", response_model=Token)
@@ -158,7 +265,8 @@ async def get_current_user_info(
 async def update_own_email(
     email_update: EmailUpdate,
     current_user: CurrentUser,
-    db: DBSession
+    db: DBSession,
+    request: Request
 ):
     """
     Update current user's email.
@@ -175,9 +283,22 @@ async def update_own_email(
             detail="Email already registered"
         )
 
+    # Track old email for audit log
+    old_email = current_user.email
+
     current_user.email = email_update.email
     db.commit()
     db.refresh(current_user)
+
+    # Log email update
+    log_user_action(
+        db=db,
+        request=request,
+        action=AuditAction.EMAIL_UPDATE,
+        resource_type=ResourceType.AUTH,
+        user_id=current_user.user_id,
+        changes={"old_email": old_email, "new_email": email_update.email}
+    )
 
     return current_user
 
@@ -186,7 +307,8 @@ async def update_own_email(
 async def change_own_password(
     password_change: PasswordChange,
     current_user: CurrentUser,
-    db: DBSession
+    db: DBSession,
+    request: Request
 ):
     """
     Change current user's password.
@@ -209,5 +331,15 @@ async def change_own_password(
     # Update password
     current_user.password_hash = get_password_hash(password_change.new_password)
     db.commit()
+
+    # Log password change
+    log_user_action(
+        db=db,
+        request=request,
+        action=AuditAction.PASSWORD_CHANGE,
+        resource_type=ResourceType.AUTH,
+        user_id=current_user.user_id,
+        changes={"username": current_user.username}
+    )
 
     return {"message": "Password changed successfully"}

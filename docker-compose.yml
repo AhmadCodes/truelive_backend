@@ -51,6 +51,8 @@ services:
     container_name: shomer_backend
     restart: unless-stopped
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+    env_file:
+      - .env
     volumes:
       - ./app:/app/app:ro
       - upload_data:/app/uploads
@@ -63,14 +65,8 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - WEBSOCKET_URL=http://websocket:8080
-      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
-      - JWT_SECRET=${JWT_SECRET:-your-jwt-secret-key}
       - DEBUG=False
       - ENVIRONMENT=production
-      - SUREVIEW_USERNAME=${SUREVIEW_USERNAME}
-      - SUREVIEW_PASSWORD=${SUREVIEW_PASSWORD}
-      - SUREVIEW_API_URL=${SUREVIEW_API_URL}
-      - SUREVIEW_LOGIN_URL=${SUREVIEW_LOGIN_URL}
     depends_on:
       postgres:
         condition: service_healthy

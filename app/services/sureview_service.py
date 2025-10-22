@@ -364,6 +364,9 @@ def sync_sureview_devices(db: Session) -> Dict[str, int]:
 
                     db.add(site)
 
+                # Flush to database to avoid bulk insert conflicts
+                db.flush()
+
                 results["sites_updated"] += 1
 
                 # Step 4: Get devices for this server
@@ -371,10 +374,6 @@ def sync_sureview_devices(db: Session) -> Dict[str, int]:
 
                 for device in devices:
                     try:
-                        # Only process devices that belong to this server
-                        if device["serverID"] != server["serverID"]:
-                            continue
-
                         camera_id = str(device["deviceID"])
                         current_camera_ids.add(camera_id)
 
@@ -385,7 +384,7 @@ def sync_sureview_devices(db: Session) -> Dict[str, int]:
                             f"{server['extraValue'].replace('{#}', str(device['input1']))}"
                         )
 
-                        # Update or create camera
+                        # Update or create camera using merge for proper upsert
                         camera = db.query(Camera).filter(Camera.id == camera_id).first()
 
                         if camera:
@@ -405,6 +404,9 @@ def sync_sureview_devices(db: Session) -> Dict[str, int]:
                             )
                             db.add(camera)
 
+                        # Flush to database to avoid bulk insert conflicts
+                        db.flush()
+
                         results["cameras_updated"] += 1
 
                     except Exception as e:
@@ -419,35 +421,61 @@ def sync_sureview_devices(db: Session) -> Dict[str, int]:
         db.commit()
 
         # Step 5: Remove stale sites and cameras (bulk delete for performance)
-        # Get all SureView site IDs
-        existing_sureview_site_ids = {
-            site.id for site in db.query(Site.id).filter(Site.sureview_site == True).all()
-        }
+        # CRITICAL: Only perform deletion if sync was successful and fetched data
+        # This prevents deleting cameras when API partially fails or returns incomplete data
+        sync_successful = results["errors"] == 0
+        has_data = len(current_camera_ids) > 0
 
-        # Find stale sites
-        stale_site_ids = existing_sureview_site_ids - current_site_ids
+        if not sync_successful:
+            logger.warning(
+                f"Skipping deletion of stale entries due to errors during sync. "
+                f"Errors: {results['errors']}"
+            )
+        elif not has_data:
+            logger.warning(
+                "Skipping deletion of stale entries - no cameras fetched from SureView. "
+                "This may indicate API issues or authentication failure."
+            )
+        else:
+            # Get all SureView site IDs
+            existing_sureview_site_ids = {
+                site.id for site in db.query(Site.id).filter(Site.sureview_site == True).all()
+            }
 
-        if stale_site_ids:
-            logger.info(f"Removing {len(stale_site_ids)} stale sites")
-            db.query(Site).filter(Site.id.in_(stale_site_ids)).delete(synchronize_session=False)
-            results["sites_removed"] = len(stale_site_ids)
+            # Find stale sites
+            stale_site_ids = existing_sureview_site_ids - current_site_ids
 
-        # Get all SureView camera IDs
-        existing_sureview_camera_ids = {
-            camera.id for camera in db.query(Camera.id).filter(
-                Camera.sureview_camera == True
-            ).all()
-        }
+            if stale_site_ids:
+                logger.info(f"Removing {len(stale_site_ids)} stale sites")
+                db.query(Site).filter(Site.id.in_(stale_site_ids)).delete(synchronize_session=False)
+                results["sites_removed"] = len(stale_site_ids)
 
-        # Find stale cameras
-        stale_camera_ids = existing_sureview_camera_ids - current_camera_ids
+            # Get all SureView camera IDs
+            existing_sureview_camera_ids = {
+                camera.id for camera in db.query(Camera.id).filter(
+                    Camera.sureview_camera == True
+                ).all()
+            }
 
-        if stale_camera_ids:
-            logger.info(f"Removing {len(stale_camera_ids)} stale cameras")
-            db.query(Camera).filter(Camera.id.in_(stale_camera_ids)).delete(synchronize_session=False)
-            results["cameras_removed"] = len(stale_camera_ids)
+            # Find stale cameras
+            stale_camera_ids = existing_sureview_camera_ids - current_camera_ids
 
-        # Commit deletions
+            if stale_camera_ids:
+                # Additional safety check: warn if deleting more than 50% of cameras
+                deletion_percentage = (len(stale_camera_ids) / len(existing_sureview_camera_ids)) * 100
+                if deletion_percentage > 50:
+                    logger.error(
+                        f"SAFETY CHECK FAILED: Attempting to delete {len(stale_camera_ids)} cameras "
+                        f"({deletion_percentage:.1f}% of total). This likely indicates a sync issue. "
+                        f"Skipping deletion to prevent data loss."
+                    )
+                    results["errors"] += 1
+                else:
+                    logger.info(f"Removing {len(stale_camera_ids)} stale cameras")
+                    db.query(Camera).filter(Camera.id.in_(stale_camera_ids)).delete(synchronize_session=False)
+                    results["cameras_removed"] = len(stale_camera_ids)
+
+        # Commit deletions (if any were performed)
         db.commit()
 
         logger.info(f"SureView sync completed: {results}")

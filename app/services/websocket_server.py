@@ -13,8 +13,12 @@ import logging
 from typing import Dict, Any
 import jwt
 from datetime import datetime
+import json
+import time
 
 from app.core.config import settings
+from app.database import get_db
+from app.models.pc import PC
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +32,63 @@ sio = socketio.Server(
     ping_interval=25
 )
 
-# Create WSGI app
-app = socketio.WSGIApp(sio)
+# Create WSGI app wrapper for combined HTTP and WebSocket handling
+class WSGIAppWithHTTP:
+    """Combined WSGI app for Socket.IO and HTTP endpoints."""
+
+    def __init__(self, socketio_app):
+        self.socketio_app = socketio_app
+
+    def __call__(self, environ, start_response):
+        """Route requests to Socket.IO or HTTP handlers."""
+        path = environ.get('PATH_INFO', '')
+
+        # HTTP endpoint to get connected PCs status
+        if path == '/api/connected-pcs' and environ.get('REQUEST_METHOD') == 'GET':
+            return self.get_connected_pcs(environ, start_response)
+
+        # Default to Socket.IO
+        return self.socketio_app(environ, start_response)
+
+    def get_connected_pcs(self, environ, start_response):
+        """HTTP endpoint to get list of connected PCs."""
+        try:
+            clients = []
+
+            for pc_id, pc_sid in connected_pcs.items():
+                client_data = session_data.get(pc_sid, {})
+                clients.append({
+                    'pc_id': pc_id,
+                    'name': client_data.get('name', ''),
+                    'connected_at': client_data.get('connected_at'),
+                    'is_connected': True
+                })
+
+            response_data = {
+                'connected_pcs': clients,
+                'total_connected': len(clients)
+            }
+
+            response_body = json.dumps(response_data).encode('utf-8')
+
+            start_response('200 OK', [
+                ('Content-Type', 'application/json'),
+                ('Content-Length', str(len(response_body))),
+                ('Access-Control-Allow-Origin', '*')
+            ])
+
+            return [response_body]
+
+        except Exception as e:
+            logger.error(f"Error in get_connected_pcs endpoint: {e}")
+            error_response = json.dumps({'error': str(e)}).encode('utf-8')
+            start_response('500 Internal Server Error', [
+                ('Content-Type', 'application/json'),
+                ('Content-Length', str(len(error_response)))
+            ])
+            return [error_response]
+
+app = WSGIAppWithHTTP(socketio.WSGIApp(sio))
 
 # PC client tracking: {pc_id: sid}
 connected_pcs: Dict[str, str] = {}
@@ -165,6 +224,21 @@ def register(sid, data):
         connected_pcs[pc_id] = sid
         session_data[sid]['pc_id'] = pc_id
         session_data[sid]['name'] = name
+
+        # Update last_connected in database
+        try:
+            db = next(get_db())
+            pc = db.query(PC).filter(PC.id == pc_id).first()
+            if pc:
+                pc.last_connected = int(time.time())  # Unix timestamp
+                db.commit()
+                logger.info(f"Updated last_connected for PC {pc_id}")
+            else:
+                logger.warning(f"PC {pc_id} not found in database")
+        except Exception as db_error:
+            logger.error(f"Failed to update last_connected for PC {pc_id}: {db_error}")
+        finally:
+            db.close()
 
         logger.info(f"PC registered: {pc_id} (sid: {sid}, name: {name})")
 

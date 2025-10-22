@@ -157,10 +157,6 @@ def sync_single_server(server_id: int):
 
         for device in devices:
             try:
-                # Only process devices that belong to this server
-                if device["serverID"] != target_server["serverID"]:
-                    continue
-
                 camera_id = str(device["deviceID"])
 
                 # Build RTSP URL using server and device data
