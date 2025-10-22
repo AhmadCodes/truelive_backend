@@ -39,6 +39,11 @@ class User(BaseModel):
         index=True,
         comment="Unique username for login"
     )
+    full_name = Column(
+        String(255),
+        nullable=False,
+        comment="User's full name"
+    )
     email = Column(
         String(255),
         unique=True,
@@ -92,6 +97,7 @@ class User(BaseModel):
     invitation_tokens = relationship(
         "InvitationToken",
         back_populates="user",
+        foreign_keys="InvitationToken.user_id",
         cascade="all, delete-orphan"
     )
     audit_logs = relationship(
@@ -129,9 +135,12 @@ class InvitationToken(BaseModel):
     Invitation token model for user registration.
 
     Attributes:
-        token_id: Primary key (UUID)
+        id: Primary key (UUID)
         token: Unique invitation token string
-        user_id: Reference to the invited user
+        email: Email address of the invited user
+        role: Role to assign to the user upon registration
+        invited_by_id: User who sent the invitation
+        user_id: Reference to the user (set after registration)
         expires_at: Token expiration timestamp
         is_used: Whether the token has been used
         used_at: Timestamp when token was used
@@ -139,11 +148,11 @@ class InvitationToken(BaseModel):
     """
     __tablename__ = "invitation_tokens"
 
-    token_id = Column(
+    id = Column(
         UUID(as_uuid=True),
         primary_key=True,
         server_default=text("gen_random_uuid()"),
-        comment="Unique token identifier"
+        comment="Unique invitation identifier"
     )
     token = Column(
         String(255),
@@ -152,12 +161,31 @@ class InvitationToken(BaseModel):
         index=True,
         comment="Unique invitation token string"
     )
-    user_id = Column(
+    email = Column(
+        String(255),
+        nullable=False,
+        index=True,
+        comment="Email address of the invited user"
+    )
+    role = Column(
+        String(50),
+        nullable=False,
+        default="user",
+        comment="Role to assign to the user (user, admin, super_admin)"
+    )
+    invited_by_id = Column(
         UUID(as_uuid=True),
         ForeignKey("users.user_id", ondelete="CASCADE"),
         nullable=False,
         index=True,
-        comment="User who received the invitation"
+        comment="User who sent the invitation"
+    )
+    user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.user_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="User who registered with this token (set after registration)"
     )
     expires_at = Column(
         DateTime(timezone=True),
@@ -178,14 +206,20 @@ class InvitationToken(BaseModel):
         comment="Timestamp when token was used"
     )
     used_from_ip = Column(
-        String(45),  # IPv6 compatible (INET type)
+        String(45),  # IPv6 compatible
         nullable=True,
         comment="IP address from which token was used"
     )
 
     # Relationships
+    invited_by = relationship(
+        "User",
+        foreign_keys=[invited_by_id],
+        backref="sent_invitations"
+    )
     user = relationship(
         "User",
+        foreign_keys=[user_id],
         back_populates="invitation_tokens"
     )
 
@@ -193,9 +227,19 @@ class InvitationToken(BaseModel):
     __table_args__ = (
         CheckConstraint(
             "expires_at > created_at",
-            name="valid_expiration"
+            name="valid_invitation_expiration"
+        ),
+        CheckConstraint(
+            "role IN ('user', 'admin', 'super_admin')",
+            name="valid_invitation_role"
+        ),
+        CheckConstraint(
+            "email ~* '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}$'",
+            name="invitation_email_format"
         ),
         Index("idx_invitation_tokens_token", "token"),
+        Index("idx_invitation_tokens_email", "email"),
+        Index("idx_invitation_tokens_invited_by_id", "invited_by_id"),
         Index("idx_invitation_tokens_user_id", "user_id"),
         Index("idx_invitation_tokens_expires_at", "expires_at"),
         Index("idx_invitation_tokens_is_used", "is_used"),
@@ -203,7 +247,7 @@ class InvitationToken(BaseModel):
 
     def __repr__(self):
         return (
-            f"<InvitationToken(token_id={self.token_id}, user_id={self.user_id}, "
+            f"<InvitationToken(id={self.id}, email='{self.email}', "
             f"is_used={self.is_used}, expires_at={self.expires_at})>"
         )
 

@@ -43,19 +43,15 @@ class Settings(BaseSettings):
     JWT_SECRET: str = Field(..., min_length=16)
     JWT_PC_TOKEN_EXPIRE_HOURS: int = 8760  # 1 year
 
-    # CORS
-    CORS_ORIGINS: List[str] = [
-        "http://localhost:3000",
-        "http://localhost:8000",
-    ]
+    # CORS (stored as string, parsed to list via property)
+    CORS_ORIGINS_STR: str = "http://localhost:3000,http://localhost:8000,http://localhost:3001"
 
-    @field_validator("CORS_ORIGINS", mode="before")
-    @classmethod
-    def parse_cors_origins(cls, v):
-        """Parse CORS origins from string or list."""
-        if isinstance(v, str):
-            return [origin.strip() for origin in v.split(",")]
-        return v
+    @property
+    def CORS_ORIGINS(self) -> List[str]:
+        """Parse CORS origins from comma-separated string to list."""
+        if isinstance(self.CORS_ORIGINS_STR, str):
+            return [origin.strip() for origin in self.CORS_ORIGINS_STR.split(",")]
+        return self.CORS_ORIGINS_STR
 
     # Celery
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
@@ -91,6 +87,17 @@ class Settings(BaseSettings):
     # Rate Limiting
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_PER_MINUTE: int = 60
+
+    # Email Configuration (SMTP)
+    SMTP_HOST: str = "mail.usvg.ai"
+    SMTP_PORT: int = 587
+    SMTP_USER: str = "info@usvg.ai"
+    SMTP_PASSWORD: str = ""  # Set in .env file
+    SMTP_FROM_EMAIL: str = "info@usvg.ai"
+    SMTP_FROM_NAME: str = "Shomer Portal"
+    SMTP_USE_TLS: bool = True
+    FRONTEND_URL: str = "http://localhost:3000"
+    INVITATION_TOKEN_EXPIRY_HOURS: int = 72
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -18,11 +18,17 @@ from app.schemas.site import (
 )
 from app.schemas.site_camera_layout import (
     AutoPopulateResponse,
-    BulkAutoPopulateResponse
+    BulkAutoPopulateResponse,
+    SiteCameraLayoutConfigResponse,
+    SaveLayoutRequest,
+    SaveLayoutResponse
 )
 from app.services.site_camera_layout_service import (
     auto_populate_site_cameras,
-    auto_populate_all_sites
+    auto_populate_all_sites,
+    get_site_camera_layout,
+    save_site_camera_layout,
+    delete_site_camera_layout
 )
 
 router = APIRouter()
@@ -35,7 +41,7 @@ async def list_sites(
     category_id: Optional[str] = Query(None),
     include_cameras: bool = Query(False),
     page: int = Query(1, ge=1),
-    per_page: int = Query(50, ge=1, le=100)
+    per_page: int = Query(50, ge=1, le=1000)
 ):
     """
     List all sites with optional filtering and pagination.
@@ -43,7 +49,7 @@ async def list_sites(
     - **category_id**: Filter sites by category UUID
     - **include_cameras**: Include camera count for each site
     - **page**: Page number (default: 1)
-    - **per_page**: Items per page (default: 50, max: 100)
+    - **per_page**: Items per page (default: 50, max: 1000)
     """
     query = db.query(Site)
 
@@ -304,4 +310,153 @@ async def auto_populate_all_site_cameras(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to auto-populate all site cameras: {str(e)}"
+        )
+
+
+# Manual camera layout management endpoints
+
+@router.get("/{site_id}/camera-layout", response_model=SiteCameraLayoutConfigResponse)
+async def get_site_camera_layout_config(
+    site_id: str,
+    db: DBSession,
+    current_user: CurrentUser
+):
+    """
+    Get the current camera layout configuration for a site.
+
+    Returns:
+    - Grid dimensions (n_rows × n_cols)
+    - Total available slots
+    - Number of cameras populated
+    - Camera assignments with slot positions and camera names
+    - Timestamps
+
+    Returns 404 if:
+    - Site not found
+    - No layout configuration exists for the site
+    """
+    try:
+        result = get_site_camera_layout(site_id, db)
+        return result
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get camera layout: {str(e)}"
+        )
+
+
+@router.put("/{site_id}/camera-layout", response_model=SaveLayoutResponse)
+async def save_site_camera_layout_config(
+    site_id: str,
+    layout_data: SaveLayoutRequest,
+    db: DBSession,
+    current_user: AdminUser
+):
+    """
+    Manually create or update camera layout configuration for a site.
+
+    Request body:
+    - n_rows: Number of rows (1-4)
+    - n_cols: Number of columns (1-4)
+    - camera_slots: Array of camera slot assignments
+      - Each slot specifies: slot_row, slot_col, camera_id
+
+    Validation:
+    - All camera IDs must exist and belong to this site
+    - No duplicate camera IDs allowed
+    - No duplicate slot positions allowed
+    - Slot positions must be within grid bounds
+    - Empty slots are allowed (just omit them)
+
+    Operation:
+    - Deletes existing layout configuration
+    - Creates new configuration with specified grid and cameras
+    - Transactional (all-or-nothing)
+
+    Returns:
+    - Summary of saved layout including grid size and camera count
+
+    Errors:
+    - 400: Validation errors (invalid cameras, duplicates, etc.)
+    - 404: Site or camera not found
+
+    Requires admin or super_admin privileges.
+    """
+    try:
+        # Convert Pydantic models to dicts for service function
+        camera_slots = [
+            {
+                "slot_row": slot.slot_row,
+                "slot_col": slot.slot_col,
+                "camera_id": slot.camera_id
+            }
+            for slot in layout_data.camera_slots
+        ]
+
+        result = save_site_camera_layout(
+            site_id=site_id,
+            n_rows=layout_data.n_rows,
+            n_cols=layout_data.n_cols,
+            camera_slots=camera_slots,
+            db=db
+        )
+        return result
+    except ValueError as e:
+        # Validation or not found errors
+        error_msg = str(e)
+        if "not found" in error_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=error_msg
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=error_msg
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save camera layout: {str(e)}"
+        )
+
+
+@router.delete("/{site_id}/camera-layout", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_site_camera_layout_config(
+    site_id: str,
+    db: DBSession,
+    current_user: AdminUser
+):
+    """
+    Delete the camera layout configuration for a site.
+
+    Deletes:
+    - SiteCamerasLayoutConfig record
+    - All associated SiteCamerasLayout records (cascade)
+
+    Returns:
+    - 204 No Content on success
+
+    Errors:
+    - 404: Site not found or no layout exists
+
+    Requires admin or super_admin privileges.
+    """
+    try:
+        delete_site_camera_layout(site_id, db)
+        return None
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete camera layout: {str(e)}"
         )

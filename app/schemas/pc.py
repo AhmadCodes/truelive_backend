@@ -11,7 +11,7 @@ class PCBase(BaseModel):
     """Base schema with common PC fields."""
 
     name: str = Field(..., min_length=1, max_length=255, description="PC name")
-    ip_address: str = Field(..., min_length=1, max_length=50, description="IP address of the PC")
+    ip_address: Optional[str] = Field(None, max_length=50, description="IP address of the PC")
     gpu_type: Optional[str] = Field(None, max_length=100, description="GPU type/model")
     role: Literal['controller', 'manager'] = Field('controller', description="PC role (controller or manager)")
     manager_id: Optional[str] = Field(None, max_length=50, description="Manager PC ID (for controller PCs)")
@@ -26,6 +26,10 @@ class PCCreate(PCBase):
     @classmethod
     def validate_manager_id(cls, v: Optional[str], info) -> Optional[str]:
         """Validate that manager_id is only set for controller PCs."""
+        # Convert empty string to None
+        if v == "":
+            v = None
+
         if v is not None:
             role = info.data.get('role')
             if role == 'manager':
@@ -37,7 +41,7 @@ class PCUpdate(BaseModel):
     """Schema for updating an existing PC. All fields are optional."""
 
     name: Optional[str] = Field(None, min_length=1, max_length=255, description="PC name")
-    ip_address: Optional[str] = Field(None, min_length=1, max_length=50, description="IP address of the PC")
+    ip_address: Optional[str] = Field(None, max_length=50, description="IP address of the PC")
     gpu_type: Optional[str] = Field(None, max_length=100, description="GPU type/model")
     role: Optional[Literal['controller', 'manager']] = Field(None, description="PC role (controller or manager)")
     manager_id: Optional[str] = Field(None, max_length=50, description="Manager PC ID (for controller PCs)")
@@ -48,7 +52,7 @@ class PCResponse(BaseModel):
 
     id: str
     name: str
-    ip_address: str
+    ip_address: Optional[str] = None
     gpu_type: Optional[str] = None
     role: str
     manager_id: Optional[str] = None
@@ -75,6 +79,8 @@ class PCWithScreenCount(PCResponse):
     """PC response with count of screens connected to this PC."""
 
     screen_count: int = 0
+    auth_token: Optional[str] = None
+    token_expiry: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -167,3 +173,37 @@ class ConfigurePCScreensResponse(BaseModel):
     mappings_created: int = Field(..., description="Total number of camera mappings created")
     cameras_used: int = Field(..., description="Number of cameras actually mapped")
     message: str = Field(..., description="Status message")
+
+
+class PCTokenResponse(BaseModel):
+    """Response for PC token generation."""
+
+    pc_id: str = Field(..., description="PC identifier")
+    pc_name: str = Field(..., description="PC name")
+    auth_token: str = Field(..., description="JWT authentication token for PC")
+    token_expiry: int = Field(..., description="Unix timestamp when token expires")
+    expires_in_hours: int = Field(..., description="Token validity in hours")
+    message: str = Field(..., description="Status message")
+
+
+class PCConnectionStatus(BaseModel):
+    """Response for PC connection status."""
+
+    pc_id: str = Field(..., description="PC identifier")
+    pc_name: str = Field(..., description="PC name")
+    is_connected: bool = Field(..., description="Whether PC is currently connected to WebSocket server")
+    last_connected: Optional[datetime] = Field(None, description="Last connection timestamp from database")
+    last_applied: Optional[datetime] = Field(None, description="Last configuration applied timestamp")
+    websocket_connected_at: Optional[str] = Field(None, description="Current WebSocket connection start time (ISO format)")
+
+    class Config:
+        from_attributes = True
+
+
+class AllPCsConnectionStatus(BaseModel):
+    """Response for all PCs connection status."""
+
+    total_pcs: int = Field(..., description="Total number of PCs in database")
+    connected_count: int = Field(..., description="Number of currently connected PCs")
+    disconnected_count: int = Field(..., description="Number of disconnected PCs")
+    pcs: List[PCConnectionStatus] = Field(..., description="List of PCs with their connection status")

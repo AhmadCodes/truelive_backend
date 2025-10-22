@@ -181,27 +181,29 @@ def load_pc_config(pc_id: str, db: Session) -> Dict[str, Any]:
                 for mapping in mappings:
                     slot_key = f"slot_{mapping.slot_row}_{mapping.slot_col}"
 
-                    # Get camera and site info
+                    # Get camera info
                     camera = db.query(Camera).filter(
                         Camera.id == mapping.camera_id
                     ).first()
 
-                    site = db.query(Site).filter(
-                        Site.id == mapping.site_id
-                    ).first()
+                    if camera:
+                        # Get site from camera's site_id (mapping.site_id may be NULL)
+                        site = db.query(Site).filter(
+                            Site.id == camera.site_id
+                        ).first()
 
-                    if camera and site:
-                        view_mappings[slot_key] = {
-                            "slot_row": mapping.slot_row,
-                            "slot_col": mapping.slot_col,
-                            "site_id": site.id,
-                            "camera_id": camera.id,
-                            "site_name": site.name,
-                            "camera_name": camera.name,
-                            "rtsp_url": camera.rtsp_url,
-                            "use_tcp": False,
-                            "playing_state": mapping.playing_state
-                        }
+                        if site:
+                            view_mappings[slot_key] = {
+                                "slot_row": mapping.slot_row,
+                                "slot_col": mapping.slot_col,
+                                "site_id": site.id,
+                                "camera_id": camera.id,
+                                "site_name": site.name,
+                                "camera_name": camera.name,
+                                "rtsp_url": camera.rtsp_url,
+                                "use_tcp": False,
+                                "playing_state": mapping.playing_state
+                            }
 
                 screen_mappings[view.name] = view_mappings
 

@@ -6,6 +6,8 @@ Provides CRUD operations for PCs and their associations with screens.
 from fastapi import APIRouter, HTTPException, status, Query
 from sqlalchemy import func, or_
 from typing import List, Optional
+import httpx
+from datetime import datetime
 
 from app.api.deps import AdminUser, DBSession, CurrentUser
 from app.models.pc import PC
@@ -21,7 +23,10 @@ from app.schemas.pc import (
     PCWithScreens,
     ScreenSummary,
     ConfigurePCScreensRequest,
-    ConfigurePCScreensResponse
+    ConfigurePCScreensResponse,
+    PCTokenResponse,
+    PCConnectionStatus,
+    AllPCsConnectionStatus
 )
 import logging
 
@@ -180,6 +185,68 @@ async def get_pc_count(
         "controllers": controller_count,
         "managers": manager_count
     }
+
+
+@router.get("/status", response_model=AllPCsConnectionStatus)
+async def get_all_pcs_connection_status(
+    current_user: CurrentUser,
+    db: DBSession
+):
+    """
+    Get connection status for all PCs.
+
+    Returns:
+    - Total number of PCs in database
+    - Number of currently connected PCs
+    - Number of disconnected PCs
+    - List of all PCs with their connection status
+
+    The connection status is determined by querying the WebSocket server
+    for real-time connection information and combining it with database
+    information (last_connected, last_applied timestamps).
+    """
+    # Get all PCs from database
+    all_pcs = db.query(PC).all()
+
+    # Get currently connected PCs from WebSocket server
+    ws_data = await get_websocket_connected_pcs()
+    connected_pc_ids = {pc['pc_id']: pc for pc in ws_data.get('connected_pcs', [])}
+
+    # Build status for each PC
+    pc_statuses = []
+    for pc in all_pcs:
+        is_connected = pc.id in connected_pc_ids
+        ws_info = connected_pc_ids.get(pc.id, {})
+
+        # Convert Unix timestamp to datetime if exists
+        last_connected = None
+        if pc.last_connected:
+            last_connected = datetime.fromtimestamp(pc.last_connected)
+
+        last_applied = None
+        if pc.last_applied:
+            last_applied = datetime.fromtimestamp(pc.last_applied)
+
+        pc_status = PCConnectionStatus(
+            pc_id=pc.id,
+            pc_name=pc.name,
+            is_connected=is_connected,
+            last_connected=last_connected,
+            last_applied=last_applied,
+            websocket_connected_at=ws_info.get('connected_at') if is_connected else None
+        )
+        pc_statuses.append(pc_status)
+
+    # Calculate counts
+    connected_count = sum(1 for pc in pc_statuses if pc.is_connected)
+    disconnected_count = len(pc_statuses) - connected_count
+
+    return AllPCsConnectionStatus(
+        total_pcs=len(pc_statuses),
+        connected_count=connected_count,
+        disconnected_count=disconnected_count,
+        pcs=pc_statuses
+    )
 
 
 @router.get("/{pc_id}", response_model=PCDetailResponse)
@@ -440,6 +507,58 @@ async def delete_pc(
     logger.info(f"PC '{pc_id}' deleted by user {current_user.username}")
 
 
+@router.get("/{pc_id}/config/preview")
+async def preview_pc_config(
+    pc_id: str,
+    current_user: AdminUser,
+    db: DBSession
+):
+    """
+    Preview the device configuration for a PC without deploying it.
+
+    Generates and returns the device configuration JSON that would be sent to the PC.
+
+    Args:
+        pc_id: PC ID
+        current_user: Current authenticated admin or super admin
+        db: Database session
+
+    Returns:
+        Generated device configuration
+
+    Raises:
+        HTTPException: If PC not found
+    """
+    from app.services.config_loader import load_pc_config
+    from app.services.config_generator import generate_config
+
+    # Verify PC exists
+    pc = db.query(PC).filter(PC.id == pc_id).first()
+    if not pc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"PC with ID '{pc_id}' not found"
+        )
+
+    try:
+        # Load PC configuration from database
+        logger.info(f"Loading configuration for PC {pc_id}")
+        site_config = load_pc_config(pc_id, db)
+
+        # Generate device JSON config
+        logger.info(f"Generating device config for PC {pc_id}")
+        device_config = generate_config(site_config, db)
+
+        return device_config
+
+    except Exception as e:
+        logger.error(f"Error generating config for PC {pc_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate configuration: {str(e)}"
+        )
+
+
 @router.post("/{pc_id}/deploy")
 async def deploy_config(
     pc_id: str,
@@ -513,6 +632,10 @@ async def deploy_config(
         sio.disconnect()
 
         logger.info(f"Configuration deployed to PC {pc_id}")
+
+        # Update last_applied timestamp
+        pc.last_applied = int(time.time())
+        db.commit()
 
         return {
             'pc_id': pc_id,
@@ -629,3 +752,164 @@ async def configure_pc_screens(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to configure PC screens: {str(e)}"
         )
+
+
+@router.post("/{pc_id}/generate-token", response_model=PCTokenResponse)
+async def generate_pc_token(
+    pc_id: str,
+    current_user: AdminUser,
+    db: DBSession
+):
+    """
+    Generate a new authentication token for a PC.
+
+    Creates a long-lived JWT token (8760 hours = 1 year by default) for PC client
+    authentication with the WebSocket server and API endpoints.
+
+    The token is:
+    - Stored in the database (auth_token field)
+    - Associated with an expiration timestamp (token_expiry field)
+    - Used by the PC client to authenticate WebSocket connections
+
+    Only admins and super admins can generate PC tokens.
+
+    Args:
+        pc_id: PC identifier
+        current_user: Current authenticated admin or super admin
+        db: Database session
+
+    Returns:
+        PC token details including the JWT token and expiration info
+
+    Raises:
+        HTTPException 404: PC not found
+        HTTPException 500: Token generation error
+    """
+    from app.core.security import create_pc_auth_token
+    from app.core.config import settings
+
+    # Verify PC exists
+    pc = db.query(PC).filter(PC.id == pc_id).first()
+    if not pc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"PC with ID '{pc_id}' not found"
+        )
+
+    try:
+        # Generate JWT token for PC
+        token, expiry_timestamp = create_pc_auth_token(pc_id, pc.name)
+
+        # Save token to database
+        pc.auth_token = token
+        pc.token_expiry = expiry_timestamp
+        db.commit()
+
+        logger.info(f"Token generated for PC '{pc_id}' by user {current_user.username}")
+
+        return PCTokenResponse(
+            pc_id=pc_id,
+            pc_name=pc.name,
+            auth_token=token,
+            token_expiry=expiry_timestamp,
+            expires_in_hours=settings.JWT_PC_TOKEN_EXPIRE_HOURS,
+            message=f"Token generated successfully for PC '{pc.name}'"
+        )
+
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error generating token for PC {pc_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate token: {str(e)}"
+        )
+
+
+# Helper function to query WebSocket server
+async def get_websocket_connected_pcs() -> dict:
+    """
+    Query the WebSocket server for currently connected PCs.
+
+    Returns:
+        Dictionary with connected_pcs list and total_connected count
+    """
+    from app.core.config import settings
+    import os
+
+    # Use Docker service name if running in container, otherwise use localhost
+    websocket_host = os.getenv("WEBSOCKET_INTERNAL_HOST", "websocket")
+
+    websocket_url = f"http://{websocket_host}:{settings.WEBSOCKET_PORT}/api/connected-pcs"
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(websocket_url)
+            response.raise_for_status()
+            return response.json()
+    except httpx.RequestError as e:
+        logger.warning(f"Failed to connect to WebSocket server at {websocket_url}: {e}")
+        return {"connected_pcs": [], "total_connected": 0}
+    except httpx.HTTPStatusError as e:
+        logger.error(f"WebSocket server returned error: {e}")
+        return {"connected_pcs": [], "total_connected": 0}
+    except Exception as e:
+        logger.error(f"Unexpected error querying WebSocket server: {e}")
+        return {"connected_pcs": [], "total_connected": 0}
+
+
+@router.get("/{pc_id}/status", response_model=PCConnectionStatus)
+async def get_pc_connection_status(
+    pc_id: str,
+    current_user: CurrentUser,
+    db: DBSession
+):
+    """
+    Get connection status for a specific PC.
+
+    Returns:
+    - PC ID and name
+    - Whether PC is currently connected to WebSocket server
+    - Last connection timestamp from database
+    - Last configuration applied timestamp
+    - Current WebSocket connection start time (if connected)
+
+    The connection status is determined by querying the WebSocket server
+    for real-time connection information and combining it with database
+    information.
+
+    Returns 404 if PC not found in database.
+    """
+    # Get PC from database
+    pc = db.query(PC).filter(PC.id == pc_id).first()
+
+    if not pc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"PC with ID '{pc_id}' not found"
+        )
+
+    # Get currently connected PCs from WebSocket server
+    ws_data = await get_websocket_connected_pcs()
+    connected_pc_ids = {pc['pc_id']: pc for pc in ws_data.get('connected_pcs', [])}
+
+    # Check if this PC is connected
+    is_connected = pc_id in connected_pc_ids
+    ws_info = connected_pc_ids.get(pc_id, {})
+
+    # Convert Unix timestamp to datetime if exists
+    last_connected = None
+    if pc.last_connected:
+        last_connected = datetime.fromtimestamp(pc.last_connected)
+
+    last_applied = None
+    if pc.last_applied:
+        last_applied = datetime.fromtimestamp(pc.last_applied)
+
+    return PCConnectionStatus(
+        pc_id=pc.id,
+        pc_name=pc.name,
+        is_connected=is_connected,
+        last_connected=last_connected,
+        last_applied=last_applied,
+        websocket_connected_at=ws_info.get('connected_at') if is_connected else None
+    )

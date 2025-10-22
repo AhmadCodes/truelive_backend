@@ -31,6 +31,7 @@ class Login(BaseModel):
 class UserBase(BaseModel):
     """Base user schema with common fields."""
     username: str = Field(..., min_length=3, max_length=255)
+    full_name: str = Field(..., min_length=1, max_length=255)
     email: EmailStr
     role: str = Field(..., pattern="^(user|admin|super_admin)$")
 
@@ -53,6 +54,7 @@ class UserCreate(UserBase):
 
 class UserUpdate(BaseModel):
     """Schema for updating user details."""
+    full_name: Optional[str] = Field(None, min_length=1, max_length=255)
     email: Optional[EmailStr] = None
     role: Optional[str] = Field(None, pattern="^(user|admin|super_admin)$")
     is_active: Optional[bool] = None
