@@ -9,6 +9,7 @@ import logging
 import requests
 from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -133,12 +134,13 @@ def automate_login() -> Optional[List[Dict[str, str]]]:
             logger.info("WebDriver closed.")
 
 
-def get_server_list(cookies: List[Dict[str, str]]) -> Optional[List[Dict[str, Any]]]:
+def get_server_list(cookies: List[Dict[str, str]], page_size: int = 200) -> Optional[List[Dict[str, Any]]]:
     """
-    Fetch the list of servers from SureView API.
+    Fetch the list of servers from SureView API with pagination support.
 
     Args:
         cookies: Authentication cookies from login
+        page_size: Number of servers per page (default: 200)
 
     Returns:
         List of server dicts if successful, None otherwise
@@ -149,23 +151,47 @@ def get_server_list(cookies: List[Dict[str, str]]) -> Optional[List[Dict[str, An
 
     cookie_dict = {cookie["name"]: cookie["value"] for cookie in cookies}
     headers = {"Accept": "application/json"}
-    url = "https://us.sureviewops.com/api/servers/GetServerList?PageSize=200"
+
+    all_servers = []
+    page = 1
 
     try:
-        logger.info("Fetching server list from SureView API...")
-        response = requests.get(url, headers=headers, cookies=cookie_dict, timeout=30)
+        while True:
+            url = f"https://us.sureviewops.com/api/servers/GetServerList?PageSize={page_size}&Page={page}"
+            logger.info(f"Fetching server list page {page} from SureView API (PageSize={page_size})...")
 
-        if response.status_code == 200:
-            logger.info("Server list retrieved successfully.")
-            return response.json().get("data", [])
-        else:
-            logger.error(f"API request failed. Status Code: {response.status_code}")
-            logger.error(f"Response: {response.text}")
-            return None
+            response = requests.get(url, headers=headers, cookies=cookie_dict, timeout=30)
+
+            if response.status_code == 200:
+                data = response.json()
+                servers = data.get("data", [])
+                total_count = data.get("totalCount", 0)
+
+                logger.info(f"Page {page}: Retrieved {len(servers)} servers (Total available: {total_count})")
+
+                if not servers:
+                    logger.info("No more servers to fetch, pagination complete.")
+                    break
+
+                all_servers.extend(servers)
+
+                # Check if we've fetched all servers
+                if len(all_servers) >= total_count:
+                    logger.info(f"All servers fetched: {len(all_servers)}/{total_count}")
+                    break
+
+                page += 1
+            else:
+                logger.error(f"API request failed. Status Code: {response.status_code}")
+                logger.error(f"Response: {response.text}")
+                return None if page == 1 else all_servers  # Return partial results if not first page
+
+        logger.info(f"Total servers fetched across all pages: {len(all_servers)}")
+        return all_servers
 
     except requests.exceptions.RequestException as e:
-        logger.error(f"API request failed: {e}")
-        return None
+        logger.error(f"API request failed on page {page}: {e}")
+        return None if page == 1 else all_servers  # Return partial results if not first page
 
 
 def get_devices_by_server_id(
@@ -191,19 +217,21 @@ def get_devices_by_server_id(
     url = f"https://us.sureviewops.com/api/devices/GetByServerId?serverId={server_id}"
 
     try:
-        logger.info(f"Fetching devices by server ID {server_id} from SureView API...")
+        logger.info(f"Fetching devices for server ID {server_id}...")
         response = requests.get(url, headers=headers, cookies=cookie_dict, timeout=30)
 
         if response.status_code == 200:
-            logger.info("Device data retrieved successfully.")
-            return response.json()
+            devices = response.json()
+            device_count = len(devices) if devices else 0
+            logger.info(f"Server {server_id}: Retrieved {device_count} devices")
+            return devices
         else:
-            logger.error(f"API request failed. Status Code: {response.status_code}")
+            logger.error(f"Server {server_id}: API request failed. Status Code: {response.status_code}")
             logger.error(f"Response: {response.text}")
             return None
 
     except requests.exceptions.RequestException as e:
-        logger.error(f"API request failed: {e}")
+        logger.error(f"Server {server_id}: API request failed: {e}")
         return None
 
 
@@ -297,7 +325,7 @@ def sync_sureview_devices(db: Session) -> Dict[str, int]:
             results["errors"] += 1
             return results
 
-        # Step 2: Get server list
+        # Step 2: Get server list with pagination
         servers = get_server_list(cookies)
 
         if not servers:
@@ -305,12 +333,16 @@ def sync_sureview_devices(db: Session) -> Dict[str, int]:
             results["errors"] += 1
             return results
 
+        logger.info(f"=== SYNC SUMMARY: Fetched {len(servers)} servers from SureView ===")
+
         # Track current sites and cameras from SureView
         current_site_ids = set()
         current_camera_ids = set()
+        cameras_per_server = {}
 
         # Step 3: Process each server
-        for server in servers:
+        for idx, server in enumerate(servers, 1):
+            logger.info(f"Processing server {idx}/{len(servers)}: {server.get('title', 'Unknown')} (ID: {server.get('serverID')})")
             try:
                 site_id = str(server["serverID"])
                 current_site_ids.add(site_id)
@@ -371,6 +403,11 @@ def sync_sureview_devices(db: Session) -> Dict[str, int]:
 
                 # Step 4: Get devices for this server
                 devices = get_devices_by_server_id(cookies, server["serverID"]) or []
+                device_count = len(devices)
+                cameras_per_server[site_id] = device_count
+
+                if device_count == 0:
+                    logger.warning(f"Server {site_id} ({server.get('title')}) has 0 devices")
 
                 for device in devices:
                     try:
@@ -417,14 +454,44 @@ def sync_sureview_devices(db: Session) -> Dict[str, int]:
                 logger.error(f"Error processing server {server.get('serverID')}: {e}")
                 results["errors"] += 1
 
+        # Log comprehensive sync statistics
+        logger.info("=" * 80)
+        logger.info(f"=== SYNC STATISTICS ===")
+        logger.info(f"Total servers processed: {len(servers)}")
+        logger.info(f"Total sites updated: {results['sites_updated']}")
+        logger.info(f"Total cameras from SureView API: {len(current_camera_ids)}")
+        logger.info(f"Total cameras processed: {results['cameras_updated']}")
+        logger.info(f"Errors encountered: {results['errors']}")
+
+        # Log servers with no cameras (potential issues)
+        empty_servers = [site_id for site_id, count in cameras_per_server.items() if count == 0]
+        if empty_servers:
+            logger.warning(f"Servers with 0 cameras: {len(empty_servers)} servers")
+            logger.warning(f"Empty server IDs: {empty_servers[:10]}{'...' if len(empty_servers) > 10 else ''}")
+
+        # Log top 10 servers by camera count
+        if cameras_per_server:
+            sorted_servers = sorted(cameras_per_server.items(), key=lambda x: x[1], reverse=True)
+            logger.info("Top 10 servers by camera count:")
+            for site_id, count in sorted_servers[:10]:
+                logger.info(f"  - Server {site_id}: {count} cameras")
+
+        logger.info("=" * 80)
+
         # Commit all updates
         db.commit()
 
         # Step 5: Remove stale sites and cameras (bulk delete for performance)
         # CRITICAL: Only perform deletion if sync was successful and fetched data
         # This prevents deleting cameras when API partially fails or returns incomplete data
+        logger.info("=" * 80)
+        logger.info("=== STALE ENTRY CLEANUP ===")
+
         sync_successful = results["errors"] == 0
         has_data = len(current_camera_ids) > 0
+
+        logger.info(f"Sync successful: {sync_successful}")
+        logger.info(f"Has data from API: {has_data} ({len(current_camera_ids)} cameras)")
 
         if not sync_successful:
             logger.warning(
@@ -442,13 +509,18 @@ def sync_sureview_devices(db: Session) -> Dict[str, int]:
                 site.id for site in db.query(Site.id).filter(Site.sureview_site == True).all()
             }
 
+            logger.info(f"Existing SureView sites in DB: {len(existing_sureview_site_ids)}")
+            logger.info(f"Current sites from API: {len(current_site_ids)}")
+
             # Find stale sites
             stale_site_ids = existing_sureview_site_ids - current_site_ids
 
             if stale_site_ids:
-                logger.info(f"Removing {len(stale_site_ids)} stale sites")
+                logger.info(f"Removing {len(stale_site_ids)} stale sites: {list(stale_site_ids)[:5]}{'...' if len(stale_site_ids) > 5 else ''}")
                 db.query(Site).filter(Site.id.in_(stale_site_ids)).delete(synchronize_session=False)
                 results["sites_removed"] = len(stale_site_ids)
+            else:
+                logger.info("No stale sites to remove")
 
             # Get all SureView camera IDs
             existing_sureview_camera_ids = {
@@ -457,12 +529,18 @@ def sync_sureview_devices(db: Session) -> Dict[str, int]:
                 ).all()
             }
 
+            logger.info(f"Existing SureView cameras in DB: {len(existing_sureview_camera_ids)}")
+            logger.info(f"Current cameras from API: {len(current_camera_ids)}")
+
             # Find stale cameras
             stale_camera_ids = existing_sureview_camera_ids - current_camera_ids
 
             if stale_camera_ids:
                 # Additional safety check: warn if deleting more than 50% of cameras
                 deletion_percentage = (len(stale_camera_ids) / len(existing_sureview_camera_ids)) * 100
+                logger.info(f"Stale cameras identified: {len(stale_camera_ids)} ({deletion_percentage:.1f}% of total)")
+                logger.info(f"Sample stale camera IDs: {list(stale_camera_ids)[:10]}{'...' if len(stale_camera_ids) > 10 else ''}")
+
                 if deletion_percentage > 50:
                     logger.error(
                         f"SAFETY CHECK FAILED: Attempting to delete {len(stale_camera_ids)} cameras "
@@ -474,11 +552,31 @@ def sync_sureview_devices(db: Session) -> Dict[str, int]:
                     logger.info(f"Removing {len(stale_camera_ids)} stale cameras")
                     db.query(Camera).filter(Camera.id.in_(stale_camera_ids)).delete(synchronize_session=False)
                     results["cameras_removed"] = len(stale_camera_ids)
+                    logger.info(f"Successfully removed {len(stale_camera_ids)} stale cameras")
+            else:
+                logger.info("No stale cameras to remove")
 
         # Commit deletions (if any were performed)
         db.commit()
 
-        logger.info(f"SureView sync completed: {results}")
+        # Final summary with complete database state
+        logger.info("=" * 80)
+        logger.info("=== SYNC COMPLETED ===")
+        logger.info(f"Sites updated: {results['sites_updated']}")
+        logger.info(f"Sites removed: {results['sites_removed']}")
+        logger.info(f"Cameras updated: {results['cameras_updated']}")
+        logger.info(f"Cameras removed: {results['cameras_removed']}")
+        logger.info(f"Errors: {results['errors']}")
+
+        # Query final database state
+        final_site_count = db.query(func.count(Site.id)).filter(Site.sureview_site == True).scalar()
+        final_camera_count = db.query(func.count(Camera.id)).filter(Camera.sureview_camera == True).scalar()
+
+        logger.info(f"Final database state:")
+        logger.info(f"  - SureView sites in DB: {final_site_count}")
+        logger.info(f"  - SureView cameras in DB: {final_camera_count}")
+        logger.info("=" * 80)
+
         return results
 
     except Exception as e:
