@@ -2,6 +2,7 @@
 SureView device synchronization background tasks.
 """
 import logging
+from datetime import datetime, timezone
 from app.tasks.celery_app import celery_app
 from app.database import SessionLocal
 from app.services.sureview_service import sync_sureview_devices
@@ -198,6 +199,84 @@ def sync_single_server(server_id: int):
     except Exception as e:
         logger.error(f"Error syncing server {server_id}: {e}")
         db.rollback()
+        raise
+
+    finally:
+        db.close()
+
+
+@celery_app.task(name='app.tasks.sureview_tasks.sync_devices_async', bind=True)
+def sync_devices_async(self, job_id: str):
+    """
+    Async Celery task to sync devices from SureView with job status tracking.
+
+    This task updates the SyncJob model with progress and results.
+
+    Args:
+        self: Celery task instance (bind=True provides access to task info)
+        job_id: UUID of the SyncJob tracking this operation
+
+    Returns:
+        dict: Summary of operations performed
+    """
+    from app.models.sync_job import SyncJob, SyncJobStatus
+
+    logger.info(f"Starting async SureView sync for job {job_id}")
+    db = SessionLocal()
+
+    try:
+        # Get the job record
+        job = db.query(SyncJob).filter(SyncJob.id == job_id).first()
+
+        if not job:
+            logger.error(f"Job {job_id} not found")
+            return {"error": "Job not found"}
+
+        # Update job status to in_progress
+        job.status = SyncJobStatus.IN_PROGRESS
+        job.started_at = datetime.now(timezone.utc)
+        job.progress = 10
+        job.progress_message = "Starting SureView authentication..."
+        db.commit()
+
+        # Run the actual sync
+        job.progress = 20
+        job.progress_message = "Fetching servers from SureView API..."
+        db.commit()
+
+        result = sync_sureview_devices(db=db)
+
+        # Update job with results
+        job.status = SyncJobStatus.COMPLETED if result.get("errors", 0) == 0 else SyncJobStatus.FAILED
+        job.progress = 100
+        job.progress_message = "Sync completed successfully" if job.status == SyncJobStatus.COMPLETED else "Sync completed with errors"
+        job.completed_at = datetime.now(timezone.utc)
+        job.result = result
+
+        if result.get("errors", 0) > 0:
+            job.error_message = f"Sync completed with {result['errors']} errors"
+
+        db.commit()
+
+        logger.info(f"Async sync job {job_id} completed: {result}")
+        return result
+
+    except Exception as e:
+        logger.error(f"Error in async sync job {job_id}: {e}")
+
+        # Update job status to failed
+        try:
+            job = db.query(SyncJob).filter(SyncJob.id == job_id).first()
+            if job:
+                job.status = SyncJobStatus.FAILED
+                job.progress = 100
+                job.progress_message = "Sync failed with error"
+                job.completed_at = datetime.now(timezone.utc)
+                job.error_message = str(e)
+                db.commit()
+        except Exception as update_error:
+            logger.error(f"Failed to update job status: {update_error}")
+
         raise
 
     finally:

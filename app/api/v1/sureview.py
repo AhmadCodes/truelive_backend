@@ -10,6 +10,7 @@ import logging
 from app.api.deps import DBSession, CurrentUser, AdminUser
 from app.models.site import Site
 from app.models.camera import Camera
+from app.models.sync_job import SyncJob, SyncJobStatus
 from app.schemas.sureview import (
     GetSitesRequest,
     GetSitesResponse,
@@ -19,7 +20,10 @@ from app.schemas.sureview import (
     GetCamerasRequest,
     CameraDetail
 )
+from app.schemas.sync_job import SyncJobResponse, SyncJobStartResponse
 from app.services.sureview_service import sync_sureview_devices
+from app.tasks.sureview_tasks import sync_devices_async
+import uuid
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -219,3 +223,110 @@ async def trigger_sync(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Sync failed: {str(e)}"
         )
+
+
+@router.post("/sync/async", response_model=SyncJobStartResponse, status_code=status.HTTP_202_ACCEPTED)
+async def start_async_sync(
+    current_user: AdminUser,
+    db: DBSession
+):
+    """
+    Start asynchronous SureView device synchronization.
+
+    This endpoint creates a sync job and returns immediately with a job_id.
+    The sync runs in the background via Celery. Use the status endpoint to
+    check progress and completion.
+
+    Process:
+    1. Creates SyncJob record in database
+    2. Queues Celery task to run sync
+    3. Returns job_id for status polling
+
+    Only admins and super admins can trigger sync.
+
+    Args:
+        current_user: Current authenticated admin user
+        db: Database session
+
+    Returns:
+        Job ID and initial status (pending)
+    """
+    logger.info(f"Async SureView sync triggered by user {current_user.username}")
+
+    try:
+        # Create sync job record
+        job_id = str(uuid.uuid4())
+        sync_job = SyncJob(
+            id=job_id,
+            status=SyncJobStatus.PENDING,
+            progress=0,
+            progress_message="Sync job queued",
+            triggered_by=str(current_user.user_id)
+        )
+        db.add(sync_job)
+        db.commit()
+
+        logger.info(f"Created sync job {job_id}")
+
+        # Queue Celery task
+        sync_devices_async.delay(job_id)
+
+        logger.info(f"Queued async sync task for job {job_id}")
+
+        return SyncJobStartResponse(
+            job_id=job_id,
+            status=SyncJobStatus.PENDING,
+            message="Sync job started successfully. Use job_id to check status."
+        )
+
+    except Exception as e:
+        logger.error(f"Error starting async sync: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to start sync job: {str(e)}"
+        )
+
+
+@router.get("/sync/status/{job_id}", response_model=SyncJobResponse)
+async def get_sync_status(
+    job_id: str,
+    current_user: CurrentUser,
+    db: DBSession
+):
+    """
+    Get status of an async sync job.
+
+    This endpoint allows frontend to poll for sync progress and results.
+    Recommended polling interval: 2-5 seconds while job is in progress.
+
+    Args:
+        job_id: UUID of the sync job
+        current_user: Current authenticated user
+        db: Database session
+
+    Returns:
+        Complete job status including progress, results, and errors
+
+    Raises:
+        404: If job_id not found
+    """
+    sync_job = db.query(SyncJob).filter(SyncJob.id == job_id).first()
+
+    if not sync_job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Sync job {job_id} not found"
+        )
+
+    return SyncJobResponse(
+        id=sync_job.id,
+        status=sync_job.status,
+        progress=sync_job.progress,
+        progress_message=sync_job.progress_message,
+        started_at=sync_job.started_at,
+        completed_at=sync_job.completed_at,
+        created_at=sync_job.created_at,
+        result=sync_job.result,
+        error_message=sync_job.error_message,
+        triggered_by=sync_job.triggered_by
+    )
