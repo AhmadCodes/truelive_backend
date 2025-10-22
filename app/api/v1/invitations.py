@@ -104,7 +104,7 @@ async def send_invitation(
     email_sent = email_service.send_invitation_email(
         to_email=invitation_data.email,
         invitation_token=token,
-        invited_by=current_user.username
+        invited_by=current_user.full_name
     )
 
     if not email_sent:

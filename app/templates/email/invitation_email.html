@@ -6,19 +6,41 @@
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <title>Shomer Portal Invitation</title>
 </head>
-<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f4f7fa;">
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f4f7fa;">
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #0a0a0a;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #0a0a0a;">
         <tr>
             <td style="padding: 40px 20px;">
-                <table role="presentation" width="100%" max-width="600px" cellspacing="0" cellpadding="0" border="0" style="margin: 0 auto; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+                <table role="presentation" width="100%" max-width="600px" cellspacing="0" cellpadding="0" border="0" style="margin: 0 auto; background-color: #1a1a1a; border-radius: 16px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); border: 1px solid #2a2a2a;">
 
-                    <!-- Header -->
+                    <!-- Header with Logo -->
                     <tr>
-                        <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center; border-radius: 8px 8px 0 0;">
-                            <h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 600;">
+                        <td style="background-color: #1a1a1a; padding: 40px 40px 20px 40px; text-align: center; border-radius: 16px 16px 0 0;">
+                            <!-- Logo Text -->
+                            <div style="margin: 0 auto 30px; text-align: center;">
+                                <h1 style="margin: 0; font-size: 36px; font-weight: 800; letter-spacing: -1px; color: #d4a747; text-transform: uppercase;">
+                                    SHOMER
+                                </h1>
+                                <p style="margin: 4px 0 0 0; font-size: 12px; font-weight: 500; letter-spacing: 2px; color: #666666; text-transform: uppercase;">
+                                    Portal
+                                </p>
+                            </div>
+                        </td>
+                    </tr>
+
+                    <!-- Gold Accent Bar -->
+                    <tr>
+                        <td style="padding: 0;">
+                            <div style="height: 4px; background: linear-gradient(90deg, #d4a747 0%, #e9c46a 50%, #d4a747 100%);"></div>
+                        </td>
+                    </tr>
+
+                    <!-- Invitation Header -->
+                    <tr>
+                        <td style="padding: 40px 40px 30px 40px; text-align: center;">
+                            <h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 700; letter-spacing: -0.5px;">
                                 You're Invited!
                             </h1>
-                            <p style="margin: 10px 0 0 0; color: #e6e9ff; font-size: 16px;">
+                            <p style="margin: 12px 0 0 0; color: #a4a4a4; font-size: 16px; font-weight: 500;">
                                 Join Shomer Portal
                             </p>
                         </td>
@@ -26,85 +48,143 @@
 
                     <!-- Content -->
                     <tr>
-                        <td style="padding: 40px 30px;">
-                            <p style="margin: 0 0 20px 0; color: #2d3748; font-size: 16px; line-height: 1.6;">
+                        <td style="padding: 0 40px 40px 40px;">
+                            <p style="margin: 0 0 20px 0; color: #e3e3e3; font-size: 16px; line-height: 1.6;">
                                 Hello,
                             </p>
-                            <p style="margin: 0 0 20px 0; color: #2d3748; font-size: 16px; line-height: 1.6;">
-                                You have been invited by <strong>{{invited_by}}</strong> to join <strong>Shomer Portal</strong>, our advanced surveillance camera management system.
+                            <p style="margin: 0 0 24px 0; color: #c8c8c8; font-size: 16px; line-height: 1.7;">
+                                <strong style="color: #d4a747;">{{invited_by}}</strong> has invited you to join <strong style="color: #ffffff;">Shomer Portal</strong>, a powerful surveillance camera management platform designed for security professionals.
                             </p>
-                            <p style="margin: 0 0 30px 0; color: #2d3748; font-size: 16px; line-height: 1.6;">
-                                Click the button below to create your account and get started:
+                            <p style="margin: 0 0 36px 0; color: #a4a4a4; font-size: 15px; line-height: 1.6;">
+                                Click the button below to set up your account and start managing surveillance systems:
                             </p>
 
                             <!-- CTA Button -->
                             <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
                                 <tr>
-                                    <td style="text-align: center; padding: 10px 0 30px 0;">
-                                        <a href="{{registration_url}}" style="display: inline-block; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #ffffff; text-decoration: none; padding: 14px 40px; border-radius: 6px; font-weight: 600; font-size: 16px; box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);">
+                                    <td style="text-align: center; padding: 0 0 36px 0;">
+                                        <a href="{{registration_url}}" style="display: inline-block; background: #0a0a0a; color: #d4a747; text-decoration: none; padding: 18px 52px; border-radius: 10px; font-weight: 700; font-size: 16px; letter-spacing: 0.5px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6); border: 2px solid #d4a747;">
                                             Create Your Account
                                         </a>
                                     </td>
                                 </tr>
                             </table>
 
-                            <!-- Alternative Link -->
-                            <p style="margin: 0 0 20px 0; color: #718096; font-size: 14px; line-height: 1.6;">
-                                Or copy and paste this link into your browser:
-                            </p>
-                            <p style="margin: 0 0 30px 0; padding: 12px; background-color: #f7fafc; border-radius: 4px; word-break: break-all; font-size: 13px; color: #4a5568; font-family: 'Courier New', monospace;">
-                                {{registration_url}}
-                            </p>
+                            <!-- Divider -->
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-bottom: 32px;">
+                                <tr>
+                                    <td style="padding: 0;">
+                                        <div style="height: 1px; background: linear-gradient(90deg, transparent 0%, #383838 50%, transparent 100%);"></div>
+                                    </td>
+                                </tr>
+                            </table>
 
                             <!-- Expiration Notice -->
-                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #fff5f5; border-left: 4px solid #fc8181; border-radius: 4px; margin-bottom: 20px;">
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #0a0a0a; border: 2px solid #d4a747; border-radius: 8px; margin-bottom: 32px;">
                                 <tr>
-                                    <td style="padding: 16px 20px;">
-                                        <p style="margin: 0; color: #742a2a; font-size: 14px; line-height: 1.5;">
-                                            ⏰ <strong>Important:</strong> This invitation will expire in <strong>{{expiry_hours}} hours</strong>.
+                                    <td style="padding: 20px 24px; text-align: center;">
+                                        <p style="margin: 0; color: #d4a747; font-size: 15px; line-height: 1.6; font-weight: 700;">
+                                            This invitation expires in {{expiry_hours}} hours
                                         </p>
                                     </td>
                                 </tr>
                             </table>
 
-                            <!-- What's Next -->
-                            <h2 style="margin: 30px 0 15px 0; color: #2d3748; font-size: 18px; font-weight: 600;">
-                                What's next?
-                            </h2>
-                            <ul style="margin: 0 0 20px 0; padding-left: 20px; color: #4a5568; font-size: 14px; line-height: 1.8;">
-                                <li>Create your account using the link above</li>
-                                <li>Set up your secure password</li>
-                                <li>Access the Shomer Portal dashboard</li>
-                                <li>Start managing surveillance cameras</li>
-                            </ul>
+                            <!-- What's Next Section -->
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #0a0a0a; border-radius: 12px; border: 1px solid #2a2a2a; margin-bottom: 32px;">
+                                <tr>
+                                    <td style="padding: 32px 28px;">
+                                        <h2 style="margin: 0 0 24px 0; color: #d4a747; font-size: 18px; font-weight: 700; letter-spacing: -0.2px;">
+                                            Getting Started
+                                        </h2>
+                                        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                                            <tr>
+                                                <td style="padding: 0 0 16px 0;">
+                                                    <table cellspacing="0" cellpadding="0" border="0">
+                                                        <tr>
+                                                            <td style="width: 32px; vertical-align: top;">
+                                                                <div style="width: 24px; height: 24px; background: linear-gradient(135deg, #d4a747 0%, #e9c46a 100%); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; color: #0a0a0a; text-align: center; padding-top: 2px;">1</div>
+                                                            </td>
+                                                            <td style="color: #c8c8c8; font-size: 14px; line-height: 1.6; padding-left: 8px;">
+                                                                Click the registration link and set up your secure password
+                                                            </td>
+                                                        </tr>
+                                                    </table>
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <td style="padding: 0 0 16px 0;">
+                                                    <table cellspacing="0" cellpadding="0" border="0">
+                                                        <tr>
+                                                            <td style="width: 32px; vertical-align: top;">
+                                                                <div style="width: 24px; height: 24px; background: linear-gradient(135deg, #d4a747 0%, #e9c46a 100%); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; color: #0a0a0a; text-align: center; padding-top: 2px;">2</div>
+                                                            </td>
+                                                            <td style="color: #c8c8c8; font-size: 14px; line-height: 1.6; padding-left: 8px;">
+                                                                Log in to the Shomer Portal dashboard
+                                                            </td>
+                                                        </tr>
+                                                    </table>
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <td style="padding: 0;">
+                                                    <table cellspacing="0" cellpadding="0" border="0">
+                                                        <tr>
+                                                            <td style="width: 32px; vertical-align: top;">
+                                                                <div style="width: 24px; height: 24px; background: linear-gradient(135deg, #d4a747 0%, #e9c46a 100%); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; color: #0a0a0a; text-align: center; padding-top: 2px;">3</div>
+                                                            </td>
+                                                            <td style="color: #c8c8c8; font-size: 14px; line-height: 1.6; padding-left: 8px;">
+                                                                Start managing and monitoring surveillance systems
+                                                            </td>
+                                                        </tr>
+                                                    </table>
+                                                </td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                </tr>
+                            </table>
 
-                            <p style="margin: 30px 0 0 0; color: #718096; font-size: 14px; line-height: 1.6;">
-                                If you did not expect this invitation or believe it was sent in error, please ignore this email or contact your administrator.
+                            <!-- Disclaimer -->
+                            <p style="margin: 0; padding: 18px 20px; background-color: rgba(212, 167, 71, 0.06); border-radius: 8px; color: #818181; font-size: 13px; line-height: 1.6; border: 1px solid rgba(212, 167, 71, 0.15); text-align: center;">
+                                If you didn't expect this invitation, you can safely ignore this email.
                             </p>
+                        </td>
+                    </tr>
+
+                    <!-- Footer Divider -->
+                    <tr>
+                        <td style="padding: 0 40px;">
+                            <div style="height: 1px; background: linear-gradient(90deg, transparent 0%, #2a2a2a 50%, transparent 100%);"></div>
                         </td>
                     </tr>
 
                     <!-- Footer -->
                     <tr>
-                        <td style="background-color: #f7fafc; padding: 30px; border-radius: 0 0 8px 8px; text-align: center;">
-                            <p style="margin: 0 0 10px 0; color: #a0aec0; font-size: 12px; line-height: 1.5;">
-                                This is an automated message from <strong>Shomer Portal</strong><br>
-                                Please do not reply to this email.
+                        <td style="background-color: #1a1a1a; padding: 36px 40px; border-radius: 0 0 16px 16px; text-align: center;">
+                            <p style="margin: 0 0 12px 0; color: #c8c8c8; font-size: 15px; line-height: 1.5; font-weight: 600;">
+                                <span style="color: #d4a747;">Shomer Portal</span> — Surveillance Management Platform
                             </p>
-                            <p style="margin: 10px 0 0 0; color: #cbd5e0; font-size: 11px;">
-                                © 2024 US Virtual Guard. All rights reserved.
+                            <p style="margin: 0 0 20px 0; color: #818181; font-size: 13px; line-height: 1.5;">
+                                This is an automated message. Please do not reply to this email.
+                            </p>
+                            <p style="margin: 0 0 8px 0; color: #666666; font-size: 12px; letter-spacing: 0.3px;">
+                                © 2025 US Virtual Guard. All rights reserved.
+                            </p>
+                            <p style="margin: 0; color: #515151; font-size: 11px; line-height: 1.4;">
+                                Secure · Reliable · Professional
                             </p>
                         </td>
                     </tr>
 
                 </table>
 
-                <!-- Spacer -->
-                <table role="presentation" width="100%" max-width="600px" cellspacing="0" cellpadding="0" border="0" style="margin: 20px auto 0 auto;">
+                <!-- Bottom Spacer -->
+                <table role="presentation" width="100%" max-width="600px" cellspacing="0" cellpadding="0" border="0" style="margin: 32px auto 0 auto;">
                     <tr>
-                        <td style="text-align: center; padding: 10px;">
-                            <p style="margin: 0; color: #a0aec0; font-size: 11px;">
-                                Shomer Portal - Advanced Surveillance Camera Management System
+                        <td style="text-align: center; padding: 0;">
+                            <p style="margin: 0; color: #515151; font-size: 11px; line-height: 1.5;">
+                                Shomer Portal — Advanced Security Solutions
                             </p>
                         </td>
                     </tr>
