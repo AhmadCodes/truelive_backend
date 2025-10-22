@@ -13,6 +13,8 @@ from app.models.pc import PC
 from app.models.screen import Screen
 from app.models.view import View
 from app.models.screen_mapping import ScreenMapping
+from app.models.sync_job import SyncJob, SyncJobStatus
+from app.models.system_setting import SystemSetting
 
 __all__ = [
     # Base classes
@@ -40,4 +42,9 @@ __all__ = [
     "Screen",
     "View",
     "ScreenMapping",
+
+    # System models
+    "SyncJob",
+    "SyncJobStatus",
+    "SystemSetting",
 ]
