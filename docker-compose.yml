@@ -15,7 +15,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       # - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro  # Using Alembic migrations instead
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U shomer -d shomer_portal"]
       interval: 10s
@@ -29,13 +29,13 @@ services:
     image: redis:7-alpine
     container_name: shomer_redis
     restart: unless-stopped
-    command: redis-server --appendonly yes --replica-read-only no
+    command: redis-server --appendonly yes --replica-read-only no --requirepass YtrewqQwerty123123Ytrewq
     volumes:
       - redis_data:/data
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "YtrewqQwerty123123Ytrewq", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -61,9 +61,9 @@ services:
       - "8000:8000"
     environment:
       - DATABASE_URL=postgresql://shomer:shomer_password@postgres:5432/shomer_portal
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - REDIS_URL=redis://:YtrewqQwerty123123Ytrewq@redis:6379/0
+      - CELERY_BROKER_URL=redis://:YtrewqQwerty123123Ytrewq@redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://:YtrewqQwerty123123Ytrewq@redis:6379/1
       - WEBSOCKET_URL=http://websocket:8080
       - DEBUG=False
       - ENVIRONMENT=production
@@ -96,9 +96,9 @@ services:
       - logs:/app/logs
     environment:
       - DATABASE_URL=postgresql://shomer:shomer_password@postgres:5432/shomer_portal
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - REDIS_URL=redis://:YtrewqQwerty123123Ytrewq@redis:6379/0
+      - CELERY_BROKER_URL=redis://:YtrewqQwerty123123Ytrewq@redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://:YtrewqQwerty123123Ytrewq@redis:6379/1
       - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
       - JWT_SECRET=${JWT_SECRET:-your-jwt-secret-key}
       - SUREVIEW_USERNAME=${SUREVIEW_USERNAME}
@@ -128,9 +128,9 @@ services:
       - logs:/app/logs
     environment:
       - DATABASE_URL=postgresql://shomer:shomer_password@postgres:5432/shomer_portal
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - REDIS_URL=redis://:YtrewqQwerty123123Ytrewq@redis:6379/0
+      - CELERY_BROKER_URL=redis://:YtrewqQwerty123123Ytrewq@redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://:YtrewqQwerty123123Ytrewq@redis:6379/1
       - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
       - JWT_SECRET=${JWT_SECRET:-your-jwt-secret-key}
     depends_on:
@@ -155,7 +155,7 @@ services:
       - logs:/app/logs
     environment:
       - DATABASE_URL=postgresql://shomer:shomer_password@postgres:5432/shomer_portal
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:YtrewqQwerty123123Ytrewq@redis:6379/0
       - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
       - JWT_SECRET=${JWT_SECRET:-your-jwt-secret-key}
       - WEBSOCKET_PORT=8080

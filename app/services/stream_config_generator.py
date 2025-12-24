@@ -86,7 +86,7 @@ def get_cameras_for_config(
         return cameras
 
 
-def get_location_uris_for_camera(camera: Camera, db: Session) -> List[str]:
+def get_location_uris_for_camera(camera: Camera, db: Session) -> List[Dict[str, str]]:
     """
     Get LocationUris array for a camera (all cameras from its site).
 
@@ -95,7 +95,7 @@ def get_location_uris_for_camera(camera: Camera, db: Session) -> List[str]:
         db: Database session
 
     Returns:
-        List of RTSP URLs for all cameras at this camera's site
+        List of dicts with 'url' and 'osd_text' (camera name) keys
     """
     location_uris = []
 
@@ -113,7 +113,10 @@ def get_location_uris_for_camera(camera: Camera, db: Session) -> List[str]:
         if site_camera and site_camera.rtsp_url:
             # Process URL to encode passwords
             processed_url = encode_rtsp_password(site_camera.rtsp_url)
-            location_uris.append(processed_url)
+            location_uris.append({
+                "url": processed_url,
+                "osd_text": site_camera.name if site_camera.name else ""
+            })
 
     return location_uris
 
@@ -139,8 +142,10 @@ def get_osd_color_for_camera(camera: Camera, db: Session) -> str:
         SiteCategoryMapping.site_id == camera.site_id
     ).first()
 
-    if mapping and mapping.category and mapping.category.color:
-        return mapping.category.color
+    if mapping and mapping.category and mapping.category.color is not None:
+        # Convert BigInteger to hex string format
+        color_int = int(mapping.category.color)
+        return f"0x{color_int:08X}"
 
     return default_color
 
@@ -148,22 +153,31 @@ def get_osd_color_for_camera(camera: Camera, db: Session) -> str:
 def create_camera_object(
     camera: Camera,
     db: Session,
+    view_n: int = 0,
+    view_id: str = "",
+    pos_x: int = 0,
+    pos_y: int = 0,
     use_tcp: bool = False
 ) -> Dict[str, Any]:
     """
-    Create a camera object matching json_format.md specification.
+    Create a camera object matching json_format.md specification with enhanced fields.
 
     Args:
         camera: Camera database object
         db: Database session
+        view_n: View sequence number (0-indexed integer)
+        view_id: View identifier for this view
+        pos_x: Row position in grid (0-indexed integer)
+        pos_y: Column position in grid (0-indexed integer)
         use_tcp: Force TCP transport
 
     Returns:
-        Camera object dict with id, osd_text, url, osd_color, LocationUris, use_tcp
+        Camera object dict with all required fields including metadata
     """
     # Get site for camera
     site = db.query(Site).filter(Site.id == camera.site_id).first()
     site_name = site.name if site else "Unknown Site"
+    site_id = camera.site_id if camera.site_id else ""
 
     # Process RTSP URL to encode passwords
     processed_url = encode_rtsp_password(camera.rtsp_url) if camera.rtsp_url else ""
@@ -175,28 +189,57 @@ def create_camera_object(
     location_uris = get_location_uris_for_camera(camera, db)
 
     return {
-        "id": f"{camera.site_id}_{camera.id}",
+        "LocationUris": location_uris,
+        "id": f"{site_id}_{camera.id}",
+        "camera_id": camera.id,
+        "camera_name": camera.name if camera.name else "",
+        "site_id": site_id,
+        "site_name": site_name,
+        "view_n": view_n,
+        "view_id": view_id,
+        "view_name": f"View {view_n + 1}",  # Generic view name for generated configs
+        "pos_x": pos_x,
+        "pos_y": pos_y,
+        "osd_color": osd_color,
         "osd_text": f"{camera.name} ({site_name})",
         "url": processed_url,
-        "osd_color": osd_color,
-        "LocationUris": location_uris,
         "use_tcp": camera.use_tcp if hasattr(camera, 'use_tcp') and camera.use_tcp is not None else use_tcp
     }
 
 
-def create_empty_camera_object() -> Dict[str, Any]:
+def create_empty_camera_object(
+    view_n: int = 0,
+    view_id: str = "",
+    pos_x: int = 0,
+    pos_y: int = 0
+) -> Dict[str, Any]:
     """
     Create an empty camera object for unused tiles.
 
+    Args:
+        view_n: View sequence number (0-indexed integer)
+        view_id: View identifier for this view
+        pos_x: Row position in grid (0-indexed integer)
+        pos_y: Column position in grid (0-indexed integer)
+
     Returns:
-        Empty camera object matching json_format.md spec
+        Empty camera object matching json_format.md spec with all fields
     """
     return {
+        "LocationUris": [],
         "id": "",
+        "camera_id": "",
+        "camera_name": "",
+        "site_id": "",
+        "site_name": "",
+        "view_n": view_n,
+        "view_id": view_id,
+        "view_name": f"View {view_n + 1}",
+        "pos_x": pos_x,
+        "pos_y": pos_y,
+        "osd_color": "0xFFFFFFFF",
         "osd_text": "",
         "url": "",
-        "osd_color": "0xFFFFFFFF",
-        "LocationUris": [],
         "use_tcp": False
     }
 
@@ -232,18 +275,37 @@ def distribute_cameras_to_screens(
         for tile_idx in range(total_tiles):
             tile_cameras = []
 
+            # Calculate grid position for this tile
+            pos_x = tile_idx // screen_config.layout_cols  # Row
+            pos_y = tile_idx % screen_config.layout_cols   # Column
+
             # Add cameras for each view in this tile
             for view_idx in range(screen_config.num_views):
+                # Generate view_id: same for all cameras in this view across all tiles in the screen
+                view_id = f"generated_screen_{screen_idx}_view_{view_idx}"
+
                 if camera_index < len(cameras):
-                    # Use actual camera
+                    # Use actual camera with position and view metadata
                     camera = cameras[camera_index]
-                    camera_obj = create_camera_object(camera, db)
+                    camera_obj = create_camera_object(
+                        camera,
+                        db,
+                        view_n=view_idx,
+                        view_id=view_id,
+                        pos_x=pos_x,
+                        pos_y=pos_y
+                    )
                     tile_cameras.append(camera_obj)
                     camera_index += 1
                     cameras_used += 1
                 else:
-                    # Not enough cameras - use empty object
-                    tile_cameras.append(create_empty_camera_object())
+                    # Not enough cameras - use empty object with position metadata
+                    tile_cameras.append(create_empty_camera_object(
+                        view_n=view_idx,
+                        view_id=view_id,
+                        pos_x=pos_x,
+                        pos_y=pos_y
+                    ))
 
             source_groups.append(tile_cameras)
 

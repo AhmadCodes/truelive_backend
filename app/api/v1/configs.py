@@ -20,7 +20,6 @@ router = APIRouter()
 
 @router.post(
     "/generate-stream-config",
-    response_model=GenerateStreamConfigResponse,
     status_code=status.HTTP_200_OK,
     responses={
         404: {
@@ -62,6 +61,9 @@ async def generate_multi_stream_config(
     - All provided camera IDs must exist in database
     - Returns 404 error with list of invalid IDs if any don't exist
 
+    **Returns:**
+    - Device configuration JSON directly (no wrapper)
+
     Requires admin or super_admin privileges.
     """
     # Validate camera IDs if provided
@@ -88,14 +90,8 @@ async def generate_multi_stream_config(
             db=db
         )
 
-        # Create response
-        stats = StreamConfigStats(**stats_dict)
-        response = GenerateStreamConfigResponse(
-            config=config,
-            stats=stats
-        )
-
-        return response
+        # Return config directly without wrapper
+        return config
 
     except Exception as e:
         raise HTTPException(
