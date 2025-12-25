@@ -59,9 +59,12 @@ class SiteCategoryResponse(BaseModel):
         from_attributes = True
 
 
-class SiteResponse(SiteBase):
+class SiteResponse(BaseModel):
     """Site response schema."""
     id: str
+    name: str
+    nvr_username: Optional[str] = None  # Allow empty strings from database
+    nvr_password: Optional[str] = None  # Allow empty strings from database
     sureview_site: bool = False
     new: bool = True
     customer_id: Optional[str] = None
