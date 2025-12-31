@@ -12,7 +12,7 @@ import time
 import logging
 
 from app.core.config import settings
-from app.database import check_db_health
+from app.database import check_db_health, SessionLocal
 from app.api.v1 import auth, sites, cameras, pcs, screens, views, users, categories, sureview, snapshots, configs, stream, invitations, audit_logs, settings as settings_router
 
 
@@ -244,6 +244,19 @@ async def startup_event():
     # Check database connection
     if check_db_health():
         logger.info("Database connection established")
+
+        # Seed default system settings if not present
+        try:
+            from app.services.settings_seeder import seed_settings
+            db = SessionLocal()
+            result = seed_settings(db)
+            if result["created"] > 0:
+                logger.info(f"Seeded {result['created']} default system settings")
+            else:
+                logger.debug("System settings already seeded")
+            db.close()
+        except Exception as e:
+            logger.warning(f"Failed to seed system settings: {e}")
     else:
         logger.error("Failed to connect to database")
 
