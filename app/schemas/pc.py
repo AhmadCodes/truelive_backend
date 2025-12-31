@@ -207,3 +207,36 @@ class AllPCsConnectionStatus(BaseModel):
     connected_count: int = Field(..., description="Number of currently connected PCs")
     disconnected_count: int = Field(..., description="Number of disconnected PCs")
     pcs: List[PCConnectionStatus] = Field(..., description="List of PCs with their connection status")
+
+
+# Import Config Schemas
+
+class ImportConfigRequest(BaseModel):
+    """Request body for importing PC configuration from device JSON."""
+
+    config: dict = Field(..., description="Device configuration JSON (same format as deploy config)")
+
+
+class ImportConfigResponse(BaseModel):
+    """Response for PC config import operation."""
+
+    success: bool = Field(..., description="Whether import was successful")
+    pc_id: str = Field(..., description="PC identifier")
+    screens_created: int = Field(..., description="Number of screens created")
+    views_created: int = Field(..., description="Number of views created")
+    mappings_created: int = Field(..., description="Number of screen mappings created")
+    cameras_skipped: int = Field(0, description="Number of cameras skipped (not found in database)")
+    sites_skipped: int = Field(0, description="Number of sites skipped (not found in database)")
+    message: str = Field(..., description="Status message")
+
+
+class CopyLayoutResponse(BaseModel):
+    """Response for copy layout operation."""
+
+    success: bool = Field(..., description="Whether copy was successful")
+    source_pc_id: str = Field(..., description="Source PC identifier")
+    target_pc_id: str = Field(..., description="Target PC identifier")
+    screens_copied: int = Field(..., description="Number of screens copied")
+    views_copied: int = Field(..., description="Number of views copied")
+    mappings_copied: int = Field(..., description="Number of screen mappings copied")
+    message: str = Field(..., description="Status message")

@@ -26,8 +26,12 @@ from app.schemas.pc import (
     ConfigurePCScreensResponse,
     PCTokenResponse,
     PCConnectionStatus,
-    AllPCsConnectionStatus
+    AllPCsConnectionStatus,
+    ImportConfigRequest,
+    ImportConfigResponse,
+    CopyLayoutResponse
 )
+from app.services.config_importer import import_config_for_pc, copy_layout_from_pc
 import logging
 
 logger = logging.getLogger(__name__)
@@ -912,4 +916,126 @@ async def get_pc_connection_status(
         last_connected=last_connected,
         last_applied=last_applied,
         websocket_connected_at=ws_info.get('connected_at') if is_connected else None
+    )
+
+
+@router.post("/{pc_id}/import-config", response_model=ImportConfigResponse)
+async def import_pc_config(
+    pc_id: str,
+    request: ImportConfigRequest,
+    db: DBSession,
+    current_user: AdminUser
+):
+    """
+    Import configuration for a PC from device JSON.
+
+    This endpoint accepts a device configuration JSON (same format as deploy config)
+    and creates/updates the screens, views, and mappings for the PC.
+
+    The configuration is imported into the database but NOT deployed to the PC.
+    Use the deploy endpoint to send the configuration to the PC after import.
+
+    Cameras and sites that don't exist in the database will be skipped.
+
+    Args:
+        pc_id: ID of the PC to import config for
+        request: Request containing the device configuration JSON
+        db: Database session
+        current_user: Current authenticated admin user
+
+    Returns:
+        Import result with statistics
+
+    Raises:
+        404: PC not found
+        400: Invalid configuration format
+    """
+    # Import the configuration
+    result = import_config_for_pc(
+        db=db,
+        pc_id=pc_id,
+        config=request.config
+    )
+
+    if not result.success:
+        # Check if it's a 404 (PC not found)
+        if "not found" in result.message.lower():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=result.message
+            )
+        # Otherwise it's a bad request
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=result.message
+        )
+
+    return ImportConfigResponse(
+        success=result.success,
+        pc_id=result.pc_id,
+        screens_created=result.screens_created,
+        views_created=result.views_created,
+        mappings_created=result.mappings_created,
+        cameras_skipped=result.cameras_skipped,
+        sites_skipped=result.sites_skipped,
+        message=result.message
+    )
+
+
+@router.post("/{pc_id}/copy-layout-from/{source_pc_id}", response_model=CopyLayoutResponse)
+async def copy_layout_from_another_pc(
+    pc_id: str,
+    source_pc_id: str,
+    db: DBSession,
+    current_user: AdminUser
+):
+    """
+    Copy the entire screen layout from another PC.
+
+    This endpoint copies all screens, views, and mappings from the source PC
+    to the target PC. The target PC's existing layout is cleared before copying.
+
+    New IDs are generated for the copied screens and views, but the camera
+    and site assignments are preserved.
+
+    Args:
+        pc_id: ID of the target PC to copy layout TO
+        source_pc_id: ID of the source PC to copy layout FROM
+        db: Database session
+        current_user: Current authenticated admin user
+
+    Returns:
+        Copy result with statistics
+
+    Raises:
+        404: Source or target PC not found
+        400: Cannot copy to same PC or source has no screens
+    """
+    result = copy_layout_from_pc(
+        db=db,
+        target_pc_id=pc_id,
+        source_pc_id=source_pc_id
+    )
+
+    if not result.success:
+        # Check if it's a 404 (PC not found)
+        if "not found" in result.message.lower():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=result.message
+            )
+        # Otherwise it's a bad request
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=result.message
+        )
+
+    return CopyLayoutResponse(
+        success=result.success,
+        source_pc_id=result.source_pc_id,
+        target_pc_id=result.target_pc_id,
+        screens_copied=result.screens_copied,
+        views_copied=result.views_copied,
+        mappings_copied=result.mappings_copied,
+        message=result.message
     )

@@ -6,6 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Shomer Portal is a FastAPI-based surveillance camera management system. The backend manages sites, cameras, PCs, screens/views, and users with JWT authentication. It communicates with PC client applications via WebSocket to deploy camera grid configurations.
 
+## Project Structure
+
+- **Backend:** `/root/streaming_app` (this repository) - FastAPI + PostgreSQL + Redis + Celery
+- **Frontend:** `/root/streaming_app_frontend` - Next.js React application
+
 ## Development Commands
 
 ```bash
