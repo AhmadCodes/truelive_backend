@@ -265,7 +265,7 @@ async def test_smtp_connection(
         # Get SMTP settings
         smtp_host = system_settings_service.get_setting(db, 'smtp.host')
         smtp_port = system_settings_service.get_setting(db, 'smtp.port')
-        smtp_user = system_settings_service.get_setting(db, 'smtp.user')
+        smtp_user = system_settings_service.get_setting(db, 'smtp.username')
         smtp_password = system_settings_service.get_setting(db, 'smtp.password')
         smtp_from_email = system_settings_service.get_setting(db, 'smtp.from_email')
         smtp_from_name = system_settings_service.get_setting(db, 'smtp.from_name', 'Shomer Portal')
