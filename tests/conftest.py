@@ -74,7 +74,8 @@ def sample_site(db_session):
         nvr_username="admin",
         nvr_password="password123",
         sureview_site=False,
-        new=False
+        new=False,
+        use_tcp=False
     )
     db_session.add(site)
     db_session.commit()
@@ -92,7 +93,8 @@ def sample_camera(db_session, sample_site):
         rtsp_url="rtsp://admin:password@192.168.1.100:554/stream",
         main_stream_url="rtsp://admin:password@192.168.1.100:554/main",
         sureview_camera=False,
-        new=False
+        new=False,
+        use_tcp=False
     )
     db_session.add(camera)
     db_session.commit()

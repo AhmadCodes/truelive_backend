@@ -111,7 +111,8 @@ async def create_site(
         nvr_username=site_data.nvr_username,
         nvr_password=site_data.nvr_password,
         sureview_site=False,
-        new=True
+        new=True,
+        use_tcp=site_data.use_tcp
     )
 
     db.add(new_site)
@@ -168,6 +169,8 @@ async def update_site(
         site.nvr_username = site_data.nvr_username
     if site_data.nvr_password is not None:
         site.nvr_password = site_data.nvr_password
+    if site_data.use_tcp is not None:
+        site.use_tcp = site_data.use_tcp
 
     db.commit()
     db.refresh(site)

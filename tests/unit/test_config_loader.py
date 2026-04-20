@@ -198,6 +198,57 @@ class TestLoadPCConfig:
         assert slot_data["use_tcp"] is False
         assert slot_data["playing_state"] == sample_screen_mapping.playing_state
 
+    def _build_use_tcp_scenario(self, db_session, sample_pc, sample_screen, sample_view,
+                                 sample_site, camera_use_tcp, site_use_tcp):
+        """Helper: create a camera + screen mapping and set both site.use_tcp and camera.use_tcp."""
+        from app.models.camera import Camera
+        from app.models.screen import ScreenMapping
+
+        sample_site.use_tcp = site_use_tcp
+        camera = Camera(
+            id=f"CAM_USETCP_{camera_use_tcp}_{site_use_tcp}",
+            site_id=sample_site.id,
+            name="Scenario Camera",
+            rtsp_url="rtsp://test",
+            use_tcp=camera_use_tcp
+        )
+        mapping = ScreenMapping(
+            pc_id=sample_pc.id, screen_id=sample_screen.id, view_id=sample_view.id,
+            slot_row=1, slot_col=1, site_id=sample_site.id, camera_id=camera.id
+        )
+        db_session.add_all([camera, mapping])
+        db_session.commit()
+
+    def test_use_tcp_camera_override_wins_over_site(self, db_session, sample_pc, sample_screen,
+                                                     sample_view, sample_site):
+        """camera.use_tcp=True must override site.use_tcp=False."""
+        self._build_use_tcp_scenario(db_session, sample_pc, sample_screen, sample_view, sample_site,
+                                     camera_use_tcp=True, site_use_tcp=False)
+
+        result = load_pc_config(sample_pc.id, db_session)
+        slot_data = result["mappings"]["screen_to_cameras"][sample_pc.id][sample_screen.id][sample_view.name]["slot_1_1"]
+        assert slot_data["use_tcp"] is True
+
+    def test_use_tcp_inherits_site_when_camera_null(self, db_session, sample_pc, sample_screen,
+                                                     sample_view, sample_site):
+        """camera.use_tcp=None must inherit site.use_tcp=True."""
+        self._build_use_tcp_scenario(db_session, sample_pc, sample_screen, sample_view, sample_site,
+                                     camera_use_tcp=None, site_use_tcp=True)
+
+        result = load_pc_config(sample_pc.id, db_session)
+        slot_data = result["mappings"]["screen_to_cameras"][sample_pc.id][sample_screen.id][sample_view.name]["slot_1_1"]
+        assert slot_data["use_tcp"] is True
+
+    def test_use_tcp_camera_false_overrides_site_true(self, db_session, sample_pc, sample_screen,
+                                                       sample_view, sample_site):
+        """camera.use_tcp=False must override site.use_tcp=True (mixed-site scenario)."""
+        self._build_use_tcp_scenario(db_session, sample_pc, sample_screen, sample_view, sample_site,
+                                     camera_use_tcp=False, site_use_tcp=True)
+
+        result = load_pc_config(sample_pc.id, db_session)
+        slot_data = result["mappings"]["screen_to_cameras"][sample_pc.id][sample_screen.id][sample_view.name]["slot_1_1"]
+        assert slot_data["use_tcp"] is False
+
     def test_load_multiple_views(self, db_session, sample_pc, sample_screen):
         """Test loading screen with multiple views."""
         from app.models.screen import View

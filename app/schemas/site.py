@@ -21,6 +21,7 @@ class SiteBase(BaseModel):
     telephone_fire: Optional[str] = Field(None, max_length=100)
     notes: Optional[str] = None
     lat_long: Optional[str] = Field(None, max_length=100)
+    use_tcp: bool = Field(False, description="Site-wide default for RTSP TCP transport (overridable per camera)")
 
 
 class SiteCreate(SiteBase):
@@ -41,6 +42,7 @@ class SiteUpdate(BaseModel):
     telephone_fire: Optional[str] = Field(None, max_length=100)
     notes: Optional[str] = None
     lat_long: Optional[str] = Field(None, max_length=100)
+    use_tcp: Optional[bool] = Field(None, description="Site-wide default for RTSP TCP transport")
 
 
 class CategoryAssignment(BaseModel):
@@ -75,6 +77,7 @@ class SiteResponse(BaseModel):
     telephone_fire: Optional[str] = None
     notes: Optional[str] = None
     lat_long: Optional[str] = None
+    use_tcp: bool = False
     created_at: datetime
     updated_at: datetime
 

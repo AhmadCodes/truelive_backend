@@ -15,6 +15,7 @@ class CameraBase(BaseModel):
     main_stream_url: Optional[str] = Field(None, description="Main stream URL for camera (optional)")
     sureview_camera: bool = Field(False, description="Flag indicating if this is a SureView integrated camera")
     new: bool = Field(True, description="Flag indicating if this is a newly added camera")
+    use_tcp: Optional[bool] = Field(None, description="Force RTSP over TCP; null to inherit from site")
 
 
 class CameraCreate(CameraBase):
@@ -32,6 +33,7 @@ class CameraUpdate(BaseModel):
     main_stream_url: Optional[str] = Field(None, description="Main stream URL for camera")
     sureview_camera: Optional[bool] = Field(None, description="Flag indicating if this is a SureView integrated camera")
     new: Optional[bool] = Field(None, description="Flag indicating if this is a newly added camera")
+    use_tcp: Optional[bool] = Field(None, description="Force RTSP over TCP; null to inherit from site (PUT null to clear override)")
     site_id: Optional[str] = Field(None, min_length=1, max_length=255, description="Site this camera belongs to")
 
 
@@ -46,6 +48,7 @@ class CameraResponse(BaseModel):
     main_stream_url: Optional[str]
     sureview_camera: bool
     new: bool
+    use_tcp: Optional[bool] = None
 
     class Config:
         from_attributes = True
@@ -69,6 +72,7 @@ class CameraSummary(BaseModel):
     name: str
     sureview_camera: bool
     new: bool
+    use_tcp: Optional[bool] = None
 
     class Config:
         from_attributes = True

@@ -193,6 +193,10 @@ def load_pc_config(pc_id: str, db: Session) -> Dict[str, Any]:
                         ).first()
 
                         if site:
+                            # Cascade: camera override wins, else inherit site default.
+                            effective_use_tcp = (
+                                camera.use_tcp if camera.use_tcp is not None else site.use_tcp
+                            )
                             view_mappings[slot_key] = {
                                 "slot_row": mapping.slot_row,
                                 "slot_col": mapping.slot_col,
@@ -201,7 +205,7 @@ def load_pc_config(pc_id: str, db: Session) -> Dict[str, Any]:
                                 "site_name": site.name,
                                 "camera_name": camera.name,
                                 "rtsp_url": camera.rtsp_url,
-                                "use_tcp": False,
+                                "use_tcp": effective_use_tcp,
                                 "playing_state": mapping.playing_state
                             }
 
