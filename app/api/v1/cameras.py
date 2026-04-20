@@ -69,7 +69,8 @@ async def create_camera(
         rtsp_url=camera_data.rtsp_url,
         main_stream_url=camera_data.main_stream_url,
         sureview_camera=camera_data.sureview_camera,
-        new=camera_data.new
+        new=camera_data.new,
+        use_tcp=camera_data.use_tcp
     )
 
     db.add(new_camera)
@@ -86,6 +87,7 @@ async def create_camera(
         "main_stream_url": new_camera.main_stream_url,
         "sureview_camera": new_camera.sureview_camera,
         "new": new_camera.new,
+        "use_tcp": new_camera.use_tcp,
         "created_at": new_camera.created_at,
         "updated_at": new_camera.updated_at
     }
@@ -159,6 +161,7 @@ async def list_cameras(
             "main_stream_url": camera.main_stream_url,
             "sureview_camera": camera.sureview_camera,
             "new": camera.new,
+            "use_tcp": camera.use_tcp,
             "created_at": camera.created_at,
             "updated_at": camera.updated_at
         }
@@ -246,6 +249,7 @@ async def get_camera(
         "main_stream_url": camera.main_stream_url,
         "sureview_camera": camera.sureview_camera,
         "new": camera.new,
+        "use_tcp": camera.use_tcp,
         "created_at": camera.created_at,
         "updated_at": camera.updated_at
     }
@@ -309,6 +313,12 @@ async def update_camera(
     if camera_data.new is not None:
         camera.new = camera_data.new
 
+    # Tri-state update for use_tcp: null explicitly clears the override (inherit from site).
+    # Distinguish "field absent" (no change) from "field explicitly null" via exclude_unset.
+    update_data = camera_data.model_dump(exclude_unset=True)
+    if "use_tcp" in update_data:
+        camera.use_tcp = update_data["use_tcp"]
+
     db.commit()
     db.refresh(camera)
 
@@ -325,6 +335,7 @@ async def update_camera(
         "main_stream_url": camera.main_stream_url,
         "sureview_camera": camera.sureview_camera,
         "new": camera.new,
+        "use_tcp": camera.use_tcp,
         "created_at": camera.created_at,
         "updated_at": camera.updated_at
     }
@@ -490,6 +501,7 @@ async def get_cameras_by_site(
             "main_stream_url": camera.main_stream_url,
             "sureview_camera": camera.sureview_camera,
             "new": camera.new,
+            "use_tcp": camera.use_tcp,
             "created_at": camera.created_at,
             "updated_at": camera.updated_at
         }

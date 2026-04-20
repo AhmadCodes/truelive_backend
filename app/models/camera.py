@@ -56,6 +56,12 @@ class Camera(BaseModel):
         server_default='true',
         comment="Flag indicating if this is a newly added camera"
     )
+    use_tcp = Column(
+        Boolean,
+        nullable=True,
+        default=None,
+        comment="Per-camera RTSP TCP override: NULL inherits site.use_tcp, true/false overrides"
+    )
 
     # Table arguments for indexes
     __table_args__ = (

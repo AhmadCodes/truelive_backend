@@ -57,6 +57,13 @@ class Site(BaseModel):
         nullable=False,
         comment="Whether this is a newly added site"
     )
+    use_tcp = Column(
+        Boolean,
+        default=False,
+        nullable=False,
+        server_default='false',
+        comment="Site-wide default for RTSP TCP transport (overridable per camera)"
+    )
 
     # SureView additional fields
     customer_id = Column(

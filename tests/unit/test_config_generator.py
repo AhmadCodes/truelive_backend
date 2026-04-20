@@ -85,6 +85,49 @@ class TestGenerateConfig:
         assert source["url"] == "rtsp://test"
         assert source["use_tcp"] is False
 
+    def test_use_tcp_true_propagates_to_source_entry(self, sample_pc_config, db_session):
+        """use_tcp=True in slot_data must surface as use_tcp: True in the generated source entry."""
+        from app.models.site import Site
+        from app.models.camera import Camera
+        from app.models.screen import Screen
+
+        site = Site(id="SITE_123", name="Main Office", nvr_username="admin", nvr_password="pass")
+        camera = Camera(id="CAM_456", site_id="SITE_123", name="Front Door", rtsp_url="rtsp://test")
+        screen = Screen(id="pc_123_screen_abc", pc_id="pc_123", name="Monitor 1", rows=2, columns=2, switching_interval=10)
+        db_session.add_all([site, camera, screen])
+        db_session.commit()
+
+        # Flip use_tcp=True in the slot_data of the fixture-derived config
+        config = {
+            **sample_pc_config,
+            "mappings": {
+                "screen_to_cameras": {
+                    "pc_123": {
+                        "pc_123_screen_abc": {
+                            "view_1": {
+                                "slot_1_1": {
+                                    "slot_row": 1,
+                                    "slot_col": 1,
+                                    "site_id": "SITE_123",
+                                    "camera_id": "CAM_456",
+                                    "site_name": "Main Office",
+                                    "camera_name": "Front Door",
+                                    "rtsp_url": "rtsp://test",
+                                    "use_tcp": True,
+                                    "playing_state": False
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        result = generate_config(config, db_session)
+
+        source = result["screens"][0]["source_groups"][0][0]
+        assert source["use_tcp"] is True
+
     def test_password_encoding_in_config(self, sample_pc_config, db_session):
         """Test that RTSP passwords are URL-encoded."""
         from app.models.site import Site

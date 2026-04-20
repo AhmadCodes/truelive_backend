@@ -441,7 +441,8 @@ Create a new site.
 {
   "name": "string",
   "nvr_username": "string",
-  "nvr_password": "string"
+  "nvr_password": "string",
+  "use_tcp": boolean  // Optional, default false — site-wide RTSP TCP default (overridable per camera)
 }
 ```
 
@@ -454,6 +455,7 @@ Create a new site.
   "nvr_password": "string",
   "sureview_site": false,
   "new": true,
+  "use_tcp": boolean,
   "created_at": "datetime",
   "updated_at": "datetime"
 }
@@ -491,7 +493,8 @@ Update site details.
 {
   "name": "string",
   "nvr_username": "string",
-  "nvr_password": "string"
+  "nvr_password": "string",
+  "use_tcp": boolean  // Site-wide RTSP TCP default; cameras with use_tcp=null inherit this
 }
 ```
 
@@ -629,7 +632,8 @@ Create a new camera.
   "rtsp_url": "string",
   "main_stream_url": "string",  // Optional
   "sureview_camera": boolean,  // Default: false
-  "new": boolean  // Default: true
+  "new": boolean,  // Default: true
+  "use_tcp": boolean | null  // Default: null — null inherits site.use_tcp; true/false overrides
 }
 ```
 
@@ -644,6 +648,7 @@ Create a new camera.
   "main_stream_url": "string",
   "sureview_camera": boolean,
   "new": boolean,
+  "use_tcp": boolean | null,  // null = inherit site.use_tcp
   "created_at": "datetime",
   "updated_at": "datetime"
 }
@@ -726,7 +731,8 @@ Update camera details.
   "rtsp_url": "string",
   "main_stream_url": "string",
   "sureview_camera": boolean,
-  "new": boolean
+  "new": boolean,
+  "use_tcp": boolean | null  // Omit: no change. true/false: override. null: clear override (inherit site)
 }
 ```
 
