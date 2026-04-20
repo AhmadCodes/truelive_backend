@@ -142,7 +142,7 @@ async def get_site(
     return site
 
 
-@router.put("/{site_id}", response_model=SiteResponse)
+@router.api_route("/{site_id}", methods=["PUT", "PATCH"], response_model=SiteResponse)
 async def update_site(
     site_id: str,
     site_data: SiteUpdate,

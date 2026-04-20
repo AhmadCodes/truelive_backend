@@ -255,7 +255,7 @@ async def get_camera(
     }
 
 
-@router.put("/{camera_id}", response_model=CameraDetailResponse)
+@router.api_route("/{camera_id}", methods=["PUT", "PATCH"], response_model=CameraDetailResponse)
 async def update_camera(
     camera_id: str,
     camera_data: CameraUpdate,
