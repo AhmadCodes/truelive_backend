@@ -32,7 +32,10 @@ def is_docker() -> bool:
     Returns:
         True if running in Docker, False otherwise
     """
-    return os.getenv('AM_I_IN_A_DOCKER_CONTAINER', 'False') == 'True'
+    return (
+        os.path.exists('/.dockerenv')
+        or os.getenv('AM_I_IN_A_DOCKER_CONTAINER', 'False') == 'True'
+    )
 
 
 def get_chrome_options() -> Options:
@@ -52,6 +55,11 @@ def get_chrome_options() -> Options:
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--remote-debugging-port=9222")
 
+    # Use system-installed Chromium if CHROME_BIN is set (e.g. in Docker)
+    chrome_bin = os.getenv('CHROME_BIN')
+    if chrome_bin:
+        chrome_options.binary_location = chrome_bin
+
     return chrome_options
 
 
@@ -68,7 +76,8 @@ def automate_login() -> Optional[List[Dict[str, str]]]:
     try:
         # Initialize WebDriver
         if is_docker():
-            service = Service(ChromeDriverManager().install())
+            chromedriver_path = os.getenv('CHROMEDRIVER_PATH', '/usr/bin/chromedriver')
+            service = Service(executable_path=chromedriver_path)
             driver = webdriver.Chrome(service=service, options=chrome_options)
         else:
             driver = webdriver.Chrome(options=chrome_options)
