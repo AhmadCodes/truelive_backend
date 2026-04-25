@@ -1,6 +1,6 @@
-# Shomer Portal API Guide for Flutter Developers
+# TrueLive Portal API Guide for Flutter Developers
 
-Complete guide to integrating the Shomer Portal API with your Flutter application. This guide provides ready-to-use code examples with both the `http` and `dio` packages.
+Complete guide to integrating the TrueLive Portal API with your Flutter application. This guide provides ready-to-use code examples with both the `http` and `dio` packages.
 
 ## Table of Contents
 
@@ -56,7 +56,7 @@ flutter pub get
 
 ## Authentication Flow
 
-The Shomer Portal API uses JWT (JSON Web Tokens) for authentication. Each successful login returns an access token and a refresh token.
+The TrueLive Portal API uses JWT (JSON Web Tokens) for authentication. Each successful login returns an access token and a refresh token.
 
 ### Token Details
 
@@ -1247,7 +1247,7 @@ if (result != null && result.success) {
 import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
-class ShomerApiClient {
+class TrueLiveApiClient {
   static const String baseUrl = 'https://your-api-domain.com';
   static const String apiV1 = '/api/v1';
 
@@ -1256,7 +1256,7 @@ class ShomerApiClient {
   String? _accessToken;
   String? _refreshToken;
 
-  ShomerApiClient() {
+  TrueLiveApiClient() {
     _dio = Dio(BaseOptions(
       baseUrl: '$baseUrl$apiV1',
       connectTimeout: const Duration(seconds: 10),
@@ -1428,14 +1428,14 @@ class ShomerApiClient {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  final apiClient = ShomerApiClient();
+  final apiClient = TrueLiveApiClient();
   await apiClient.loadTokens();
 
   runApp(MyApp(apiClient: apiClient));
 }
 
 class MyApp extends StatelessWidget {
-  final ShomerApiClient apiClient;
+  final TrueLiveApiClient apiClient;
 
   const MyApp({Key? key, required this.apiClient}) : super(key: key);
 
@@ -1521,7 +1521,7 @@ class HomeScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Shomer Portal'),
+        title: Text('TrueLive Portal'),
         actions: [
           IconButton(
             icon: Icon(Icons.logout),

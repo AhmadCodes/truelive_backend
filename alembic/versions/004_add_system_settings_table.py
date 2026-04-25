@@ -153,7 +153,7 @@ def upgrade() -> None:
         {
             'id': str(uuid.uuid4()),
             'key': 'smtp.from_name',
-            'value': get_env('SMTP_FROM_NAME', 'Shomer Portal'),
+            'value': get_env('SMTP_FROM_NAME', 'TrueLive Portal'),
             'category': 'smtp',
             'description': 'From name for outgoing emails',
             'is_encrypted': False,

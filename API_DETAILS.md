@@ -1,6 +1,6 @@
 # API Documentation
 
-Complete API reference for the Shomer Portal surveillance camera management system.
+Complete API reference for the TrueLive Portal surveillance camera management system.
 
 **Base URL:** `http://localhost:8000/api/v1`
 

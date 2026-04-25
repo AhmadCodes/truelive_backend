@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     """Application settings with environment variable support."""
 
     # Application
-    APP_NAME: str = "Shomer Portal API"
+    APP_NAME: str = "TrueLive Portal API"
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = False
     ENVIRONMENT: str = "production"
@@ -94,7 +94,7 @@ class Settings(BaseSettings):
     SMTP_USER: str = "info@usvg.ai"
     SMTP_PASSWORD: str = ""  # Set in .env file
     SMTP_FROM_EMAIL: str = "info@usvg.ai"
-    SMTP_FROM_NAME: str = "Shomer Portal"
+    SMTP_FROM_NAME: str = "TrueLive Portal"
     SMTP_USE_TLS: bool = True
     FRONTEND_URL: str = "http://localhost:3000"
     INVITATION_TOKEN_EXPIRY_HOURS: int = 72

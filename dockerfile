@@ -1,4 +1,4 @@
-# Multi-stage Dockerfile for Shomer Portal Backend
+# Multi-stage Dockerfile for TrueLive Portal Backend
 
 # Stage 1: Base image with dependencies
 FROM python:3.11-slim as base

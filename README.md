@@ -1,6 +1,6 @@
-# Shomer Portal - FastAPI Backend
+# TrueLive Portal - FastAPI Backend
 
-Complete backend API for Shomer Portal camera surveillance management system.
+Complete backend API for TrueLive Portal camera surveillance management system.
 
 ## Overview
 
@@ -302,7 +302,7 @@ from celery import Celery
 from app.core.config import settings
 
 celery_app = Celery(
-    "shomer_tasks",
+    "truelive_tasks",
     broker=settings.CELERY_BROKER_URL,
     backend=settings.CELERY_RESULT_BACKEND
 )
@@ -351,7 +351,7 @@ if __name__ == '__main__':
 
 ## API Endpoints Reference
 
-Based on the specification in `shomer_portal_features.md`, implement these ~75 endpoints:
+Based on the specification in `truelive_portal_features.md`, implement these ~75 endpoints:
 
 ### Authentication
 - POST `/api/v1/auth/login` ✅
@@ -408,7 +408,7 @@ Based on the specification in `shomer_portal_features.md`, implement these ~75 e
 - PUT `/api/v1/categories/{category_id}`
 - DELETE `/api/v1/categories/{category_id}`
 
-(See `PLAN.md` and `shomer_portal_features.md` for complete list)
+(See `PLAN.md` and `truelive_portal_features.md` for complete list)
 
 ## Testing
 
@@ -463,7 +463,7 @@ docker-compose ps postgres
 docker-compose logs postgres
 
 # Connect to PostgreSQL
-docker-compose exec postgres psql -U shomer -d shomer_portal
+docker-compose exec postgres psql -U truelive -d truelive_portal
 ```
 
 ### Celery Tasks Not Running
@@ -491,7 +491,7 @@ curl http://localhost:8080/socket.io/?transport=polling
 
 ## Documentation
 
-- **API Specification**: `shomer_portal_features.md` - Complete API docs
+- **API Specification**: `truelive_portal_features.md` - Complete API docs
 - **Screen Layout**: `SCREEN_LAYOUT_ANALYSIS.md` - Detailed implementation guide
 - **Implementation Plan**: `PLAN.md` - Development roadmap
 - **Original Analysis**: `CLAUDE_PLAN.md` - Project analysis
@@ -507,11 +507,11 @@ curl http://localhost:8080/socket.io/?transport=polling
 
 ## License
 
-Proprietary - Shomer Portal
+Proprietary - TrueLive Portal
 
 ## Support
 
 For issues and questions, refer to:
 - API Documentation: http://localhost:8000/api/v1/docs
 - Project Documentation: See docs/ folder
-- Source Documentation: `shomer_portal_features.md`
+- Source Documentation: `truelive_portal_features.md`

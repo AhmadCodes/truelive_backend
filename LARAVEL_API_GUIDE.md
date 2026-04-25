@@ -1,6 +1,6 @@
-# Shomer Portal API Guide for Laravel Developers
+# TrueLive Portal API Guide for Laravel Developers
 
-Complete guide to integrating the Shomer Portal API with your Laravel application. This guide provides ready-to-use code examples with Guzzle HTTP client and Laravel best practices.
+Complete guide to integrating the TrueLive Portal API with your Laravel application. This guide provides ready-to-use code examples with Guzzle HTTP client and Laravel best practices.
 
 ## Table of Contents
 
@@ -28,8 +28,8 @@ Complete guide to integrating the Shomer Portal API with your Laravel applicatio
 Add the API base URL to your `.env` file:
 
 ```env
-SHOMER_API_BASE_URL=https://your-api-domain.com
-SHOMER_API_VERSION=v1
+TRUELIVE_API_BASE_URL=https://your-api-domain.com
+TRUELIVE_API_VERSION=v1
 ```
 
 Update `config/services.php`:
@@ -40,9 +40,9 @@ Update `config/services.php`:
 return [
     // ... other services
 
-    'shomer' => [
-        'base_url' => env('SHOMER_API_BASE_URL', 'https://api.example.com'),
-        'api_version' => env('SHOMER_API_VERSION', 'v1'),
+    'truelive' => [
+        'base_url' => env('TRUELIVE_API_BASE_URL', 'https://api.example.com'),
+        'api_version' => env('TRUELIVE_API_VERSION', 'v1'),
     ],
 ];
 ```
@@ -59,7 +59,7 @@ composer require guzzlehttp/guzzle
 
 ## Authentication Flow
 
-The Shomer Portal API uses JWT (JSON Web Tokens) for authentication. Each successful login returns an access token and a refresh token.
+The TrueLive Portal API uses JWT (JSON Web Tokens) for authentication. Each successful login returns an access token and a refresh token.
 
 ### Token Details
 
@@ -112,7 +112,7 @@ Authenticate a user and receive JWT tokens.
 
 #### Create Auth Service
 
-Create a new service class `app/Services/ShomerAuthService.php`:
+Create a new service class `app/Services/TrueLiveAuthService.php`:
 
 ```php
 <?php
@@ -124,15 +124,15 @@ use GuzzleHttp\Exception\GuzzleException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
-class ShomerAuthService
+class TrueLiveAuthService
 {
     protected Client $client;
     protected string $baseUrl;
 
     public function __construct()
     {
-        $this->baseUrl = config('services.shomer.base_url');
-        $apiVersion = config('services.shomer.api_version');
+        $this->baseUrl = config('services.truelive.base_url');
+        $apiVersion = config('services.truelive.api_version');
 
         $this->client = new Client([
             'base_uri' => "{$this->baseUrl}/api/{$apiVersion}/",
@@ -167,9 +167,9 @@ class ShomerAuthService
 
             // Store tokens in session or cache
             session([
-                'shomer_access_token' => $data['access_token'],
-                'shomer_refresh_token' => $data['refresh_token'],
-                'shomer_token_expires_at' => now()->addSeconds($data['expires_in']),
+                'truelive_access_token' => $data['access_token'],
+                'truelive_refresh_token' => $data['refresh_token'],
+                'truelive_token_expires_at' => now()->addSeconds($data['expires_in']),
             ]);
 
             return [
@@ -182,7 +182,7 @@ class ShomerAuthService
             $errorBody = $e->getResponse()?->getBody()->getContents();
             $errorData = json_decode($errorBody, true);
 
-            Log::error('Shomer login failed', [
+            Log::error('TrueLive login failed', [
                 'status' => $statusCode,
                 'error' => $errorData,
             ]);
@@ -202,7 +202,7 @@ class ShomerAuthService
      */
     public function getAccessToken(): ?string
     {
-        return session('shomer_access_token');
+        return session('truelive_access_token');
     }
 
     /**
@@ -212,7 +212,7 @@ class ShomerAuthService
      */
     public function getRefreshToken(): ?string
     {
-        return session('shomer_refresh_token');
+        return session('truelive_refresh_token');
     }
 
     /**
@@ -222,7 +222,7 @@ class ShomerAuthService
      */
     public function isAuthenticated(): bool
     {
-        return session()->has('shomer_access_token');
+        return session()->has('truelive_access_token');
     }
 }
 ```
@@ -235,15 +235,15 @@ class ShomerAuthService
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
-use App\Services\ShomerAuthService;
+use App\Services\TrueLiveAuthService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 
-class ShomerLoginController extends Controller
+class TrueLiveLoginController extends Controller
 {
-    protected ShomerAuthService $authService;
+    protected TrueLiveAuthService $authService;
 
-    public function __construct(ShomerAuthService $authService)
+    public function __construct(TrueLiveAuthService $authService)
     {
         $this->authService = $authService;
     }
@@ -311,7 +311,7 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
     };
 
     try {
-        const response = await fetch('/api/shomer/login', {
+        const response = await fetch('/api/truelive/login', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -350,10 +350,10 @@ All protected endpoints require the access token in the `Authorization` header.
 
 use GuzzleHttp\Client;
 
-$accessToken = session('shomer_access_token');
+$accessToken = session('truelive_access_token');
 
 $client = new Client([
-    'base_uri' => config('services.shomer.base_url'),
+    'base_uri' => config('services.truelive.base_url'),
     'headers' => [
         'Authorization' => "Bearer {$accessToken}",
         'Content-Type' => 'application/json',
@@ -367,7 +367,7 @@ $userData = json_decode($response->getBody()->getContents(), true);
 
 #### Using Middleware for Automatic Token Injection
 
-Create middleware `app/Http/Middleware/ShomerApiAuth.php`:
+Create middleware `app/Http/Middleware/TrueLiveApiAuth.php`:
 
 ```php
 <?php
@@ -376,13 +376,13 @@ namespace App\Http\Middleware;
 
 use Closure;
 use Illuminate\Http\Request;
-use App\Services\ShomerAuthService;
+use App\Services\TrueLiveAuthService;
 
-class ShomerApiAuth
+class TrueLiveApiAuth
 {
-    protected ShomerAuthService $authService;
+    protected TrueLiveAuthService $authService;
 
-    public function __construct(ShomerAuthService $authService)
+    public function __construct(TrueLiveAuthService $authService)
     {
         $this->authService = $authService;
     }
@@ -390,13 +390,13 @@ class ShomerApiAuth
     public function handle(Request $request, Closure $next)
     {
         if (!$this->authService->isAuthenticated()) {
-            return redirect()->route('shomer.login')
+            return redirect()->route('truelive.login')
                 ->with('error', 'Please log in to continue');
         }
 
         // Add token to request for use in controllers
         $request->merge([
-            'shomer_access_token' => $this->authService->getAccessToken(),
+            'truelive_access_token' => $this->authService->getAccessToken(),
         ]);
 
         return $next($request);
@@ -409,7 +409,7 @@ Register middleware in `app/Http/Kernel.php`:
 ```php
 protected $routeMiddleware = [
     // ... other middleware
-    'shomer.auth' => \App\Http\Middleware\ShomerApiAuth::class,
+    'truelive.auth' => \App\Http\Middleware\TrueLiveApiAuth::class,
 ];
 ```
 
@@ -440,7 +440,7 @@ When the access token expires, use the refresh token to obtain a new access toke
 
 ### Laravel Implementation
 
-Add to `ShomerAuthService`:
+Add to `TrueLiveAuthService`:
 
 ```php
 /**
@@ -470,9 +470,9 @@ public function refreshToken(): array
 
         // Update tokens in session
         session([
-            'shomer_access_token' => $data['access_token'],
-            'shomer_refresh_token' => $data['refresh_token'],
-            'shomer_token_expires_at' => now()->addSeconds($data['expires_in']),
+            'truelive_access_token' => $data['access_token'],
+            'truelive_refresh_token' => $data['refresh_token'],
+            'truelive_token_expires_at' => now()->addSeconds($data['expires_in']),
         ]);
 
         return [
@@ -487,7 +487,7 @@ public function refreshToken(): array
         Log::error('Token refresh failed', ['error' => $errorData]);
 
         // Clear invalid tokens
-        session()->forget(['shomer_access_token', 'shomer_refresh_token', 'shomer_token_expires_at']);
+        session()->forget(['truelive_access_token', 'truelive_refresh_token', 'truelive_token_expires_at']);
 
         return [
             'success' => false,
@@ -503,7 +503,7 @@ public function refreshToken(): array
  */
 public function ensureValidToken(): bool
 {
-    $expiresAt = session('shomer_token_expires_at');
+    $expiresAt = session('truelive_token_expires_at');
 
     if (!$expiresAt || now()->greaterThan($expiresAt)) {
         $result = $this->refreshToken();
@@ -516,24 +516,24 @@ public function ensureValidToken(): bool
 
 #### Auto-Refresh Middleware
 
-Update `ShomerApiAuth` middleware:
+Update `TrueLiveApiAuth` middleware:
 
 ```php
 public function handle(Request $request, Closure $next)
 {
     if (!$this->authService->isAuthenticated()) {
-        return redirect()->route('shomer.login')
+        return redirect()->route('truelive.login')
             ->with('error', 'Please log in to continue');
     }
 
     // Automatically refresh token if expired
     if (!$this->authService->ensureValidToken()) {
-        return redirect()->route('shomer.login')
+        return redirect()->route('truelive.login')
             ->with('error', 'Session expired. Please log in again.');
     }
 
     $request->merge([
-        'shomer_access_token' => $this->authService->getAccessToken(),
+        'truelive_access_token' => $this->authService->getAccessToken(),
     ]);
 
     return $next($request);
@@ -562,10 +562,10 @@ namespace App\Exceptions;
 use GuzzleHttp\Exception\ClientException;
 use Illuminate\Http\JsonResponse;
 
-class ShomerApiErrorHandler
+class TrueLiveApiErrorHandler
 {
     /**
-     * Handle Shomer API errors
+     * Handle TrueLive API errors
      *
      * @param \Exception $e
      * @return JsonResponse
@@ -616,7 +616,7 @@ class ShomerApiErrorHandler
 
 ### Laravel Implementation
 
-Add to `ShomerAuthService`:
+Add to `TrueLiveAuthService`:
 
 ```php
 /**
@@ -643,7 +643,7 @@ public function logout(): array
     }
 
     // Always clear local tokens
-    session()->forget(['shomer_access_token', 'shomer_refresh_token', 'shomer_token_expires_at']);
+    session()->forget(['truelive_access_token', 'truelive_refresh_token', 'truelive_token_expires_at']);
 
     return [
         'success' => true,
@@ -652,7 +652,7 @@ public function logout(): array
 }
 ```
 
-Add to `ShomerLoginController`:
+Add to `TrueLiveLoginController`:
 
 ```php
 /**
@@ -719,7 +719,7 @@ Note: `site_ids` is optional. If omitted, all sites for the customer are returne
 
 #### Create SureView Service
 
-Create `app/Services/ShomerSureViewService.php`:
+Create `app/Services/TrueLiveSureViewService.php`:
 
 ```php
 <?php
@@ -730,16 +730,16 @@ use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
 use Illuminate\Support\Facades\Log;
 
-class ShomerSureViewService
+class TrueLiveSureViewService
 {
     protected Client $client;
-    protected ShomerAuthService $authService;
+    protected TrueLiveAuthService $authService;
 
-    public function __construct(ShomerAuthService $authService)
+    public function __construct(TrueLiveAuthService $authService)
     {
         $this->authService = $authService;
-        $baseUrl = config('services.shomer.base_url');
-        $apiVersion = config('services.shomer.api_version');
+        $baseUrl = config('services.truelive.base_url');
+        $apiVersion = config('services.truelive.api_version');
 
         $this->client = new Client([
             'base_uri' => "{$baseUrl}/api/{$apiVersion}/",
@@ -850,17 +850,17 @@ class SureViewSite
 
 namespace App\Http\Controllers;
 
-use App\Services\ShomerSureViewService;
+use App\Services\TrueLiveSureViewService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 
 class SureViewController extends Controller
 {
-    protected ShomerSureViewService $sureViewService;
+    protected TrueLiveSureViewService $sureViewService;
 
-    public function __construct(ShomerSureViewService $sureViewService)
+    public function __construct(TrueLiveSureViewService $sureViewService)
     {
-        $this->middleware('shomer.auth');
+        $this->middleware('truelive.auth');
         $this->sureViewService = $sureViewService;
     }
 
@@ -895,7 +895,7 @@ class SureViewController extends Controller
 
 ```php
 // In your controller or service
-$sureViewService = app(ShomerSureViewService::class);
+$sureViewService = app(TrueLiveSureViewService::class);
 
 // Get all sites for a customer
 $result = $sureViewService->getSites('9f6A');
@@ -950,7 +950,7 @@ Retrieve all sites grouped by customer ID. No request body required.
 
 ### Laravel Implementation
 
-Add to `ShomerSureViewService`:
+Add to `TrueLiveSureViewService`:
 
 ```php
 /**
@@ -1071,7 +1071,7 @@ Retrieve all cameras for a specific site.
 
 ### Laravel Implementation
 
-Add to `ShomerSureViewService`:
+Add to `TrueLiveSureViewService`:
 
 ```php
 /**
@@ -1206,7 +1206,7 @@ Manually trigger synchronization of SureView devices. This endpoint is restricte
 
 ### Laravel Implementation
 
-Add to `ShomerSureViewService`:
+Add to `TrueLiveSureViewService`:
 
 ```php
 /**
@@ -1305,7 +1305,7 @@ use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
 use Illuminate\Support\Facades\Log;
 
-class ShomerApiService
+class TrueLiveApiService
 {
     protected Client $client;
     protected string $accessToken;
@@ -1313,8 +1313,8 @@ class ShomerApiService
 
     public function __construct()
     {
-        $baseUrl = config('services.shomer.base_url');
-        $apiVersion = config('services.shomer.api_version');
+        $baseUrl = config('services.truelive.base_url');
+        $apiVersion = config('services.truelive.api_version');
 
         $this->client = new Client([
             'base_uri' => "{$baseUrl}/api/{$apiVersion}/",
@@ -1326,16 +1326,16 @@ class ShomerApiService
 
     protected function loadTokensFromSession(): void
     {
-        $this->accessToken = session('shomer_access_token', '');
-        $this->refreshToken = session('shomer_refresh_token', '');
+        $this->accessToken = session('truelive_access_token', '');
+        $this->refreshToken = session('truelive_refresh_token', '');
     }
 
     protected function saveTokensToSession(array $tokenData): void
     {
         session([
-            'shomer_access_token' => $tokenData['access_token'],
-            'shomer_refresh_token' => $tokenData['refresh_token'],
-            'shomer_token_expires_at' => now()->addSeconds($tokenData['expires_in']),
+            'truelive_access_token' => $tokenData['access_token'],
+            'truelive_refresh_token' => $tokenData['refresh_token'],
+            'truelive_token_expires_at' => now()->addSeconds($tokenData['expires_in']),
         ]);
 
         $this->accessToken = $tokenData['access_token'];
@@ -1389,7 +1389,7 @@ class ShomerApiService
 
             return ['success' => true, 'data' => $data];
         } catch (GuzzleException $e) {
-            session()->forget(['shomer_access_token', 'shomer_refresh_token', 'shomer_token_expires_at']);
+            session()->forget(['truelive_access_token', 'truelive_refresh_token', 'truelive_token_expires_at']);
             return $this->handleException($e);
         }
     }
@@ -1407,7 +1407,7 @@ class ShomerApiService
             Log::warning('Logout API call failed', ['error' => $e->getMessage()]);
         }
 
-        session()->forget(['shomer_access_token', 'shomer_refresh_token', 'shomer_token_expires_at']);
+        session()->forget(['truelive_access_token', 'truelive_refresh_token', 'truelive_token_expires_at']);
         return ['success' => true, 'message' => 'Logged out successfully'];
     }
 
@@ -1506,7 +1506,7 @@ class ShomerApiService
         $errorBody = $e->getResponse()?->getBody()->getContents();
         $errorData = json_decode($errorBody, true);
 
-        Log::error('Shomer API error', [
+        Log::error('TrueLive API error', [
             'status_code' => $statusCode,
             'error' => $errorData,
         ]);
@@ -1535,16 +1535,16 @@ class ShomerApiService
 
 namespace App\Http\Controllers;
 
-use App\Services\ShomerApiService;
+use App\Services\TrueLiveApiService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Validator;
 
-class ShomerApiController extends Controller
+class TrueLiveApiController extends Controller
 {
-    protected ShomerApiService $apiService;
+    protected TrueLiveApiService $apiService;
 
-    public function __construct(ShomerApiService $apiService)
+    public function __construct(TrueLiveApiService $apiService)
     {
         $this->apiService = $apiService;
     }
@@ -1672,23 +1672,23 @@ Add to `routes/api.php`:
 ```php
 <?php
 
-use App\Http\Controllers\ShomerApiController;
+use App\Http\Controllers\TrueLiveApiController;
 use Illuminate\Support\Facades\Route;
 
-Route::prefix('shomer')->group(function () {
+Route::prefix('truelive')->group(function () {
     // Public routes
-    Route::post('/login', [ShomerApiController::class, 'login']);
+    Route::post('/login', [TrueLiveApiController::class, 'login']);
 
     // Protected routes
-    Route::middleware('shomer.auth')->group(function () {
-        Route::post('/logout', [ShomerApiController::class, 'logout']);
+    Route::middleware('truelive.auth')->group(function () {
+        Route::post('/logout', [TrueLiveApiController::class, 'logout']);
 
         // SureView endpoints
         Route::prefix('sureview')->group(function () {
-            Route::post('/get_sites', [ShomerApiController::class, 'getSites']);
-            Route::post('/get_all_sites', [ShomerApiController::class, 'getAllSites']);
-            Route::post('/get_cameras', [ShomerApiController::class, 'getCameras']);
-            Route::post('/sync', [ShomerApiController::class, 'triggerSync']);
+            Route::post('/get_sites', [TrueLiveApiController::class, 'getSites']);
+            Route::post('/get_all_sites', [TrueLiveApiController::class, 'getAllSites']);
+            Route::post('/get_cameras', [TrueLiveApiController::class, 'getCameras']);
+            Route::post('/sync', [TrueLiveApiController::class, 'triggerSync']);
         });
     });
 });
@@ -1700,7 +1700,7 @@ Route::prefix('shomer')->group(function () {
 
 ### 1. Custom Exception Handler
 
-Create `app/Exceptions/ShomerApiException.php`:
+Create `app/Exceptions/TrueLiveApiException.php`:
 
 ```php
 <?php
@@ -1709,7 +1709,7 @@ namespace App\Exceptions;
 
 use Exception;
 
-class ShomerApiException extends Exception
+class TrueLiveApiException extends Exception
 {
     protected int $statusCode;
     protected array $errorData;
@@ -1769,7 +1769,7 @@ try {
     $result = $this->apiService->getSites($customerId);
 } catch (ConnectException $e) {
     return response()->json([
-        'error' => 'Cannot connect to Shomer API',
+        'error' => 'Cannot connect to TrueLive API',
         'message' => 'Please check your internet connection',
     ], 503);
 } catch (RequestException $e) {
@@ -1791,7 +1791,7 @@ Create a helper class:
 
 namespace App\Helpers;
 
-class ShomerErrorHelper
+class TrueLiveErrorHelper
 {
     public static function getUserFriendlyMessage(int $statusCode, string $detail = ''): string
     {
@@ -1813,7 +1813,7 @@ Usage:
 
 ```php
 if (!$result['success']) {
-    $message = ShomerErrorHelper::getUserFriendlyMessage(
+    $message = TrueLiveErrorHelper::getUserFriendlyMessage(
         $result['status_code'] ?? 500,
         $result['error']
     );
@@ -1835,7 +1835,7 @@ use Illuminate\Support\Facades\Cache;
 
 public function getAllSitesCached(): array
 {
-    return Cache::remember('shomer_all_sites', 300, function () {
+    return Cache::remember('truelive_all_sites', 300, function () {
         return $this->apiService->getAllSites();
     });
 }
@@ -1850,7 +1850,7 @@ Create a job for sync operation:
 
 namespace App\Jobs;
 
-use App\Services\ShomerApiService;
+use App\Services\TrueLiveApiService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -1861,7 +1861,7 @@ class SyncSureViewData implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public function handle(ShomerApiService $apiService): void
+    public function handle(TrueLiveApiService $apiService): void
     {
         $result = $apiService->triggerSync();
 
@@ -1892,10 +1892,10 @@ return response()->json([
 Add to `.env`:
 
 ```env
-SHOMER_API_BASE_URL=https://your-api-domain.com
-SHOMER_API_VERSION=v1
-SHOMER_API_TIMEOUT=30
-SHOMER_TOKEN_CACHE_MINUTES=1800
+TRUELIVE_API_BASE_URL=https://your-api-domain.com
+TRUELIVE_API_VERSION=v1
+TRUELIVE_API_TIMEOUT=30
+TRUELIVE_TOKEN_CACHE_MINUTES=1800
 ```
 
 ---

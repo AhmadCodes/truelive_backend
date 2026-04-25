@@ -268,17 +268,17 @@ async def test_smtp_connection(
         smtp_user = system_settings_service.get_setting(db, 'smtp.username')
         smtp_password = system_settings_service.get_setting(db, 'smtp.password')
         smtp_from_email = system_settings_service.get_setting(db, 'smtp.from_email')
-        smtp_from_name = system_settings_service.get_setting(db, 'smtp.from_name', 'Shomer Portal')
+        smtp_from_name = system_settings_service.get_setting(db, 'smtp.from_name', 'TrueLive Portal')
         smtp_use_tls = system_settings_service.get_setting(db, 'smtp.use_tls', True)
 
         # Create test message
         msg = MIMEMultipart()
         msg['From'] = f"{smtp_from_name} <{smtp_from_email}>"
         msg['To'] = data.test_email
-        msg['Subject'] = "Shomer Portal - SMTP Test"
+        msg['Subject'] = "TrueLive Portal - SMTP Test"
 
         body = f"""
-        This is a test email from Shomer Portal.
+        This is a test email from TrueLive Portal.
 
         If you received this email, your SMTP configuration is working correctly.
 
@@ -286,7 +286,7 @@ async def test_smtp_connection(
         Timestamp: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}
 
         ---
-        Shomer Portal System Settings
+        TrueLive Portal System Settings
         """
         msg.attach(MIMEText(body, 'plain'))
 

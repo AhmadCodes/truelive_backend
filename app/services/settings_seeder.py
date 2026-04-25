@@ -55,7 +55,7 @@ DEFAULT_SETTINGS = [
     },
     {
         "key": "smtp.from_name",
-        "value": "Shomer Portal",
+        "value": "TrueLive Portal",
         "category": "smtp",
         "description": "Default sender display name",
         "is_encrypted": False,

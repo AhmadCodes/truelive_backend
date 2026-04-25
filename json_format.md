@@ -1,6 +1,6 @@
 # WebSocket Configuration JSON Format
 
-This document describes the detailed structure of the JSON configuration sent from the Shomer Portal backend to PC clients via WebSocket for deploying camera display layouts.
+This document describes the detailed structure of the JSON configuration sent from the TrueLive Portal backend to PC clients via WebSocket for deploying camera display layouts.
 
 ## Table of Contents
 

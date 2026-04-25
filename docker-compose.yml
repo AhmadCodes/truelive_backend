@@ -4,12 +4,12 @@ services:
   # PostgreSQL Database
   postgres:
     image: postgres:15-alpine
-    container_name: shomer_postgres
+    container_name: truelive_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: shomer
-      POSTGRES_PASSWORD: shomer_password
-      POSTGRES_DB: shomer_portal
+      POSTGRES_USER: truelive
+      POSTGRES_PASSWORD: truelive_password
+      POSTGRES_DB: truelive_portal
       POSTGRES_INITDB_ARGS: "-E UTF8"
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -17,17 +17,17 @@ services:
     ports:
       - "127.0.0.1:5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U shomer -d shomer_portal"]
+      test: ["CMD-SHELL", "pg_isready -U truelive -d truelive_portal"]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
-      - shomer_network
+      - truelive_network
 
   # Redis Cache & Message Broker
   redis:
     image: redis:7-alpine
-    container_name: shomer_redis
+    container_name: truelive_redis
     restart: unless-stopped
     command: redis-server --appendonly yes --replica-read-only no --requirepass YtrewqQwerty123123Ytrewq
     volumes:
@@ -40,7 +40,7 @@ services:
       timeout: 3s
       retries: 5
     networks:
-      - shomer_network
+      - truelive_network
 
   # FastAPI Backend Application
   backend:
@@ -48,7 +48,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: production
-    container_name: shomer_backend
+    container_name: truelive_backend
     restart: unless-stopped
     init: true
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
@@ -61,7 +61,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql://shomer:shomer_password@postgres:5432/shomer_portal
+      - DATABASE_URL=postgresql://truelive:truelive_password@postgres:5432/truelive_portal
       - REDIS_URL=redis://:YtrewqQwerty123123Ytrewq@redis:6379/0
       - CELERY_BROKER_URL=redis://:YtrewqQwerty123123Ytrewq@redis:6379/0
       - CELERY_RESULT_BACKEND=redis://:YtrewqQwerty123123Ytrewq@redis:6379/1
@@ -74,7 +74,7 @@ services:
       redis:
         condition: service_healthy
     networks:
-      - shomer_network
+      - truelive_network
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -88,7 +88,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: production
-    container_name: shomer_celery_worker
+    container_name: truelive_celery_worker
     restart: unless-stopped
     init: true
     command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=4
@@ -97,7 +97,7 @@ services:
       - upload_data:/app/uploads
       - logs:/app/logs
     environment:
-      - DATABASE_URL=postgresql://shomer:shomer_password@postgres:5432/shomer_portal
+      - DATABASE_URL=postgresql://truelive:truelive_password@postgres:5432/truelive_portal
       - REDIS_URL=redis://:YtrewqQwerty123123Ytrewq@redis:6379/0
       - CELERY_BROKER_URL=redis://:YtrewqQwerty123123Ytrewq@redis:6379/0
       - CELERY_RESULT_BACKEND=redis://:YtrewqQwerty123123Ytrewq@redis:6379/1
@@ -113,7 +113,7 @@ services:
       redis:
         condition: service_healthy
     networks:
-      - shomer_network
+      - truelive_network
 
   # Celery Beat Scheduler
   celery_beat:
@@ -121,7 +121,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: production
-    container_name: shomer_celery_beat
+    container_name: truelive_celery_beat
     restart: unless-stopped
     command: celery -A app.tasks.celery_app beat --loglevel=info
     volumes:
@@ -129,7 +129,7 @@ services:
       - celery_beat_data:/var/lib/celery
       - logs:/app/logs
     environment:
-      - DATABASE_URL=postgresql://shomer:shomer_password@postgres:5432/shomer_portal
+      - DATABASE_URL=postgresql://truelive:truelive_password@postgres:5432/truelive_portal
       - REDIS_URL=redis://:YtrewqQwerty123123Ytrewq@redis:6379/0
       - CELERY_BROKER_URL=redis://:YtrewqQwerty123123Ytrewq@redis:6379/0
       - CELERY_RESULT_BACKEND=redis://:YtrewqQwerty123123Ytrewq@redis:6379/1
@@ -139,7 +139,7 @@ services:
       - redis
       - celery_worker
     networks:
-      - shomer_network
+      - truelive_network
 
   # WebSocket Server
   websocket:
@@ -147,7 +147,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: production
-    container_name: shomer_websocket
+    container_name: truelive_websocket
     restart: unless-stopped
     command: python -m app.services.websocket_server
     ports:
@@ -156,7 +156,7 @@ services:
       - ./app:/app/app:ro
       - logs:/app/logs
     environment:
-      - DATABASE_URL=postgresql://shomer:shomer_password@postgres:5432/shomer_portal
+      - DATABASE_URL=postgresql://truelive:truelive_password@postgres:5432/truelive_portal
       - REDIS_URL=redis://:YtrewqQwerty123123Ytrewq@redis:6379/0
       - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
       - JWT_SECRET=${JWT_SECRET:-your-jwt-secret-key}
@@ -167,7 +167,7 @@ services:
       redis:
         condition: service_healthy
     networks:
-      - shomer_network
+      - truelive_network
     healthcheck:
       test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.connect(('localhost', 8080)); s.close()"]
       interval: 30s
@@ -180,21 +180,21 @@ services:
       context: .
       dockerfile: Dockerfile
       target: production
-    container_name: shomer_migration
+    container_name: truelive_migration
     command: alembic upgrade head
     volumes:
       - ./app:/app/app:ro
       - ./alembic:/app/alembic:ro
       - ./alembic.ini:/app/alembic.ini:ro
     environment:
-      - DATABASE_URL=postgresql://shomer:shomer_password@postgres:5432/shomer_portal
+      - DATABASE_URL=postgresql://truelive:truelive_password@postgres:5432/truelive_portal
       - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
       - JWT_SECRET=${JWT_SECRET:-your-jwt-secret-key}
     depends_on:
       postgres:
         condition: service_healthy
     networks:
-      - shomer_network
+      - truelive_network
     restart: "no"
 
 # Volumes
@@ -212,7 +212,7 @@ volumes:
 
 # Networks
 networks:
-  shomer_network:
+  truelive_network:
     driver: bridge
     ipam:
       config:

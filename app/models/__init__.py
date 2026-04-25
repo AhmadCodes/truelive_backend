@@ -1,5 +1,5 @@
 """
-SQLAlchemy ORM models for the Shomer Portal backend.
+SQLAlchemy ORM models for the TrueLive Portal backend.
 """
 
 from app.models.base import BaseModel, TimestampMixin

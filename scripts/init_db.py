@@ -38,7 +38,7 @@ def init_database():
             admin_user = User(
                 user_id=uuid.uuid4(),
                 username='admin',
-                email='admin@shomerportal.com',
+                email='admin@trueliveportal.com',
                 password_hash=get_password_hash('admin123'),  # CHANGE THIS IN PRODUCTION!
                 role='super_admin',
                 is_active=True
