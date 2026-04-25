@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Shomer Portal is a FastAPI-based surveillance camera management system. The backend manages sites, cameras, PCs, screens/views, and users with JWT authentication. It communicates with PC client applications via WebSocket to deploy camera grid configurations.
+TrueLive Portal is a FastAPI-based surveillance camera management system. The backend manages sites, cameras, PCs, screens/views, and users with JWT authentication. It communicates with PC client applications via WebSocket to deploy camera grid configurations.
 
 ## Project Structure
 
@@ -227,7 +227,7 @@ Sync process (`app/services/sureview_service.py`):
 # Database
 docker-compose ps postgres
 docker-compose logs postgres
-docker-compose exec postgres psql -U shomer -d shomer_portal
+docker-compose exec postgres psql -U truelive -d truelive_portal
 
 # WebSocket
 docker-compose logs websocket

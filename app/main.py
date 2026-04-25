@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
-    description="Shomer Portal Backend API for camera surveillance management",
+    description="TrueLive Portal Backend API for camera surveillance management",
     docs_url=f"{settings.API_V1_PREFIX}/docs",
     redoc_url=f"{settings.API_V1_PREFIX}/redoc",
     openapi_url=f"{settings.API_V1_PREFIX}/openapi.json",
@@ -135,7 +135,7 @@ async def health_check():
 async def root():
     """Root endpoint with API information."""
     return {
-        "message": "Shomer Portal API",
+        "message": "TrueLive Portal API",
         "version": settings.APP_VERSION,
         "docs": f"{settings.API_V1_PREFIX}/docs",
     }

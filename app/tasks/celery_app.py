@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 # Create Celery app
 celery_app = Celery(
-    "shomer_tasks",
+    "truelive_tasks",
     broker=settings.CELERY_BROKER_URL,
     backend=settings.CELERY_RESULT_BACKEND
 )

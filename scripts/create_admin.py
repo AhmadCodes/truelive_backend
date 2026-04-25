@@ -20,8 +20,8 @@ def create_admin():
         admin_user = User(
             user_id=uuid.uuid4(),
             username='admin',
-            full_name='Shomer Admin',
-            email='admin@shomerportal.com',
+            full_name='TrueLive Admin',
+            email='admin@trueliveportal.com',
             password_hash=get_password_hash('admin@USVG1'),
             role='super_admin',
             is_active=True
@@ -31,7 +31,7 @@ def create_admin():
         print('✓ Admin user created successfully')
         print('  Username: admin')
         print('  Password: admin@USVG1')
-        print('  Name: Shomer Admin')
+        print('  Name: TrueLive Admin')
         print('  Role: super_admin')
     except Exception as e:
         print(f'❌ Error: {e}')

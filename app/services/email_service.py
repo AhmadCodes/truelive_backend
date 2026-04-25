@@ -129,7 +129,7 @@ class EmailService:
 
         # Plain text fallback
         text_body = f"""
-You have been invited to join Shomer Portal by {invited_by}.
+You have been invited to join TrueLive Portal by {invited_by}.
 
 Click the link below to create your account:
 {registration_url}
@@ -139,12 +139,12 @@ This invitation will expire in {settings.INVITATION_TOKEN_EXPIRY_HOURS} hours.
 If you did not expect this invitation, please ignore this email.
 
 ---
-Shomer Portal Team
+TrueLive Portal Team
         """.strip()
 
         return self.send_email(
             to_email=to_email,
-            subject="You're invited to join Shomer Portal",
+            subject="You're invited to join TrueLive Portal",
             html_body=html_body,
             text_body=text_body
         )
@@ -162,7 +162,7 @@ Shomer Portal Team
     <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
         <h1 style="color: #2c3e50; margin-top: 0;">You're Invited!</h1>
         <p>Hello,</p>
-        <p>You have been invited by <strong>{{invited_by}}</strong> to join Shomer Portal.</p>
+        <p>You have been invited by <strong>{{invited_by}}</strong> to join TrueLive Portal.</p>
         <p>Click the button below to create your account:</p>
         <div style="text-align: center; margin: 30px 0;">
             <a href="{{registration_url}}" style="background-color: #007bff; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">Create Account</a>
@@ -175,7 +175,7 @@ Shomer Portal Team
         </p>
         <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
         <p style="color: #999; font-size: 12px; text-align: center;">
-            Shomer Portal - Surveillance Camera Management System<br>
+            TrueLive Portal - Surveillance Camera Management System<br>
             This is an automated message, please do not reply.
         </p>
     </div>
