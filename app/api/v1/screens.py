@@ -361,8 +361,32 @@ async def update_screen(
                 detail=f"PC with ID '{update_data['pc_id']}' not found"
             )
 
+    # Detect grid resize so we can cascade to views and prune out-of-bounds mappings.
+    # Without this, views keep their old layout_rows/layout_columns and assign_camera_to_slot
+    # rejects placements in the new cells (e.g., screen=3x4 with views still 3x3 -> col=4 -> 400).
+    new_rows = update_data.get('rows', screen.rows)
+    new_cols = update_data.get('columns', screen.columns)
+    grid_resized = new_rows != screen.rows or new_cols != screen.columns
+
     for field, value in update_data.items():
         setattr(screen, field, value)
+
+    if grid_resized:
+        # Cascade new dimensions to all views of this screen.
+        db.query(View).filter(View.screen_id == screen.id).update(
+            {View.layout_rows: new_rows, View.layout_columns: new_cols},
+            synchronize_session=False,
+        )
+        # Drop any mappings whose slot now falls outside the new grid.
+        pruned = db.query(ScreenMapping).filter(
+            ScreenMapping.screen_id == screen.id,
+            or_(ScreenMapping.slot_row > new_rows, ScreenMapping.slot_col > new_cols),
+        ).delete(synchronize_session=False)
+        if pruned:
+            logger.info(
+                f"Screen '{screen_id}' resized to {new_rows}x{new_cols}; "
+                f"pruned {pruned} out-of-bounds mapping(s)"
+            )
 
     db.commit()
     db.refresh(screen)
