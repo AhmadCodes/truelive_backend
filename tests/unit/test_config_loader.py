@@ -183,13 +183,13 @@ class TestLoadPCConfig:
 
         # Check mappings
         mappings = result["mappings"]["screen_to_cameras"][sample_pc.id][sample_screen.id]
-        assert sample_view.name in mappings
+        assert str(sample_view.id) in mappings
 
         # Check slot mapping
         slot_key = f"slot_{sample_screen_mapping.slot_row}_{sample_screen_mapping.slot_col}"
-        assert slot_key in mappings[sample_view.name]
+        assert slot_key in mappings[str(sample_view.id)]
 
-        slot_data = mappings[sample_view.name][slot_key]
+        slot_data = mappings[str(sample_view.id)][slot_key]
         assert slot_data["site_id"] == sample_site.id
         assert slot_data["camera_id"] == sample_camera.id
         assert slot_data["site_name"] == sample_site.name
@@ -226,7 +226,7 @@ class TestLoadPCConfig:
                                      camera_use_tcp=True, site_use_tcp=False)
 
         result = load_pc_config(sample_pc.id, db_session)
-        slot_data = result["mappings"]["screen_to_cameras"][sample_pc.id][sample_screen.id][sample_view.name]["slot_1_1"]
+        slot_data = result["mappings"]["screen_to_cameras"][sample_pc.id][sample_screen.id][str(sample_view.id)]["slot_1_1"]
         assert slot_data["use_tcp"] is True
 
     def test_use_tcp_inherits_site_when_camera_null(self, db_session, sample_pc, sample_screen,
@@ -236,7 +236,7 @@ class TestLoadPCConfig:
                                      camera_use_tcp=None, site_use_tcp=True)
 
         result = load_pc_config(sample_pc.id, db_session)
-        slot_data = result["mappings"]["screen_to_cameras"][sample_pc.id][sample_screen.id][sample_view.name]["slot_1_1"]
+        slot_data = result["mappings"]["screen_to_cameras"][sample_pc.id][sample_screen.id][str(sample_view.id)]["slot_1_1"]
         assert slot_data["use_tcp"] is True
 
     def test_use_tcp_camera_false_overrides_site_true(self, db_session, sample_pc, sample_screen,
@@ -246,7 +246,7 @@ class TestLoadPCConfig:
                                      camera_use_tcp=False, site_use_tcp=True)
 
         result = load_pc_config(sample_pc.id, db_session)
-        slot_data = result["mappings"]["screen_to_cameras"][sample_pc.id][sample_screen.id][sample_view.name]["slot_1_1"]
+        slot_data = result["mappings"]["screen_to_cameras"][sample_pc.id][sample_screen.id][str(sample_view.id)]["slot_1_1"]
         assert slot_data["use_tcp"] is False
 
     def test_load_multiple_views(self, db_session, sample_pc, sample_screen):
@@ -263,9 +263,11 @@ class TestLoadPCConfig:
 
         result = load_pc_config(sample_pc.id, db_session)
 
+        # The loader keys views by str(view.id) (UUID), not view.name, so duplicate
+        # names within a screen don't collide.
         mappings = result["mappings"]["screen_to_cameras"][sample_pc.id][sample_screen.id]
-        assert "view_1" in mappings
-        assert "view_2" in mappings
+        assert str(view1.id) in mappings
+        assert str(view2.id) in mappings
 
     def test_load_multiple_slots_in_view(self, db_session, sample_pc, sample_screen,
                                          sample_view, sample_site, sample_camera):
@@ -291,7 +293,7 @@ class TestLoadPCConfig:
 
         result = load_pc_config(sample_pc.id, db_session)
 
-        view_mappings = result["mappings"]["screen_to_cameras"][sample_pc.id][sample_screen.id][sample_view.name]
+        view_mappings = result["mappings"]["screen_to_cameras"][sample_pc.id][sample_screen.id][str(sample_view.id)]
         assert len(view_mappings) == 3
         assert "slot_1_1" in view_mappings
         assert "slot_1_2" in view_mappings
@@ -312,7 +314,7 @@ class TestLoadPCConfig:
         result = load_pc_config(sample_pc.id, db_session)
 
         # Mapping should not be included if camera doesn't exist
-        view_mappings = result["mappings"]["screen_to_cameras"][sample_pc.id][sample_screen.id][sample_view.name]
+        view_mappings = result["mappings"]["screen_to_cameras"][sample_pc.id][sample_screen.id][str(sample_view.id)]
         assert "slot_1_1" not in view_mappings
 
     def test_database_error_handling(self, mock_db_session):
