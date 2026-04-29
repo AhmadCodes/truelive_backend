@@ -131,15 +131,16 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
 
             logger.info(f"Processing screen {screen_id}, found {len(screen_views)} views in mappings")
 
-            # Query View objects from database for this screen to get metadata
+            # Query View objects from database for this screen to get metadata.
+            # Key by view.id (UUID): the loader passes the same key, and unlike
+            # view.name it tolerates duplicate view names within a screen.
             try:
                 db_views = db.query(View).filter(View.screen_id == screen_id).all()
-                # Create mapping from view name to View object
-                view_name_to_obj = {view.name: view for view in db_views}
+                view_id_to_obj = {str(view.id): view for view in db_views}
                 logger.info(f"Found {len(db_views)} views in database for screen {screen_id}")
             except Exception as e:
                 logger.error(f"Error querying views for screen {screen_id}: {e}")
-                view_name_to_obj = {}
+                view_id_to_obj = {}
 
             # Filter views that have at least one camera (omit entirely empty views)
             for view_key, view_data in screen_views.items():
@@ -167,8 +168,8 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
                         valid_views[view_key] = view_data
 
                         # Store View object metadata if found in database
-                        if view_key in view_name_to_obj:
-                            view_metadata[view_key] = view_name_to_obj[view_key]
+                        if view_key in view_id_to_obj:
+                            view_metadata[view_key] = view_id_to_obj[view_key]
                         else:
                             logger.warning(f"View '{view_key}' not found in database")
                     else:

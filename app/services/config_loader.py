@@ -209,7 +209,11 @@ def load_pc_config(pc_id: str, db: Session) -> Dict[str, Any]:
                                 "playing_state": mapping.playing_state
                             }
 
-                screen_mappings[view.name] = view_mappings
+                # Key by view.id (UUID, guaranteed unique) instead of view.name to
+                # tolerate duplicate view names within a screen. Without this, two
+                # views sharing a name would collide in this dict and the second
+                # would silently overwrite the first's mappings.
+                screen_mappings[str(view.id)] = view_mappings
 
             pc_mappings[screen.id] = screen_mappings
 
