@@ -15,9 +15,12 @@ import time
 # Add app to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from app.models.site import Site, Base
+from app.database import Base
+from app.models.site import Site
 from app.models.camera import Camera
-from app.models.screen import Screen, View, ScreenMapping
+from app.models.screen import Screen
+from app.models.view import View
+from app.models.screen_mapping import ScreenMapping
 from app.models.pc import PC
 
 
