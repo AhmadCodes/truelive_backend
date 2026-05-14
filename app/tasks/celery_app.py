@@ -33,7 +33,7 @@ celery_app.conf.update(
 )
 
 # Dedicated queues for the alerting pipeline. alert_parse handles MIME parsing
-# and persistence; alert_deliver runs with prefetch=1 so slow GuardDesk responses
+# and persistence; alert_deliver runs with prefetch=1 so slow consumer responses
 # don't block parallel deliveries. Configure both worker pools in deployment:
 #   celery -A app.tasks.celery_app worker -Q alert_parse,celery -c 4
 #   celery -A app.tasks.celery_app worker -Q alert_deliver -c 8 --prefetch-multiplier=1

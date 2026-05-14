@@ -7,7 +7,7 @@ try to use the client without the dependency installed.
 
 Storage URIs are stored in DB as `s3://<bucket>/<key>` for forward-compat with a
 future move off MinIO. Presigned URLs are minted via the configured endpoint
-(`s3.usvg.ai`) so they can be served externally to GuardDesk.
+(`s3.usvg.ai`) so they can be served externally to the downstream platform.
 """
 
 from __future__ import annotations

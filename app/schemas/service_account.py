@@ -1,31 +1,105 @@
 """
 Pydantic schemas for service-account auth.
+
+A **service account** is a non-human principal — an external system (e.g. a
+downstream monitoring platform) that needs to call TrueLive APIs without a
+human admin's JWT. Each service account holds one or more scoped bearer tokens
+in the format `tlsa_<base64url>`. Auth header: `Authorization: Bearer tlsa_<...>`.
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
 
+# ---------- scopes ---------- #
+#
+# Scopes are the closed set of permissions a service account can hold. New
+# scopes require a code change (intentional — scopes are a security boundary).
+# Each scope's meaning is documented inline below; the endpoint create
+# description in app/api/v1/service_accounts.py mirrors this table.
+
+Scope = Literal[
+    "alerts:read",
+    "alerts:raw:read",
+    "webhook:manage",
+    "addresses:read",
+]
+"""Valid permission scopes for service-account tokens.
+
+- `alerts:read`      — GET on /alerts, /alerts/{id}, /alerts/{id}/deliveries,
+                       and /alerts/{id}/media/{media_id}.
+- `alerts:raw:read`  — GET on /alerts/{id}/raw (raw RFC822 source). Separate
+                       from `alerts:read` so callers can grant the parsed view
+                       without granting access to the unredacted original mail.
+- `webhook:manage`   — Full CRUD on /alerting/webhook-consumers, scoped to
+                       rows the caller owns.
+- `addresses:read`   — GET on /cameras/{id}/alert-addresses.
+"""
+
+
 class ServiceAccountCreate(BaseModel):
-    name: str = Field(..., min_length=1, max_length=255)
-    description: Optional[str] = None
-    scopes: list[str] = Field(default_factory=list)
+    """Request body for creating a new service account.
+
+    A service account is just the principal — it holds no credentials by
+    itself. After creation, issue one or more tokens via
+    `POST /service-accounts/{id}/tokens`.
+    """
+    name: str = Field(
+        ..., min_length=1, max_length=255,
+        description=(
+            "Unique human-readable identifier, e.g. `acme-monitoring`. Use one "
+            "service account per integrating system."
+        ),
+        examples=["acme-monitoring"],
+    )
+    description: Optional[str] = Field(
+        None,
+        description="Free-form notes — who owns it, what it's used for, when to revoke.",
+        examples=["Production monitoring platform — owns webhook consumer + reads alerts."],
+    )
+    scopes: list[Scope] = Field(
+        default_factory=list,
+        description=(
+            "Permissions this account holds. Pick from the closed set: "
+            "`alerts:read`, `alerts:raw:read`, `webhook:manage`, `addresses:read`. "
+            "See the Service Accounts section header for what each scope grants. "
+            "Empty list = the account exists but its tokens have zero access — "
+            "useful for provisioning ahead of time."
+        ),
+        examples=[["alerts:read", "webhook:manage"]],
+    )
 
 
 class ServiceAccountUpdate(BaseModel):
-    description: Optional[str] = None
-    scopes: Optional[list[str]] = None
-    is_active: Optional[bool] = None
+    """Partial update — only the fields you want to change need to be present."""
+    description: Optional[str] = Field(None, description="New description.")
+    scopes: Optional[list[Scope]] = Field(
+        None,
+        description=(
+            "Replace the full scope list (not a merge). Pass an empty list to "
+            "strip all permissions while keeping the account row."
+        ),
+    )
+    is_active: Optional[bool] = Field(
+        None,
+        description=(
+            "Set false to disable the account globally. All of its tokens stop "
+            "working immediately, even ones that aren't individually revoked."
+        ),
+    )
 
 
 class ServiceAccountResponse(BaseModel):
-    id: str
+    """A service account record (no token material)."""
+    id: str = Field(..., description="UUID of the service account.")
     name: str
     description: Optional[str] = None
-    scopes: list[str] = Field(default_factory=list)
-    is_active: bool
+    scopes: list[Scope] = Field(default_factory=list)
+    is_active: bool = Field(
+        ..., description="If false, all tokens for this account are rejected at auth time.",
+    )
     created_at: datetime
     updated_at: datetime
 
@@ -34,17 +108,40 @@ class ServiceAccountResponse(BaseModel):
 
 
 class ServiceAccountTokenCreate(BaseModel):
-    name: str = Field(..., min_length=1, max_length=255, description="Human-friendly label, e.g. 'prod-key-2026-05'")
-    expires_at: Optional[datetime] = None
+    """Request body for issuing a new bearer token for an existing account."""
+    name: str = Field(
+        ..., min_length=1, max_length=255,
+        description=(
+            "Human-friendly token label — use this to track rotations. Recommended "
+            "format: `<env>-<date>` or `<env>-<kid>`."
+        ),
+        examples=["prod-2026-05", "staging-key-1"],
+    )
+    expires_at: Optional[datetime] = Field(
+        None,
+        description=(
+            "Optional UTC expiry. Once past, the token is rejected at auth time. "
+            "Null = no expiry (rotate manually). Tokens are also rejected if "
+            "`revoked_at` is set."
+        ),
+        examples=["2027-05-14T00:00:00Z"],
+    )
 
 
 class ServiceAccountTokenResponse(BaseModel):
-    """Returned WITHOUT the raw token after creation. Use TokenWithSecret on POST."""
-    id: str
+    """Token metadata. Returned by list/get endpoints — never includes the raw secret.
+
+    Use `ServiceAccountTokenWithSecret` only on the initial POST response.
+    """
+    id: str = Field(..., description="UUID of the token row.")
     name: str
     expires_at: Optional[datetime] = None
-    last_used_at: Optional[datetime] = None
-    revoked_at: Optional[datetime] = None
+    last_used_at: Optional[datetime] = Field(
+        None, description="UTC timestamp of the most recent successful auth.",
+    )
+    revoked_at: Optional[datetime] = Field(
+        None, description="If set, the token is permanently invalidated.",
+    )
     created_at: datetime
 
     class Config:
@@ -52,5 +149,18 @@ class ServiceAccountTokenResponse(BaseModel):
 
 
 class ServiceAccountTokenWithSecret(ServiceAccountTokenResponse):
-    """Returned ONCE on token creation. The secret is never re-displayed."""
-    secret: str = Field(..., description="The raw bearer token `tlsa_<...>` — shown once, store securely.")
+    """Returned **once** on token creation. The raw secret is never re-displayed.
+
+    Treat this response body like a password reveal: store the `secret` in a
+    secret manager immediately, then discard the response. If you lose it,
+    issue a new token and revoke this one.
+    """
+    secret: str = Field(
+        ...,
+        description=(
+            "The raw bearer token, e.g. `tlsa_<base64url-token>`. Use as "
+            "`Authorization: Bearer <secret>` on subsequent requests. The "
+            "`tlsa_` prefix makes tokens easy to spot in logs."
+        ),
+        examples=["tlsa_Xb3p9Hf2NkLqW8aZ-3kK0pQ1rS2tU3vW4xY5z"],
+    )

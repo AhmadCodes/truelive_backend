@@ -1,7 +1,7 @@
 """
 Webhook delivery models for the alerting feature.
 
-`webhook_consumers` stores the downstream destination (GuardDesk in v1) with an
+`webhook_consumers` stores the downstream destination (one platform in v1) with an
 encrypted HMAC secret. The schema supports N consumers; v1 only ever has one active.
 
 `webhook_deliveries` is one row per POST attempt — partitioned monthly by
@@ -23,7 +23,7 @@ DELIVERY_STATUSES = ("pending", "success", "failed", "giving_up")
 
 class WebhookConsumer(Base, TimestampMixin):
     """
-    A downstream consumer of normalized alerts. GuardDesk registers itself by
+    A downstream consumer of normalized alerts. The consumer registers itself by
     POSTing to /alerting/webhook-consumers with its URL and a secret of its choice.
     """
     __tablename__ = "webhook_consumers"

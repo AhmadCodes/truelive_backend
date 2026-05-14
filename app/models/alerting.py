@@ -3,7 +3,7 @@ SQLAlchemy models for the alerting feature.
 
 Receives Calipsa SMTP alerts via Postfix -> truelive-smtp-ingest, persists raw mail and
 normalized alerts to Postgres + MinIO, and forwards them to a downstream consumer
-(GuardDesk in v1). See experiments/alerting_feature/feature_description.md.
+(one downstream platform in v1). See experiments/alerting_feature/feature_description.md.
 
 The high-volume tables (raw_messages, alerts, alert_media) use Postgres native range
 partitioning by month. Partition management lives in alembic + a celery beat job.
