@@ -52,7 +52,7 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
     env_file:
       - .env
-      - /etc/truelive/alerting.env
+      - ./secrets/alerting.env
     volumes:
       - ./app:/app/app:ro
       - ./alembic:/app/alembic:ro
@@ -98,7 +98,7 @@ services:
     command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=4 -Q celery,alert_parse,alert_deliver
     env_file:
       - .env
-      - /etc/truelive/alerting.env
+      - ./secrets/alerting.env
     volumes:
       - ./app:/app/app:ro
       - upload_data:/app/uploads
@@ -133,7 +133,7 @@ services:
     command: celery -A app.tasks.celery_app beat --loglevel=info
     env_file:
       - .env
-      - /etc/truelive/alerting.env
+      - ./secrets/alerting.env
     volumes:
       - ./app:/app/app:ro
       - celery_beat_data:/var/lib/celery
@@ -199,7 +199,7 @@ services:
     # container-start time, not at YAML-parse time — which means YAML
     # interpolation can't see env_file values without `--env-file` on the CLI.
     env_file:
-      - /etc/truelive/alerting.env
+      - ./secrets/alerting.env
     environment:
       # When fronted by nginx at https://s3.usvg.ai, MinIO needs to know its
       # external URL so presigned URLs come out correctly.
@@ -230,7 +230,7 @@ services:
         condition: service_healthy
     # All needed vars come from env_file (avoids YAML-interpolation gotcha).
     env_file:
-      - /etc/truelive/alerting.env
+      - ./secrets/alerting.env
     entrypoint: >
       sh -c '
         set -eu;
@@ -263,7 +263,7 @@ services:
     command: python -m app.services.smtp_ingest
     env_file:
       - .env
-      - /etc/truelive/alerting.env
+      - ./secrets/alerting.env
     volumes:
       - ./app:/app/app:ro
       - /var/run/truelive:/var/run/truelive
@@ -271,6 +271,8 @@ services:
     environment:
       - DATABASE_URL=postgresql://truelive:truelive_password@postgres:5432/truelive_portal
       - REDIS_URL=redis://:YtrewqQwerty123123Ytrewq@redis:6379/0
+      - CELERY_BROKER_URL=redis://:YtrewqQwerty123123Ytrewq@redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://:YtrewqQwerty123123Ytrewq@redis:6379/1
       - DEBUG=False
       - ENVIRONMENT=production
     depends_on:
