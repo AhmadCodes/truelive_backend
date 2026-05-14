@@ -9,7 +9,7 @@ for human users — see `app/api/deps.py` ServiceAccount dependency.
 from sqlalchemy import (
     Column, String, Text, Boolean, ForeignKey, Index, DateTime,
 )
-from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import relationship
 
 from app.database import Base
@@ -26,8 +26,8 @@ class ServiceAccount(Base, TimestampMixin):
     scopes = Column(ARRAY(String(64)), nullable=False, server_default="{}")
     is_active = Column(Boolean, nullable=False, server_default="true")
     created_by = Column(
-        String(36),
-        ForeignKey("users.id", ondelete="SET NULL"),
+        UUID(as_uuid=True),
+        ForeignKey("users.user_id", ondelete="SET NULL"),
         nullable=True,
     )
 
