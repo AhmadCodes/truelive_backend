@@ -60,6 +60,11 @@ isort==5.13.2
 
 # Monitoring & Logging
 python-json-logger==2.0.7
+prometheus-client==0.20.0
+
+# Alerting feature (SMTP ingest + MinIO + webhook delivery)
+aiosmtpd==1.4.6
+minio==7.2.5
 
 # API Documentation
 fastapi-pagination==0.12.13
