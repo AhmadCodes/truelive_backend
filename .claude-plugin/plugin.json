@@ -1,0 +1,8 @@
+{
+  "name": "truelive-portal-backend",
+  "version": "0.1.0",
+  "description": "TrueLive Portal FastAPI backend — surveillance camera management",
+  "skills": [
+    "./skills/"
+  ]
+}
