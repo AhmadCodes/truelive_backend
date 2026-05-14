@@ -1,30 +1,47 @@
 """
-Parser registry for inbound alerts.
+Passthrough "parser" for the alerting pipeline.
 
-Each parser receives a parsed `email.message.Message` and returns a `ParserResult`.
-The registry dispatches on (sender, subject pattern, content fingerprint). If no
-parser matches, the `unknown` fallback returns an `unparsed` result with the
-original subject/body — even unparsed alerts get forwarded so the consumer can
-review (spec §8 "even unparsed alerts get forwarded").
+The pipeline used to have a dispatch / registry of per-sender parsers that
+regex-matched fields out of the email body. That has been removed:
+
+- Calipsa already did the AI detection — the email arriving IS the alert.
+- Body-format dependencies are brittle: a vendor template tweak silently drops
+  classification to `unparsed`, but the alert itself is still correct.
+
+What we extract now is strictly from headers + MIME structure:
+
+- `subject` — the `Subject:` header
+- `detected_at` — the `Date:` header, parsed to a tz-aware datetime
+- `body_text` — the text/plain part if present, stored opaquely (we do not
+  derive any fields from it). HTML-only bodies are stripped to plain text for
+  display. The raw .eml is always in MinIO for full-fidelity inspection.
+- Attachments via MIME walk (in `process_inbound_alert`, not here).
+
+`event_type` / `event_subtype` are fixed constants. If the downstream consumer
+wants finer classification, they can derive it from `subject` or fetch the raw
+email — that's a consumer-side concern, not a producer-side one.
 """
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from email.message import Message
-from typing import Callable, Optional
+from typing import Optional
 
-logger = logging.getLogger(__name__)
+
+PARSER_ID = "passthrough_v1"
+PARSER_VERSION = 1
+EVENT_TYPE = "alert"
+EVENT_SUBTYPE = "ai_alert"
 
 
 @dataclass
 class ParserResult:
     parser_id: str
     parser_version: int
-    parser_confidence: str  # exact | heuristic | llm_generated | unparsed
-    event_type: str         # motion | person | vehicle | intrusion | unknown
+    parser_confidence: str
+    event_type: str
     event_subtype: Optional[str] = None
     confidence: Optional[float] = None
     detected_at: Optional[datetime] = None
@@ -33,42 +50,20 @@ class ParserResult:
     extra: dict = field(default_factory=dict)
 
 
-# (predicate, parser) — the first matching predicate wins.
-_REGISTRY: list[tuple[Callable[[Message], bool], Callable[[Message], ParserResult]]] = []
-
-
-def register(predicate, parser):
-    """Append a (predicate, parser) pair to the registry.
-
-    Predicates take the parsed Message and return bool. Parsers take the same
-    Message and return a ParserResult. Order of registration = match priority.
-    """
-    _REGISTRY.append((predicate, parser))
-
-
-def dispatch(msg: Message) -> ParserResult:
-    """Find and run the first matching parser. Falls back to `unparsed`."""
-    for predicate, parser in _REGISTRY:
-        try:
-            if predicate(msg):
-                return parser(msg)
-        except Exception:
-            logger.exception("parser predicate raised; skipping")
-    return unparsed_fallback(msg)
-
-
-def unparsed_fallback(msg: Message) -> ParserResult:
-    """Parser of last resort: pull subject + plain-text body."""
-    from app.services.alert_parsers.helpers import extract_subject, extract_text_body
-    return ParserResult(
-        parser_id="unknown_v1",
-        parser_version=1,
-        parser_confidence="unparsed",
-        event_type="unknown",
-        subject=extract_subject(msg),
-        body_text=extract_text_body(msg),
+def passthrough(msg: Message) -> ParserResult:
+    """Build a ParserResult from headers + MIME only. Never touches body
+    content for field extraction."""
+    from app.services.alert_parsers.helpers import (
+        extract_subject, extract_text_body, extract_date,
     )
-
-
-# Import templates to register them. Done at module load so dispatch sees them.
-from app.services.alert_parsers import calipsa  # noqa: E402,F401
+    return ParserResult(
+        parser_id=PARSER_ID,
+        parser_version=PARSER_VERSION,
+        parser_confidence="exact",
+        event_type=EVENT_TYPE,
+        event_subtype=EVENT_SUBTYPE,
+        detected_at=extract_date(msg),
+        subject=extract_subject(msg) or None,
+        body_text=extract_text_body(msg) or None,
+        extra={},
+    )

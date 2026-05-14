@@ -1,11 +1,15 @@
 """
-Celery task: parse an inbound raw email into a normalized alert + media rows,
+Celery task: build a normalized alert + media rows from an inbound raw email,
 then enqueue webhook delivery.
 
-This task runs on the `alert_parse` queue. Failures are logged and the raw_message
-status is moved to `parse_failed` — but we still emit an alerts row with
-`parser_confidence="unparsed"` and forward it, so the downstream consumer can
-fall back to human review (spec §8 "even unparsed alerts get forwarded").
+This task runs on the `alert_parse` queue. We do NOT parse the email body for
+fields — Calipsa (or whichever upstream filter) already did the AI detection
+just by sending the email, so the email's existence is itself the event signal.
+We extract from headers + MIME structure only: subject, Date, attachments. The
+raw .eml is always in MinIO for full-fidelity inspection.
+
+`event_type="alert"` / `event_subtype="ai_alert"` are constants. If the
+downstream consumer wants finer classification it does that on its side.
 """
 
 from __future__ import annotations
@@ -22,7 +26,7 @@ from celery import shared_task
 
 from app.database import SessionLocal
 from app.models.alerting import Alert, AlertMedia, RawMessage
-from app.services.alert_parsers import dispatch
+from app.services.alert_parsers import passthrough
 from app.services.alert_parsers.helpers import extract_attachments
 from app.services.minio_client import storage, MinioClientError
 
@@ -126,22 +130,16 @@ def process_inbound_alert(self, raw_message_id: str):
 
         try:
             msg = email.message_from_bytes(content)
-            result = dispatch(msg)
         except Exception:
+            # Even the MIME header parse failed — that's exceptional.
             logger.exception(
-                "parse failed; recording as unparsed",
+                "MIME parse failed; marking raw_message parse_failed",
                 extra={"raw_message_id": raw_message_id},
             )
-            # Synthesize an unparsed result rather than dropping the message.
-            from app.services.alert_parsers import unparsed_fallback
-            try:
-                msg = email.message_from_bytes(content)
-            except Exception:
-                # Even the email header parse failed — that's exceptional.
-                raw.status = "parse_failed"
-                db.commit()
-                return
-            result = unparsed_fallback(msg)
+            raw.status = "parse_failed"
+            db.commit()
+            return
+        result = passthrough(msg)
 
         alert_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
@@ -181,18 +179,16 @@ def process_inbound_alert(self, raw_message_id: str):
         for row in attachments_rows:
             db.add(AlertMedia(**row))
 
-        raw.status = "parsed" if result.parser_confidence != "unparsed" else "parse_failed"
+        raw.status = "parsed"
         db.commit()
 
         _enqueue_deliver(alert_id, raw.received_at)
         logger.info(
-            "alert parsed",
+            "alert built",
             extra={
                 "raw_message_id": raw_message_id,
                 "alert_id": alert_id,
-                "event_type": result.event_type,
                 "parser_id": result.parser_id,
-                "parser_confidence": result.parser_confidence,
                 "attachments": len(attachments_rows),
             },
         )
