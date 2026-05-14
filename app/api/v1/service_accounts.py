@@ -39,26 +39,6 @@ from app.utils.secrets_gen import generate_service_account_token
 router = APIRouter()
 
 
-# Reusable description blocks. Pulled out so the scope reference appears once
-# and is reused across the GET/POST/PATCH summaries.
-
-_SCOPE_TABLE = """
-## Available scopes
-
-| Scope               | Grants                                                          |
-|---------------------|-----------------------------------------------------------------|
-| `alerts:read`       | `GET /alerts`, `GET /alerts/{id}`, `GET /alerts/{id}/deliveries`, `GET /alerts/{id}/media/{media_id}` |
-| `alerts:raw:read`   | `GET /alerts/{id}/raw` — the raw RFC822 message source. Separate from `alerts:read` so callers can have the parsed view without the unredacted original. |
-| `webhook:manage`    | Full CRUD on `/alerting/webhook-consumers`, restricted to consumers the caller owns. |
-| `addresses:read`    | `GET /cameras/{id}/alert-addresses` — see which inbound email maps to which camera. |
-
-Scopes are a closed set — adding a new one requires a code change (intentional;
-scopes are a security boundary). An empty `scopes` array is valid and creates
-a service account with zero permissions (useful for provisioning ahead of time
-or temporarily disabling access without deleting the account).
-"""
-
-
 @router.get(
     "",
     response_model=list[ServiceAccountResponse],
@@ -66,7 +46,8 @@ or temporarily disabling access without deleting the account).
     description=(
         "Returns all service accounts, newest first. Tokens are not included — "
         "use `GET /service-accounts/{id}/tokens` to see them.\n\n"
-        + _SCOPE_TABLE
+        "Each returned account carries its current `scopes` array — see the "
+        "`scopes` field description for what each scope grants."
     ),
 )
 def list_accounts(db: DBSession, _admin: AdminUser):
@@ -83,9 +64,11 @@ def list_accounts(db: DBSession, _admin: AdminUser):
         "you still need to issue a token via `POST /service-accounts/{id}/tokens`.\n\n"
         "Pick a unique `name` (e.g. `acme-monitoring-prod`) — recommend one "
         "service account per integrating system. Use the `description` to record "
-        "the owner, purpose, and rotation policy.\n"
-        + _SCOPE_TABLE +
-        "\n## Errors\n\n"
+        "the owner, purpose, and rotation policy.\n\n"
+        "**Scopes** are the permissions the account holds. Valid values and what "
+        "each grants are documented on the `scopes` field below. Pick the minimum "
+        "set the integration needs; you can change them later via `PATCH`.\n\n"
+        "## Errors\n\n"
         "- **409 Conflict** — A service account with this name already exists. "
         "Names are unique."
     ),
@@ -140,9 +123,11 @@ def get_account(account_id: str, db: DBSession, _admin: AdminUser):
         "**Setting `is_active=false`** is the global kill switch — every token "
         "for this account stops working immediately, regardless of individual "
         "revocation status. Set back to `true` to re-enable.\n\n"
-        "**Updating `scopes`** replaces the whole list (not a merge). Pass `[]` "
-        "to strip all permissions while keeping the account row.\n"
-        + _SCOPE_TABLE
+        "**Updating `scopes`** is a full replacement, not a merge. Valid scope "
+        "values and what each grants are documented on the `scopes` field below "
+        "(in the request body schema). Pass `[]` to strip all permissions while "
+        "keeping the account row. Omit the field entirely to leave scopes "
+        "unchanged."
     ),
     responses={404: {"description": "Service account not found."}},
 )

@@ -62,11 +62,19 @@ class ServiceAccountCreate(BaseModel):
     scopes: list[Scope] = Field(
         default_factory=list,
         description=(
-            "Permissions this account holds. Pick from the closed set: "
-            "`alerts:read`, `alerts:raw:read`, `webhook:manage`, `addresses:read`. "
-            "See the Service Accounts section header for what each scope grants. "
-            "Empty list = the account exists but its tokens have zero access — "
-            "useful for provisioning ahead of time."
+            "Permissions to grant. Each item must be one of these four values:\n\n"
+            "- `alerts:read` — read normalized alerts, deliveries, and media URLs "
+            "(`GET /alerts`, `GET /alerts/{id}`, `GET /alerts/{id}/deliveries`, "
+            "`GET /alerts/{id}/media/{media_id}`)\n"
+            "- `alerts:raw:read` — read the raw RFC822 source (`GET /alerts/{id}/raw`). "
+            "Separate from `alerts:read` so a caller can hold the parsed view "
+            "without the unredacted original mail.\n"
+            "- `webhook:manage` — full CRUD on `/alerting/webhook-consumers`, "
+            "restricted to consumers the caller owns.\n"
+            "- `addresses:read` — read per-camera alert addresses "
+            "(`GET /cameras/{id}/alert-addresses`).\n\n"
+            "Empty list is valid: the account exists but its tokens hold zero "
+            "permissions (useful for pre-provisioning or temporary disable)."
         ),
         examples=[["alerts:read", "webhook:manage"]],
     )
@@ -78,9 +86,17 @@ class ServiceAccountUpdate(BaseModel):
     scopes: Optional[list[Scope]] = Field(
         None,
         description=(
-            "Replace the full scope list (not a merge). Pass an empty list to "
-            "strip all permissions while keeping the account row."
+            "Replace the scope list. Each item must be one of these four values:\n\n"
+            "- `alerts:read` — read normalized alerts, deliveries, and media URLs\n"
+            "- `alerts:raw:read` — read the raw RFC822 source\n"
+            "- `webhook:manage` — full CRUD on webhook consumers (own rows only)\n"
+            "- `addresses:read` — read per-camera alert addresses\n\n"
+            "**This is a full replacement, not a merge** — the list you send "
+            "becomes the new list. Pass `[]` to strip all permissions while "
+            "keeping the account row. Omit the field entirely to leave scopes "
+            "unchanged."
         ),
+        examples=[["alerts:read", "alerts:raw:read", "webhook:manage", "addresses:read"]],
     )
     is_active: Optional[bool] = Field(
         None,
@@ -96,7 +112,16 @@ class ServiceAccountResponse(BaseModel):
     id: str = Field(..., description="UUID of the service account.")
     name: str
     description: Optional[str] = None
-    scopes: list[Scope] = Field(default_factory=list)
+    scopes: list[Scope] = Field(
+        default_factory=list,
+        description=(
+            "Permissions this account currently holds. Each value is one of:\n\n"
+            "- `alerts:read` — read normalized alerts, deliveries, and media URLs\n"
+            "- `alerts:raw:read` — read the raw RFC822 source\n"
+            "- `webhook:manage` — full CRUD on webhook consumers (own rows only)\n"
+            "- `addresses:read` — read per-camera alert addresses"
+        ),
+    )
     is_active: bool = Field(
         ..., description="If false, all tokens for this account are rejected at auth time.",
     )

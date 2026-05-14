@@ -153,7 +153,13 @@ class AlertMediaResponse(BaseModel):
         examples=["0193f8a3-7c8b-7d6e-9a2f-1b3c4d5e6f70"],
     )
     kind: AlertMediaKind = Field(
-        ..., description="Media classification. See AlertMediaKind enum for values.",
+        ...,
+        description=(
+            "Media classification. One of:\n\n"
+            "- `snapshot` — single still image (typically JPEG/PNG)\n"
+            "- `video_clip` — short video file\n"
+            "- `attachment_other` — non-media attachment (logs, JSON, etc.)"
+        ),
         examples=["snapshot"],
     )
     content_type: Optional[str] = Field(
@@ -196,7 +202,14 @@ class AlertParserInfo(BaseModel):
         None, description="Parser version (incremented when its output shape changes).", examples=[1],
     )
     confidence: ParserConfidence = Field(
-        ..., description="How sure the parser is. See ParserConfidence enum.",
+        ...,
+        description=(
+            "How sure the parser is about the structured fields. One of:\n\n"
+            "- `exact` — template matched perfectly, all fields extracted reliably\n"
+            "- `heuristic` — partial match; some fields inferred (e.g. event from subject only)\n"
+            "- `llm_generated` — fields produced by an LLM-driven fallback (future)\n"
+            "- `unparsed` — no parser matched; only `subject` and `body_text` are reliable"
+        ),
         examples=["exact"],
     )
 
@@ -227,7 +240,18 @@ class AlertResponse(BaseModel):
             "parser couldn't extract one — fall back to `received_at`."
         ),
     )
-    event_type: EventType = Field(..., description="Normalized event class.", examples=["motion"])
+    event_type: EventType = Field(
+        ...,
+        description=(
+            "Normalized event classification. One of:\n\n"
+            "- `motion` — generic motion detection\n"
+            "- `person` — person-shaped object detected\n"
+            "- `vehicle` — vehicle-shaped object detected\n"
+            "- `intrusion` — perimeter/zone intrusion\n"
+            "- `unknown` — parser couldn't classify; rely on `subject`/`body_text`"
+        ),
+        examples=["motion"],
+    )
     event_subtype: Optional[str] = Field(
         None,
         description=(
@@ -273,9 +297,21 @@ class AlertListItem(BaseModel):
     alert_id: str
     camera_id: str
     received_at: datetime
-    event_type: EventType
+    event_type: EventType = Field(
+        ...,
+        description=(
+            "Normalized event classification. One of: `motion`, `person`, "
+            "`vehicle`, `intrusion`, `unknown`."
+        ),
+    )
     event_subtype: Optional[str] = None
-    parser_confidence: ParserConfidence
+    parser_confidence: ParserConfidence = Field(
+        ...,
+        description=(
+            "Parser confidence. One of: `exact`, `heuristic`, `llm_generated`, "
+            "`unparsed`. See `AlertParserInfo.confidence` for what each means."
+        ),
+    )
     subject: Optional[str] = None
 
     class Config:
@@ -369,7 +405,14 @@ class WebhookDeliveryResponse(BaseModel):
         examples=[1],
     )
     status: DeliveryStatus = Field(
-        ..., description="Lifecycle state. See DeliveryStatus enum.",
+        ...,
+        description=(
+            "Lifecycle state of this delivery attempt. One of:\n\n"
+            "- `pending` — row created, POST in flight\n"
+            "- `success` — consumer responded 2xx\n"
+            "- `failed` — non-2xx or timeout; another retry is scheduled\n"
+            "- `giving_up` — exhausted retry chain (6 attempts over ~15h); ops alerted"
+        ),
         examples=["success"],
     )
     http_status: Optional[int] = Field(

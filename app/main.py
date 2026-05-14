@@ -25,80 +25,56 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# OpenAPI tag metadata — drives the section headers + descriptions in Swagger UI.
-# Only the alerting / service-account groups get explicit entries here; tags not
-# listed get default section headers from FastAPI.
+# OpenAPI tag metadata — drives the section ORDER + headers in Swagger UI.
+#
+# All 21 sections are listed here in display order: existing TrueLive groups
+# first (in router-registration order), then the four alerting / service-account
+# groups at the bottom. Tags without a `description` just get the bare name as
+# a section header — details for each endpoint live on the endpoint itself.
 openapi_tags = [
+    {"name": "Authentication"},
+    {"name": "Invitations"},
+    {"name": "Sites"},
+    {"name": "Cameras"},
+    {"name": "PCs"},
+    {"name": "Screens"},
+    {"name": "Views"},
+    {"name": "Users"},
+    {"name": "Audit Logs"},
+    {"name": "Categories"},
+    {"name": "SureView"},
+    {"name": "System Settings"},
+    {"name": "Snapshots"},
+    {"name": "Configurations"},
+    {"name": "Streaming"},
+    {"name": "Health"},
+    {"name": "Root"},
     {
         "name": "Alerting — Addresses",
         "description": (
-            "Per-camera inbound email addresses (`cam-<token>@alerts.usvg.ai`). "
-            "An operator pastes these into the upstream alert source (e.g. "
-            "Calipsa); mail arriving at the address is routed through Postfix → "
-            "LMTP → truelive-smtp-ingest → MinIO + raw_messages, then parsed "
-            "into an alert.\n\n"
-            "Use these endpoints to **provision**, **rotate**, **quarantine**, "
-            "or **revoke** addresses. The auto-provision hook on camera create "
-            "already gives every new camera one active address, so you'll "
-            "typically only use these endpoints for rotation or runaway-camera "
-            "mitigation.\n\n"
-            "**Address lifecycle:**\n"
-            "- `is_active=true, is_quarantined=false` — accepting mail\n"
-            "- `is_active=true, is_quarantined=true` — hard-blocked (reversible)\n"
-            "- `is_active=false` — revoked (permanent for that token)\n"
+            "Per-camera inbound email addresses. Provision, rotate, quarantine, "
+            "or revoke the addresses the upstream alert source delivers to."
         ),
     },
     {
         "name": "Alerting — Alerts",
         "description": (
-            "Retrieve normalized alerts, their raw RFC822 source, attached "
-            "media (snapshots / video clips), and webhook delivery history. "
-            "Same endpoints serve human admins and downstream platforms (via "
-            "a service-account token with `alerts:read` / `alerts:raw:read`).\n\n"
-            "**Retention:** alerts and raw mail live 90 days; media lives 30 "
-            "days. After 30 days, an alert's `media` array will be empty even "
-            "if it originally had attachments — the parsed text remains "
-            "available."
+            "Retrieve normalized alerts, the raw RFC822 source, attached "
+            "media, and webhook delivery history."
         ),
     },
     {
         "name": "Alerting — Webhooks",
         "description": (
             "Configure downstream consumers that receive HMAC-signed JSON "
-            "POSTs for each normalized alert. v1 supports one active consumer.\n\n"
-            "**Delivery contract (summary):**\n"
-            "- `POST application/json` to the consumer's URL\n"
-            "- Headers: `X-TrueLive-Signature: sha256=<hex>`, `-Timestamp`, "
-            "`-Alert-Id`, `-Delivery-Id`\n"
-            "- Consumer must ack 2xx within 5 seconds\n"
-            "- Retry chain: 1m, 5m, 30m, 2h, 12h (6 attempts, ~15h window)\n"
-            "- Consumer **must** dedupe on `X-TrueLive-Alert-Id` (idempotency)\n\n"
-            "Full schema + signing reference: see "
-            "`experiments/alerting_feature/webhook_contract.md`."
+            "POSTs for each alert."
         ),
     },
     {
         "name": "Service Accounts",
         "description": (
-            "Non-human principals with scoped bearer tokens. Use these when an "
-            "external system needs to call TrueLive APIs without a human "
-            "admin's JWT.\n\n"
-            "**Auth header:** `Authorization: Bearer tlsa_<token>`\n\n"
-            "**Available scopes:**\n"
-            "- `alerts:read` — read normalized alerts + media URLs\n"
-            "- `alerts:raw:read` — read raw RFC822 source (separate from "
-            "`alerts:read` so callers can hold parsed view without unredacted "
-            "original)\n"
-            "- `webhook:manage` — CRUD on webhook-consumers (own rows only)\n"
-            "- `addresses:read` — read per-camera alert addresses\n\n"
-            "**Token lifecycle:**\n"
-            "1. Admin creates the account here with the right scopes.\n"
-            "2. Admin issues a token — raw `tlsa_<...>` value returned ONCE.\n"
-            "3. Hand off to the downstream platform out of band.\n"
-            "4. To rotate: issue a new token, swap on downstream side, then "
-            "soft-revoke the old one (sets `revoked_at`).\n"
-            "5. To globally disable: set `is_active=false` on the account — "
-            "all tokens stop working immediately."
+            "Non-human principals with scoped bearer tokens (`tlsa_<...>`) "
+            "for external systems calling TrueLive APIs."
         ),
     },
 ]
