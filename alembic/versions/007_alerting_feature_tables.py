@@ -239,8 +239,8 @@ def upgrade() -> None:
         sa.Column("scopes", sa.dialects.postgresql.ARRAY(sa.String(length=64)), nullable=False, server_default="{}"),
         sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
         sa.Column(
-            "created_by", sa.String(length=36),
-            sa.ForeignKey("users.id", ondelete="SET NULL"),
+            "created_by", sa.dialects.postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("users.user_id", ondelete="SET NULL"),
             nullable=True,
         ),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
