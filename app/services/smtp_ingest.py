@@ -37,6 +37,8 @@ from aiosmtpd.lmtp import LMTP
 from aiosmtpd.smtp import Envelope, Session
 from sqlalchemy.orm import Session as SASession
 
+from sqlalchemy import func
+
 from app.core.config import settings
 from app.database import SessionLocal
 from app.models.alerting import AlertAddress, RawMessage
@@ -51,11 +53,15 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------- #
 
 def _lookup_alert_address(db: SASession, local: str, domain: str) -> Optional[AlertAddress]:
+    # Local-part is case-insensitive in our addressing scheme — the cam-<token>
+    # token from secrets.token_urlsafe() is mixed-case, but operators may paste
+    # it into Calipsa with arbitrary casing, and many MTAs downcase recipients.
+    # Compare case-insensitively on both sides. Domain is RFC-mandated CI.
     return (
         db.query(AlertAddress)
         .filter(
-            AlertAddress.local_part == local,
-            AlertAddress.domain == domain,
+            func.lower(AlertAddress.local_part) == local.lower(),
+            AlertAddress.domain == domain.lower(),
             AlertAddress.is_active == True,  # noqa: E712
         )
         .first()
