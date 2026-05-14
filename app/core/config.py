@@ -99,7 +99,7 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = "http://localhost:3000"
     INVITATION_TOKEN_EXPIRY_HOURS: int = 72
 
-    # Alerting feature — SMTP ingest + MinIO + GuardDesk webhook
+    # Alerting feature — SMTP ingest + MinIO + downstream webhook
     ALERT_DOMAIN: str = "alerts.usvg.ai"
     ALERT_LMTP_SOCKET: str = "/var/run/truelive/ingest.sock"
     ALERT_RATE_LIMIT_PER_MINUTE: int = 60

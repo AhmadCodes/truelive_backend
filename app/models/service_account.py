@@ -1,7 +1,7 @@
 """
 Service-account auth models.
 
-Non-human principals (GuardDesk in v1) authenticate with scoped Bearer tokens
+Non-human principals (e.g. a downstream platform) authenticate with scoped Bearer tokens
 (prefix `tlsa_` for grep-ability). Layered on top of the existing JWT auth used
 for human users — see `app/api/deps.py` ServiceAccount dependency.
 """

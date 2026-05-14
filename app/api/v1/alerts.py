@@ -1,14 +1,17 @@
 """
-API endpoints for alert retrieval (GuardDesk + admin).
+API endpoints for alert retrieval.
 
-GET /alerts                          — list, filterable by camera, time, event_type
-GET /alerts/{alert_id}                — full normalized payload + fresh signed URLs
-GET /alerts/{alert_id}/raw            — raw RFC822 (URL or streamed bytes)
-GET /alerts/{alert_id}/media/{id}     — fresh presigned URL
-GET /alerts/{alert_id}/deliveries     — webhook delivery history
-POST /alerts/{alert_id}/redeliver     — force a fresh delivery attempt
+These endpoints give human admins and downstream platforms read access to the
+normalized alerts produced by the SMTP ingest pipeline, plus tools to inspect
+and re-fire webhook deliveries.
 
-Auth: admin user OR service-account with `alerts:read` scope (`alerts:raw:read` for /raw).
+Auth model:
+- All endpoints accept an admin JWT.
+- The same endpoints are reachable by a service-account bearer token holding
+  the `alerts:read` scope (or `alerts:raw:read` for `GET /alerts/{id}/raw`).
+
+Data shapes are documented on each endpoint and on the Pydantic models in
+`app/schemas/alerting.py`.
 """
 
 from __future__ import annotations
@@ -26,26 +29,12 @@ from app.models.webhook import WebhookConsumer, WebhookDelivery
 from app.schemas.alerting import (
     AlertListItem, AlertListResponse, AlertResponse, AlertMediaResponse,
     AlertParserInfo, WebhookDeliveryResponse, WebhookTestResponse,
+    EventType,
 )
 from app.services.minio_client import storage, MinioClientError
 
 
 router = APIRouter()
-
-
-def _require_alerts_read(
-    db: DBSession,
-    admin=Depends(lambda: None),  # placeholder so the dependency is permissive
-):
-    """Hybrid dep: admin OR service-account with alerts:read.
-
-    FastAPI doesn't natively support OR-dependencies cleanly, so we just expose
-    admin-protected vs service-account variants. Most production routers will
-    pick one auth method. The implementation here intentionally keeps it as
-    admin-only on the routes; service-account paths can be added later by
-    swapping the dependency to require_scope('alerts:read').
-    """
-    return True
 
 
 def _build_response(db, alert: Alert) -> AlertResponse:
@@ -94,15 +83,65 @@ def _build_response(db, alert: Alert) -> AlertResponse:
     )
 
 
-@router.get("/", response_model=AlertListResponse, summary="List alerts")
+@router.get(
+    "/",
+    response_model=AlertListResponse,
+    summary="List alerts (newest first, filterable)",
+    description=(
+        "Returns a compact list of alerts ordered by `received_at` descending. "
+        "Use the filter parameters to narrow by camera, time range, or event type.\n\n"
+        "## Filters\n\n"
+        "All filters are AND-combined.\n\n"
+        "- **`camera_id`** — exact match against `alerts.camera_id`.\n"
+        "- **`received_after`** — inclusive lower bound on `received_at`. "
+        "Accepts ISO-8601 with timezone, e.g. `2026-05-14T00:00:00Z`.\n"
+        "- **`received_before`** — **exclusive** upper bound. Together with "
+        "`received_after` this defines a half-open `[after, before)` window, "
+        "which is the standard for time-range pagination.\n"
+        "- **`event_type`** — exact match. One of: `motion`, `person`, `vehicle`, "
+        "`intrusion`, `unknown`. Use `unknown` to find alerts where the parser "
+        "couldn't classify the event.\n"
+        "- **`limit`** — max items returned (1-500, default 50).\n\n"
+        "## Pagination\n\n"
+        "v1 returns `next_cursor: null`. To page backwards in time, take the "
+        "oldest `received_at` from the current page and pass it as "
+        "`received_before` on the next call.\n\n"
+        "## Retention\n\n"
+        "Alerts are retained 90 days. Older alerts return zero rows. The "
+        "underlying tables are partitioned monthly — filtering by time is "
+        "very efficient at any scale."
+    ),
+)
 def list_alerts(
     db: DBSession,
     _admin: AdminUser,
-    camera_id: Optional[str] = Query(None),
-    received_after: Optional[datetime] = Query(None),
-    received_before: Optional[datetime] = Query(None),
-    event_type: Optional[str] = Query(None),
-    limit: int = Query(50, ge=1, le=500),
+    camera_id: Optional[str] = Query(
+        None,
+        description="Filter to one specific camera's alerts.",
+        examples=["9D7Q"],
+    ),
+    received_after: Optional[datetime] = Query(
+        None,
+        description="Inclusive lower bound on `received_at` (ISO-8601 with timezone).",
+        examples=["2026-05-14T00:00:00Z"],
+    ),
+    received_before: Optional[datetime] = Query(
+        None,
+        description="Exclusive upper bound on `received_at` (ISO-8601 with timezone).",
+        examples=["2026-05-15T00:00:00Z"],
+    ),
+    event_type: Optional[EventType] = Query(
+        None,
+        description=(
+            "Filter to one event type. Valid values: `motion`, `person`, `vehicle`, "
+            "`intrusion`, `unknown`."
+        ),
+        examples=["motion"],
+    ),
+    limit: int = Query(
+        50, ge=1, le=500,
+        description="Max items to return (1-500, default 50).",
+    ),
 ):
     q = db.query(Alert)
     if camera_id:
@@ -127,7 +166,23 @@ def list_alerts(
     )
 
 
-@router.get("/{alert_id}", response_model=AlertResponse, summary="Get one alert (full payload)")
+@router.get(
+    "/{alert_id}",
+    response_model=AlertResponse,
+    summary="Get one alert with full payload + fresh signed media URLs",
+    description=(
+        "Returns the full normalized alert — same shape as outbound webhook "
+        "bodies. Each media object gets a fresh 7-day presigned URL minted at "
+        "request time (so even if the webhook delivery's URLs have expired, "
+        "this endpoint always gives you working ones — until the media itself "
+        "ages out at 30 days).\n\n"
+        "**Retention tombstone:** alerts live 90 days but media lives only 30. "
+        "An alert older than 30 days returns `media: []` even if it originally "
+        "had attachments. The parsed text (`subject`, `body_text`, `event_type`, "
+        "etc.) is still available."
+    ),
+    responses={404: {"description": "Alert not found (typo or past 90-day retention)."}},
+)
 def get_alert(alert_id: str, db: DBSession, _admin: AdminUser):
     alert = db.query(Alert).filter(Alert.id == alert_id).one_or_none()
     if alert is None:
@@ -135,12 +190,42 @@ def get_alert(alert_id: str, db: DBSession, _admin: AdminUser):
     return _build_response(db, alert)
 
 
-@router.get("/{alert_id}/raw", summary="Raw RFC822 source")
+@router.get(
+    "/{alert_id}/raw",
+    summary="Download the raw RFC822 source",
+    description=(
+        "Returns the original `.eml` message exactly as the upstream sender "
+        "delivered it (post-MIME, pre-parse). Useful for forensics or to "
+        "re-run a parser locally.\n\n"
+        "## `format` options\n\n"
+        "- **`url` (default)** — HTTP 307 redirect to a 7-day presigned MinIO URL. "
+        "Best for browsers, `curl -L`, or anywhere that follows redirects. The "
+        "response body is empty; the URL is in the `Location` header.\n"
+        "- **`stream`** — server proxies the raw bytes back as "
+        "`Content-Type: message/rfc822` with a `Content-Disposition: attachment` "
+        "header. Best for clients that can't follow redirects, are behind a "
+        "strict egress firewall that blocks `s3.usvg.ai`, or want to pipe the "
+        "bytes directly without a second hop.\n\n"
+        "Raw mail is retained 90 days (same as alerts)."
+    ),
+    responses={
+        307: {"description": "Redirect to a presigned MinIO URL (when `format=url`)."},
+        200: {"description": "Raw RFC822 bytes (when `format=stream`).", "content": {"message/rfc822": {}}},
+        404: {"description": "Alert not found, or its raw message has aged out (past 90-day retention)."},
+        503: {"description": "Storage backend unavailable — retry shortly."},
+    },
+)
 def get_alert_raw(
     alert_id: str,
     db: DBSession,
     _admin: AdminUser,
-    format: str = Query("url", regex="^(url|stream)$"),
+    format: str = Query(
+        "url", regex="^(url|stream)$",
+        description=(
+            "Delivery mode: `url` (default) returns a 307 redirect to a "
+            "presigned URL; `stream` returns the bytes directly."
+        ),
+    ),
 ):
     alert = db.query(Alert).filter(Alert.id == alert_id).one_or_none()
     if alert is None:
@@ -171,7 +256,19 @@ def get_alert_raw(
 @router.get(
     "/{alert_id}/media/{media_id}",
     response_model=AlertMediaResponse,
-    summary="Fresh presigned URL for one media object",
+    summary="Mint a fresh presigned URL for one media object",
+    description=(
+        "Returns the media metadata and a freshly-signed URL valid for 7 days. "
+        "Use this when the URL embedded in an older webhook payload or in a "
+        "previous GET response has expired but the media is still within its "
+        "30-day retention.\n\n"
+        "The `url` field is the only fresh value — all other fields are "
+        "identical to what `GET /alerts/{id}` returns under `media[]`."
+    ),
+    responses={
+        404: {"description": "Media not found, doesn't belong to this alert, or aged out (past 30-day retention)."},
+        503: {"description": "Storage backend unavailable."},
+    },
 )
 def get_alert_media_url(alert_id: str, media_id: str, db: DBSession, _admin: AdminUser):
     m = db.query(AlertMedia).filter(
@@ -195,6 +292,17 @@ def get_alert_media_url(alert_id: str, media_id: str, db: DBSession, _admin: Adm
     "/{alert_id}/deliveries",
     response_model=list[WebhookDeliveryResponse],
     summary="Webhook delivery history for an alert",
+    description=(
+        "Returns every POST attempt made for this alert across all consumers, "
+        "newest first. Each row captures one attempt: HTTP status, response "
+        "excerpt (first 1 KB), error string on failure, and `next_retry_at` "
+        "if another attempt is scheduled.\n\n"
+        "Use this to:\n"
+        "- Confirm a particular alert was delivered (`status=success`).\n"
+        "- Diagnose a stuck delivery (`status=failed` with repeated timeouts).\n"
+        "- See the give-up history (`status=giving_up` after 6 attempts).\n\n"
+        "Delivery rows are retained ~30 days."
+    ),
 )
 def list_deliveries(alert_id: str, db: DBSession, _admin: AdminUser):
     rows = (
@@ -210,6 +318,21 @@ def list_deliveries(alert_id: str, db: DBSession, _admin: AdminUser):
     "/{alert_id}/redeliver",
     response_model=WebhookTestResponse,
     summary="Force a fresh delivery attempt (resets retry chain)",
+    description=(
+        "Enqueues a brand-new delivery for the given alert, starting at "
+        "`attempt=1` with a fresh retry chain. Useful when:\n\n"
+        "- A consumer was down during the original window and has since "
+        "recovered; you want to push the alert through without waiting for the "
+        "next scheduled retry (or after the alert has reached `giving_up`).\n"
+        "- You're testing changes to the downstream signature/idempotency "
+        "verification and want to retrigger a known-good payload.\n\n"
+        "Returns the Celery task ID of the enqueued job (`delivery_id`). The "
+        "actual POST happens asynchronously — check "
+        "`GET /alerts/{id}/deliveries` to see the new attempt row.\n\n"
+        "This does **not** dedupe with prior deliveries — the downstream "
+        "platform should already handle `alert_id` idempotency."
+    ),
+    responses={404: {"description": "Alert not found."}},
 )
 def redeliver(alert_id: str, db: DBSession, _admin: AdminUser):
     alert = db.query(Alert).filter(Alert.id == alert_id).one_or_none()

@@ -176,7 +176,7 @@ def get_super_admin_user(
 
 
 # ============================================================================ #
-# Service-account auth (non-human principals, e.g. GuardDesk)
+# Service-account auth (non-human principals, e.g. a downstream platform)
 #
 # Tokens have a `tlsa_` prefix so they're easy to grep in logs and obviously
 # distinct from JWTs. Stored hashed (bcrypt); verify with passlib.
