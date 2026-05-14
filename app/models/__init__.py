@@ -15,6 +15,12 @@ from app.models.view import View
 from app.models.screen_mapping import ScreenMapping
 from app.models.sync_job import SyncJob, SyncJobStatus
 from app.models.system_setting import SystemSetting
+from app.models.alerting import (
+    AlertAddress, RawMessage, Alert, AlertMedia,
+    RAW_MESSAGE_STATUSES, PARSER_CONFIDENCES, ALERT_EVENT_TYPES, ALERT_MEDIA_KINDS,
+)
+from app.models.webhook import WebhookConsumer, WebhookDelivery, DELIVERY_STATUSES
+from app.models.service_account import ServiceAccount, ServiceAccountToken
 
 __all__ = [
     # Base classes
@@ -47,4 +53,21 @@ __all__ = [
     "SyncJob",
     "SyncJobStatus",
     "SystemSetting",
+
+    # Alerting models
+    "AlertAddress",
+    "RawMessage",
+    "Alert",
+    "AlertMedia",
+    "WebhookConsumer",
+    "WebhookDelivery",
+    "ServiceAccount",
+    "ServiceAccountToken",
+
+    # Alerting status / type constants
+    "RAW_MESSAGE_STATUSES",
+    "PARSER_CONFIDENCES",
+    "ALERT_EVENT_TYPES",
+    "ALERT_MEDIA_KINDS",
+    "DELIVERY_STATUSES",
 ]

@@ -175,9 +175,99 @@ def get_super_admin_user(
     return current_user
 
 
+# ============================================================================ #
+# Service-account auth (non-human principals, e.g. GuardDesk)
+#
+# Tokens have a `tlsa_` prefix so they're easy to grep in logs and obviously
+# distinct from JWTs. Stored hashed (bcrypt); verify with passlib.
+# Scopes are checked via require_scope() — see scoping in spec §12.2.
+# ============================================================================ #
+
+
+async def get_current_service_account(
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """
+    Resolve a service account from a `Bearer tlsa_<secret>` token. Returns the
+    ServiceAccount row. Raises 401 on any failure.
+
+    Imported lazily so this module stays importable in environments where the
+    alerting models haven't been migrated yet.
+    """
+    from datetime import datetime, timezone
+    from passlib.hash import bcrypt  # type: ignore
+    from app.models.service_account import ServiceAccount, ServiceAccountToken
+
+    raw = credentials.credentials or ""
+    if not raw.startswith("tlsa_"):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Service account token required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    now = datetime.now(timezone.utc)
+    # Bcrypt verify against every active token. With <100 active tokens this is
+    # ~50ms total — acceptable for our scale. A lookup-table optimization (HMAC
+    # of the raw token as a fast index) is a follow-up if this becomes a hotspot.
+    candidates = (
+        db.query(ServiceAccountToken)
+        .join(ServiceAccount, ServiceAccountToken.service_account_id == ServiceAccount.id)
+        .filter(
+            ServiceAccountToken.revoked_at.is_(None),
+            ServiceAccount.is_active == True,  # noqa: E712
+        )
+        .all()
+    )
+    matched: ServiceAccountToken | None = None
+    for tok in candidates:
+        if tok.expires_at and tok.expires_at < now:
+            continue
+        try:
+            if bcrypt.verify(raw, tok.token_hash):
+                matched = tok
+                break
+        except Exception:
+            continue
+
+    if matched is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid service-account token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    matched.last_used_at = now
+    db.commit()
+
+    return matched.service_account
+
+
+def require_scope(*required_scopes: str):
+    """
+    Build a dependency that asserts the service account has at least one of the
+    given scopes. Use as `Depends(require_scope('alerts:read'))`.
+    """
+
+    async def _check(
+        sa = Depends(get_current_service_account),
+    ):
+        scopes = set(sa.scopes or [])
+        if not any(s in scopes for s in required_scopes):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Missing required scope ({' or '.join(required_scopes)})",
+            )
+        return sa
+
+    return _check
+
+
 # Type aliases for dependency injection
 CurrentUser = Annotated[User, Depends(get_current_user)]
 ActiveUser = Annotated[User, Depends(get_current_active_user)]
 AdminUser = Annotated[User, Depends(get_admin_user)]
 SuperAdminUser = Annotated[User, Depends(get_super_admin_user)]
 DBSession = Annotated[Session, Depends(get_db)]
+ServiceAccountAuth = Annotated["ServiceAccount", Depends(get_current_service_account)]  # noqa: F821
