@@ -99,6 +99,35 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = "http://localhost:3000"
     INVITATION_TOKEN_EXPIRY_HOURS: int = 72
 
+    # Alerting feature — SMTP ingest + MinIO + GuardDesk webhook
+    ALERT_DOMAIN: str = "alerts.usvg.ai"
+    ALERT_LMTP_SOCKET: str = "/var/run/truelive/ingest.sock"
+    ALERT_RATE_LIMIT_PER_MINUTE: int = 60
+    ALERT_MAX_MESSAGE_SIZE: int = 26214400  # 25 MB (matches Postfix message_size_limit)
+
+    # MinIO / S3
+    MINIO_ENDPOINT: str = "s3.usvg.ai"
+    MINIO_ACCESS_KEY: Optional[str] = None
+    MINIO_SECRET_KEY: Optional[str] = None
+    MINIO_SECURE: bool = True
+    MINIO_REGION: str = "us-east-1"
+    MINIO_RAW_MAIL_BUCKET: str = "truelive-raw-mail"
+    MINIO_ALERT_MEDIA_BUCKET: str = "truelive-alert-media"
+    MINIO_PRESIGN_EXPIRY_DAYS: int = 7
+
+    # Webhook delivery
+    WEBHOOK_TIMEOUT_SECONDS: int = 5
+    WEBHOOK_HMAC_TIMESTAMP_SKEW_SECONDS: int = 300  # 5 min replay-protection window
+    WEBHOOK_RETRY_SCHEDULE_SECONDS: List[int] = Field(
+        default_factory=lambda: [60, 300, 1800, 7200, 43200]  # 1m, 5m, 30m, 2h, 12h
+    )
+
+    # Retention (days)
+    RETENTION_RAW_MAIL_DAYS: int = 90
+    RETENTION_ALERTS_DAYS: int = 90
+    RETENTION_ALERT_MEDIA_DAYS: int = 30
+    RETENTION_WEBHOOK_DELIVERIES_DAYS: int = 30
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
