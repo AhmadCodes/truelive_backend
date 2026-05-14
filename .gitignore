@@ -181,6 +181,10 @@ temp/
 # Experiments and tests (all test scripts, results, and reports)
 experiments/
 
+# Local secrets (alerting feature, future per-environment secrets).
+# Real credentials only — referenced from docker-compose.yml via env_file.
+secrets/
+
 USER_MANAGEMENT_API.md
 CAMERA_MANAGEMENT_API.md
 SCREENSHOT_API.md
