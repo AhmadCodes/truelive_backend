@@ -264,6 +264,77 @@ def require_scope(*required_scopes: str):
     return _check
 
 
+# ============================================================================ #
+# Hybrid auth dependencies — accept EITHER a human JWT user OR a service
+# account with one of the listed scopes. The bearer token's prefix determines
+# which path runs: `tlsa_*` → service account, anything else → JWT.
+#
+# Used by sites + cameras endpoints (and any future resource that should be
+# reachable by both humans and machine integrations).
+# ============================================================================ #
+
+
+def user_or_scope(*scopes: str):
+    """
+    Allow any active JWT user OR a service account with one of `scopes`.
+
+    Used for read-only endpoints that all authenticated humans can hit, plus
+    service accounts with the appropriate read (or manage, since manage implies
+    read) scope.
+    """
+
+    async def _dep(
+        credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)],
+        db: Annotated[Session, Depends(get_db)],
+    ):
+        raw = credentials.credentials or ""
+        if raw.startswith("tlsa_"):
+            sa = await get_current_service_account(credentials, db)
+            sa_scopes = set(sa.scopes or [])
+            if not (sa_scopes & set(scopes)):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Missing required scope ({' or '.join(scopes)})",
+                )
+            return sa
+        return await get_current_user(credentials, db)
+
+    return _dep
+
+
+def admin_or_scope(*scopes: str):
+    """
+    Allow admin/super-admin JWT user OR a service account with one of `scopes`.
+
+    Used for write endpoints that admins (or service accounts granted the
+    manage scope) can hit.
+    """
+
+    async def _dep(
+        credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)],
+        db: Annotated[Session, Depends(get_db)],
+    ):
+        raw = credentials.credentials or ""
+        if raw.startswith("tlsa_"):
+            sa = await get_current_service_account(credentials, db)
+            sa_scopes = set(sa.scopes or [])
+            if not (sa_scopes & set(scopes)):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Missing required scope ({' or '.join(scopes)})",
+                )
+            return sa
+        user = await get_current_user(credentials, db)
+        if user.role not in ("admin", "super_admin"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin privileges required",
+            )
+        return user
+
+    return _dep
+
+
 # Type aliases for dependency injection
 CurrentUser = Annotated[User, Depends(get_current_user)]
 ActiveUser = Annotated[User, Depends(get_current_active_user)]

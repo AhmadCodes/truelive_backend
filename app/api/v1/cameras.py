@@ -3,12 +3,12 @@ Camera management API endpoints.
 Only admins and super admins can create, update, and delete cameras.
 """
 
-from fastapi import APIRouter, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from typing import List, Optional
+from typing import Annotated, List, Optional
 
-from app.api.deps import AdminUser, DBSession, CurrentUser
+from app.api.deps import DBSession, user_or_scope, admin_or_scope
 from app.models.camera import Camera
 from app.models.site import Site
 from app.schemas.camera import (
@@ -26,7 +26,7 @@ router = APIRouter()
 @router.post("", response_model=CameraDetailResponse, status_code=status.HTTP_201_CREATED)
 async def create_camera(
     camera_data: CameraCreate,
-    current_user: AdminUser,
+    _auth: Annotated[object, Depends(admin_or_scope("cameras:manage"))],
     db: DBSession
 ):
     """
@@ -108,7 +108,7 @@ async def create_camera(
 
 @router.get("", response_model=List[CameraDetailResponse])
 async def list_cameras(
-    current_user: CurrentUser,
+    _auth: Annotated[object, Depends(user_or_scope("cameras:read", "cameras:manage"))],
     db: DBSession,
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(50, ge=1, le=1000, description="Number of records to return"),
@@ -185,7 +185,7 @@ async def list_cameras(
 
 @router.get("/count")
 async def count_cameras(
-    current_user: CurrentUser,
+    _auth: Annotated[object, Depends(user_or_scope("cameras:read", "cameras:manage"))],
     db: DBSession,
     site_id: Optional[str] = Query(None, description="Filter by site ID"),
     sureview_camera: Optional[bool] = Query(None, description="Filter by SureView camera flag"),
@@ -223,7 +223,7 @@ async def count_cameras(
 @router.get("/{camera_id}", response_model=CameraDetailResponse)
 async def get_camera(
     camera_id: str,
-    current_user: CurrentUser,
+    _auth: Annotated[object, Depends(user_or_scope("cameras:read", "cameras:manage"))],
     db: DBSession
 ):
     """
@@ -272,7 +272,7 @@ async def get_camera(
 async def update_camera(
     camera_id: str,
     camera_data: CameraUpdate,
-    current_user: AdminUser,
+    _auth: Annotated[object, Depends(admin_or_scope("cameras:manage"))],
     db: DBSession
 ):
     """
@@ -357,7 +357,7 @@ async def update_camera(
 @router.delete("/{camera_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_camera(
     camera_id: str,
-    current_user: AdminUser,
+    _auth: Annotated[object, Depends(admin_or_scope("cameras:manage"))],
     db: DBSession
 ):
     """
@@ -390,7 +390,7 @@ async def delete_camera(
 @router.patch("/{camera_id}/mark-as-seen")
 async def mark_camera_as_seen(
     camera_id: str,
-    current_user: AdminUser,
+    _auth: Annotated[object, Depends(admin_or_scope("cameras:manage"))],
     db: DBSession
 ):
     """
@@ -427,7 +427,7 @@ async def mark_camera_as_seen(
 @router.patch("/{camera_id}/toggle-new")
 async def toggle_camera_new_flag(
     camera_id: str,
-    current_user: AdminUser,
+    _auth: Annotated[object, Depends(admin_or_scope("cameras:manage"))],
     db: DBSession
 ):
     """
@@ -467,7 +467,7 @@ async def toggle_camera_new_flag(
 @router.get("/site/{site_id}", response_model=List[CameraDetailResponse])
 async def get_cameras_by_site(
     site_id: str,
-    current_user: CurrentUser,
+    _auth: Annotated[object, Depends(user_or_scope("cameras:read", "cameras:manage"))],
     db: DBSession
 ):
     """

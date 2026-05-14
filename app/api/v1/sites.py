@@ -2,10 +2,10 @@
 Site management API endpoints.
 """
 
-from fastapi import APIRouter, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from app.api.deps import DBSession, CurrentUser, AdminUser
+from app.api.deps import DBSession, user_or_scope, admin_or_scope
 from app.models.site import Site
 from app.models.category import SiteCategoryMapping
 from app.schemas.site import (
@@ -37,7 +37,7 @@ router = APIRouter()
 @router.get("", response_model=SiteListResponse)
 async def list_sites(
     db: DBSession,
-    current_user: CurrentUser,
+    _auth = Depends(user_or_scope("sites:read", "sites:manage")),
     category_id: Optional[str] = Query(None),
     include_cameras: bool = Query(False),
     page: int = Query(1, ge=1),
@@ -93,7 +93,7 @@ async def list_sites(
 async def create_site(
     site_data: SiteCreate,
     db: DBSession,
-    current_user: AdminUser
+    _auth = Depends(admin_or_scope("sites:manage"))
 ):
     """
     Create a new site.
@@ -126,7 +126,7 @@ async def create_site(
 async def get_site(
     site_id: str,
     db: DBSession,
-    current_user: CurrentUser
+    _auth = Depends(user_or_scope("sites:read", "sites:manage"))
 ):
     """
     Get single site with full details including cameras and categories.
@@ -147,7 +147,7 @@ async def update_site(
     site_id: str,
     site_data: SiteUpdate,
     db: DBSession,
-    current_user: AdminUser
+    _auth = Depends(admin_or_scope("sites:manage"))
 ):
     """
     Update site details.
@@ -182,7 +182,7 @@ async def update_site(
 async def delete_site(
     site_id: str,
     db: DBSession,
-    current_user: AdminUser
+    _auth = Depends(admin_or_scope("sites:manage"))
 ):
     """
     Delete site and all associated data (cascades to cameras and layouts).
@@ -208,7 +208,7 @@ async def assign_category_to_site(
     site_id: str,
     category_data: CategoryAssignment,
     db: DBSession,
-    current_user: AdminUser
+    _auth = Depends(admin_or_scope("sites:manage"))
 ):
     """
     Assign category to site.
@@ -245,7 +245,7 @@ async def assign_category_to_site(
 async def auto_populate_site_camera_layout(
     site_id: str,
     db: DBSession,
-    current_user: AdminUser
+    _auth = Depends(admin_or_scope("sites:manage"))
 ):
     """
     Auto-populate camera layout for a single site.
@@ -285,7 +285,7 @@ async def auto_populate_site_camera_layout(
 @router.post("/auto-populate-all-cameras", response_model=BulkAutoPopulateResponse)
 async def auto_populate_all_site_cameras(
     db: DBSession,
-    current_user: AdminUser
+    _auth = Depends(admin_or_scope("sites:manage"))
 ):
     """
     Auto-populate camera layouts for all sites that have cameras.
@@ -322,7 +322,7 @@ async def auto_populate_all_site_cameras(
 async def get_site_camera_layout_config(
     site_id: str,
     db: DBSession,
-    current_user: CurrentUser
+    _auth = Depends(user_or_scope("sites:read", "sites:manage"))
 ):
     """
     Get the current camera layout configuration for a site.
@@ -358,7 +358,7 @@ async def save_site_camera_layout_config(
     site_id: str,
     layout_data: SaveLayoutRequest,
     db: DBSession,
-    current_user: AdminUser
+    _auth = Depends(admin_or_scope("sites:manage"))
 ):
     """
     Manually create or update camera layout configuration for a site.
@@ -433,7 +433,7 @@ async def save_site_camera_layout_config(
 async def delete_site_camera_layout_config(
     site_id: str,
     db: DBSession,
-    current_user: AdminUser
+    _auth = Depends(admin_or_scope("sites:manage"))
 ):
     """
     Delete the camera layout configuration for a site.

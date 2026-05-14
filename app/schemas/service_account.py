@@ -25,8 +25,14 @@ Scope = Literal[
     "alerts:raw:read",
     "webhook:manage",
     "addresses:read",
+    "sites:read",
+    "sites:manage",
+    "cameras:read",
+    "cameras:manage",
 ]
 """Valid permission scopes for service-account tokens.
+
+Alerting:
 
 - `alerts:read`      — GET on /alerts, /alerts/{id}, /alerts/{id}/deliveries,
                        and /alerts/{id}/media/{media_id}.
@@ -36,6 +42,17 @@ Scope = Literal[
 - `webhook:manage`   — Full CRUD on /alerting/webhook-consumers, scoped to
                        rows the caller owns.
 - `addresses:read`   — GET on /cameras/{id}/alert-addresses.
+
+Inventory (read + manage are independent; `:manage` also satisfies any
+`:read` requirement, so granting just `:manage` covers both):
+
+- `sites:read`       — GET on /sites, /sites/{id}, and /sites/{id}/camera-layout.
+- `sites:manage`     — POST/PUT/PATCH/DELETE on /sites and its sub-resources
+                       (category, auto-populate-cameras, camera-layout).
+- `cameras:read`     — GET on /cameras, /cameras/count, /cameras/{id}, and
+                       /cameras/site/{id}.
+- `cameras:manage`   — POST/PUT/PATCH/DELETE on /cameras (including the
+                       mark-as-seen and toggle-new sub-resources).
 """
 
 
