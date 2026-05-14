@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # PostgreSQL Database
   postgres:
@@ -46,7 +44,7 @@ services:
   backend:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: dockerfile
       target: production
     container_name: truelive_backend
     restart: unless-stopped
@@ -54,8 +52,11 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
     env_file:
       - .env
+      - /etc/truelive/alerting.env
     volumes:
       - ./app:/app/app:ro
+      - ./alembic:/app/alembic:ro
+      - ./alembic.ini:/app/alembic.ini:ro
       - upload_data:/app/uploads
       - logs:/app/logs
     ports:
@@ -86,12 +87,18 @@ services:
   celery_worker:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: dockerfile
       target: production
     container_name: truelive_celery_worker
     restart: unless-stopped
     init: true
-    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=4
+    # Listens on celery (default), alert_parse, alert_deliver queues. The
+    # alert_deliver pool runs with prefetch=1 inside one process via Celery's
+    # global setting in celery_app.py.
+    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=4 -Q celery,alert_parse,alert_deliver
+    env_file:
+      - .env
+      - /etc/truelive/alerting.env
     volumes:
       - ./app:/app/app:ro
       - upload_data:/app/uploads
@@ -119,11 +126,14 @@ services:
   celery_beat:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: dockerfile
       target: production
     container_name: truelive_celery_beat
     restart: unless-stopped
     command: celery -A app.tasks.celery_app beat --loglevel=info
+    env_file:
+      - .env
+      - /etc/truelive/alerting.env
     volumes:
       - ./app:/app/app:ro
       - celery_beat_data:/var/lib/celery
@@ -145,7 +155,7 @@ services:
   websocket:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: dockerfile
       target: production
     container_name: truelive_websocket
     restart: unless-stopped
@@ -174,11 +184,110 @@ services:
       timeout: 10s
       retries: 3
 
+  # ============================================================
+  # Alerting feature — MinIO blob storage + SMTP ingest service
+  # ============================================================
+
+  # MinIO (S3-compatible) for raw mail + alert media
+  minio:
+    image: minio/minio:RELEASE.2024-08-17T01-24-54Z
+    container_name: truelive_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    # env_file supplies MINIO_ROOT_USER, MINIO_ROOT_PASSWORD, MINIO_REGION.
+    # We avoid YAML interpolation (${VAR:?}) because env_file is read at
+    # container-start time, not at YAML-parse time — which means YAML
+    # interpolation can't see env_file values without `--env-file` on the CLI.
+    env_file:
+      - /etc/truelive/alerting.env
+    environment:
+      # When fronted by nginx at https://s3.usvg.ai, MinIO needs to know its
+      # external URL so presigned URLs come out correctly.
+      - MINIO_SERVER_URL=https://s3.usvg.ai
+      - MINIO_BROWSER_REDIRECT_URL=https://s3.usvg.ai/minio-console
+    volumes:
+      - minio_data:/data
+    ports:
+      # Localhost-only: nginx on the host terminates TLS and proxies to us.
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - truelive_network
+
+  # One-shot bucket initialization. Creates both buckets if absent and applies
+  # lifecycle expiry per spec §13.
+  minio_init:
+    image: minio/mc:RELEASE.2024-08-17T11-33-50Z
+    container_name: truelive_minio_init
+    depends_on:
+      minio:
+        condition: service_healthy
+    # All needed vars come from env_file (avoids YAML-interpolation gotcha).
+    env_file:
+      - /etc/truelive/alerting.env
+    entrypoint: >
+      sh -c '
+        set -eu;
+        mc alias set local http://minio:9000 "$$MINIO_ACCESS_KEY" "$$MINIO_SECRET_KEY";
+        for B in "$$MINIO_RAW_MAIL_BUCKET" "$$MINIO_ALERT_MEDIA_BUCKET"; do
+          mc mb --ignore-existing "local/$$B";
+          mc encrypt set sse-s3 "local/$$B" || true;
+        done;
+        # Raw mail: 90 day expiry
+        mc ilm rule add --expire-days 90 "local/$$MINIO_RAW_MAIL_BUCKET" || true;
+        # Alert media: 30 day expiry
+        mc ilm rule add --expire-days 30 "local/$$MINIO_ALERT_MEDIA_BUCKET" || true;
+        echo "minio_init: buckets ready";
+      '
+    restart: "no"
+    networks:
+      - truelive_network
+
+  # truelive-smtp-ingest — aiosmtpd LMTP server.
+  # Listens on /var/run/truelive/ingest.sock (bind-mounted from host so Postfix
+  # on the host can talk to it via LMTP transport).
+  smtp_ingest:
+    build:
+      context: .
+      dockerfile: dockerfile
+      target: production
+    container_name: truelive_smtp_ingest
+    restart: unless-stopped
+    init: true
+    command: python -m app.services.smtp_ingest
+    env_file:
+      - .env
+      - /etc/truelive/alerting.env
+    volumes:
+      - ./app:/app/app:ro
+      - /var/run/truelive:/var/run/truelive
+      - logs:/app/logs
+    environment:
+      - DATABASE_URL=postgresql://truelive:truelive_password@postgres:5432/truelive_portal
+      - REDIS_URL=redis://:YtrewqQwerty123123Ytrewq@redis:6379/0
+      - DEBUG=False
+      - ENVIRONMENT=production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - truelive_network
+
   # Database Migration (run once)
   migration:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: dockerfile
       target: production
     container_name: truelive_migration
     command: alembic upgrade head
@@ -208,6 +317,8 @@ volumes:
   celery_beat_data:
     driver: local
   logs:
+    driver: local
+  minio_data:
     driver: local
 
 # Networks

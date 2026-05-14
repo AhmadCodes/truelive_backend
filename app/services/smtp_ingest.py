@@ -283,7 +283,19 @@ def reconcile_stuck_messages(*, older_than_seconds: int = 60) -> int:
 # Entrypoint
 # ---------------------------------------------------------------------------- #
 
-def _make_controller() -> UnixSocketController:
+class _LMTPUnixSocketController(UnixSocketController):
+    """UnixSocketController that serves LMTP (not SMTP) on the socket.
+
+    aiosmtpd's Controller.factory() returns an SMTP() by default. We override
+    to return LMTP() so the handshake speaks LMTP — which is what Postfix's
+    lmtp:unix transport expects on the receiving end.
+    """
+
+    def factory(self):
+        return LMTP(self.handler, **(self.SMTP_kwargs or {}))
+
+
+def _make_controller() -> _LMTPUnixSocketController:
     socket_path = settings.ALERT_LMTP_SOCKET
     # Ensure parent dir exists. Postfix usually sets /var/run/truelive ownership.
     parent = os.path.dirname(socket_path)
@@ -297,11 +309,14 @@ def _make_controller() -> UnixSocketController:
             pass
 
     handler = AlertLMTPHandler()
-    controller = UnixSocketController(
+    controller = _LMTPUnixSocketController(
         handler=handler,
         unix_socket=socket_path,
-        server_kwargs={"factory": LMTP},
     )
+    # Stash a place for SMTP_kwargs so factory() can use it; aiosmtpd's
+    # Controller has `SMTP_kwargs` on newer versions but we keep this safe.
+    if not hasattr(controller, "SMTP_kwargs"):
+        controller.SMTP_kwargs = {}
     return controller
 
 
@@ -330,6 +345,15 @@ def main() -> int:  # pragma: no cover — process entrypoint
         except Exception:
             logger.exception("startup reconciliation failed")
         controller.start()
+        # Postfix (running as user `postfix` on the host) needs to be able to
+        # connect to this unix socket. The default socket perms after bind are
+        # 0755 — Postfix has no write bit and connect(2) would fail with EACCES.
+        # Loosen to 0666; the socket is on a trusted host, accessible only via
+        # local filesystem.
+        try:
+            os.chmod(settings.ALERT_LMTP_SOCKET, 0o666)
+        except OSError:
+            logger.exception("failed to chmod LMTP socket; Postfix may not be able to connect")
         logger.info(
             "LMTP listening on %s", settings.ALERT_LMTP_SOCKET,
         )
