@@ -19,23 +19,29 @@ from pydantic import BaseModel, Field, HttpUrl
 # pipeline. Centralized here so they render as `enum` lists in the OpenAPI
 # schema and Swagger UI surfaces them as a dropdown.
 
-EventType = Literal["motion", "person", "vehicle", "intrusion", "unknown"]
-"""Normalized event types extracted by the parser.
+EventType = Literal["alert"]
+"""Normalized event classification.
 
-- `motion`     — generic motion detection
-- `person`     — person-shaped object detected
-- `vehicle`    — vehicle-shaped object detected
-- `intrusion`  — perimeter/zone intrusion
-- `unknown`    — parser couldn't classify; raw subject/body available for fallback
+In v1 every alert is the constant `alert` — the upstream AI filter (e.g.
+Calipsa) already classified by sending the email, and this producer does not
+parse email bodies to derive a finer category. The schema reserves a Literal
+field shape so future enrichment can add types here and bump `schema_version`
+on a contract break.
+
+If you need finer categorization on the consumer side, derive it from
+`subject` or fetch the raw `.eml` via `GET /alerts/{id}/raw`.
 """
 
 ParserConfidence = Literal["exact", "heuristic", "llm_generated", "unparsed"]
-"""How sure the parser is about the structured fields.
+"""How sure the producer is about the structured fields.
 
-- `exact`         — template matched perfectly, all fields extracted reliably
-- `heuristic`     — partial match; some fields inferred (e.g. event from subject only)
-- `llm_generated` — fields produced by an LLM-driven fallback (future)
-- `unparsed`      — no parser matched; only `subject`/`body_text` are reliable
+- `exact`         — current passthrough always emits this (no body parsing, so
+                    nothing to be uncertain about)
+- `heuristic`     — reserved for future template-aware parsing
+- `llm_generated` — reserved for future LLM-driven enrichment
+- `unparsed`      — reserved for future raw fallbacks
+
+Today, expect `exact` on every alert.
 """
 
 AlertMediaKind = Literal["snapshot", "video_clip", "attachment_other"]
@@ -167,18 +173,27 @@ class AlertMediaResponse(BaseModel):
     )
     size_bytes: int = Field(..., description="Byte count of the stored object.", examples=[184320])
     sha256: str = Field(
-        ..., description="SHA-256 hex digest of the stored object — use to verify integrity.",
-        examples=["ab12cd34ef56...0"],
+        ..., description="SHA-256 hex digest of the stored object — use to verify integrity. Always exactly 64 lowercase hex chars.",
+        examples=["4b54c69cd7c4a3d8e2f1b9a7c5d3e8f10c2a4b6d8e1f3a5c7e9b1d3f5a7c9e1b3"],
     )
     url: Optional[str] = Field(
         None,
         description=(
             "Presigned MinIO/S3 GET URL, valid for ~7 days from generation. "
-            "If null, storage retrieval failed or the blob has aged out (media "
-            "is retained 30 days). Use `GET /alerts/{id}/media/{media_id}` to "
-            "mint a fresh URL."
+            "Real URLs are 400–800 chars long (X-Amz-* query string carries the "
+            "signature). If null, storage retrieval failed or the blob has aged "
+            "out (media is retained 30 days). Use `GET /alerts/{id}/media/{media_id}` "
+            "to mint a fresh URL."
         ),
-        examples=["https://s3.usvg.ai/truelive-alert-media/2026/05/14/.../0193f8a3.jpg?X-Amz-..."],
+        examples=[
+            "https://s3.usvg.ai/truelive-alert-media/2026/05/14/74a06272-5833-41c5-86be-1edcb48a715d/93eda4f5-1208-417e-83b4-c0d0aa6e7eed.jpg"
+            "?X-Amz-Algorithm=AWS4-HMAC-SHA256"
+            "&X-Amz-Credential=truelive-alerting-xxxxxxxx%2F20260514%2Fus-east-1%2Fs3%2Faws4_request"
+            "&X-Amz-Date=20260514T143433Z"
+            "&X-Amz-Expires=604800"
+            "&X-Amz-SignedHeaders=host"
+            "&X-Amz-Signature=4b54c69cd7c4a3d8e2f1b9a7c5d3e8f10c2a4b6d8e1f3a5c7e9b1d3f5a7c9e1b3"
+        ],
     )
     url_expires_at: Optional[datetime] = Field(
         None, description="UTC time at which `url` stops working (if `url` is non-null).",
@@ -194,21 +209,21 @@ class AlertMediaResponse(BaseModel):
 
 
 class AlertParserInfo(BaseModel):
-    """Provenance of the structured fields — which parser produced them."""
+    """Provenance of the structured fields — which producer built this alert."""
     id: Optional[str] = Field(
-        None, description="Stable parser identifier.", examples=["calipsa_nvr_v1"],
+        None, description="Stable producer identifier. Today always `passthrough_v1`.",
+        examples=["passthrough_v1"],
     )
     version: Optional[int] = Field(
-        None, description="Parser version (incremented when its output shape changes).", examples=[1],
+        None, description="Producer version (incremented if its output shape changes).", examples=[1],
     )
     confidence: ParserConfidence = Field(
         ...,
         description=(
-            "How sure the parser is about the structured fields. One of:\n\n"
-            "- `exact` — template matched perfectly, all fields extracted reliably\n"
-            "- `heuristic` — partial match; some fields inferred (e.g. event from subject only)\n"
-            "- `llm_generated` — fields produced by an LLM-driven fallback (future)\n"
-            "- `unparsed` — no parser matched; only `subject` and `body_text` are reliable"
+            "How sure the producer is about the structured fields. Always `exact` in v1 — "
+            "the passthrough producer doesn't parse email bodies so there's nothing to "
+            "be uncertain about. `heuristic` / `llm_generated` / `unparsed` are reserved "
+            "for future enrichment."
         ),
         examples=["exact"],
     )
@@ -243,22 +258,21 @@ class AlertResponse(BaseModel):
     event_type: EventType = Field(
         ...,
         description=(
-            "Normalized event classification. One of:\n\n"
-            "- `motion` — generic motion detection\n"
-            "- `person` — person-shaped object detected\n"
-            "- `vehicle` — vehicle-shaped object detected\n"
-            "- `intrusion` — perimeter/zone intrusion\n"
-            "- `unknown` — parser couldn't classify; rely on `subject`/`body_text`"
+            "Normalized event classification. Always `alert` in v1 — the upstream "
+            "AI filter already classified by sending the email, and this producer "
+            "does not parse email bodies. Reserved as a Literal so future per-type "
+            "classification can be added with a `schema_version` bump."
         ),
-        examples=["motion"],
+        examples=["alert"],
     )
     event_subtype: Optional[str] = Field(
         None,
         description=(
-            "Free-form sub-classification from the parser, e.g. 'Motion Detected' "
-            "or 'person_detected'. Schema is parser-specific."
+            "Sub-classification. Always `ai_alert` in v1 (constant; producer does "
+            "not derive subtype from body content). Free-form string so future "
+            "enrichment can populate it without a schema break."
         ),
-        examples=["Motion Detected"],
+        examples=["ai_alert"],
     )
     confidence: Optional[float] = Field(
         None,
@@ -284,11 +298,11 @@ class AlertResponse(BaseModel):
     extra: dict[str, Any] = Field(
         default_factory=dict,
         description=(
-            "Parser-specific extra fields that don't fit the normalized columns. "
-            "Shape depends on the parser; treat keys as optional. Example for the "
-            "Calipsa NVR parser: `{\"camera_channel\": \"D4(D4)\", \"nvr_serial\": \"08202...\"}`."
+            "Reserved for future header- or MIME-level metadata. Always `{}` in v1 "
+            "(producer does not derive any fields from body content). Consumers "
+            "should treat all keys as optional."
         ),
-        examples=[{"camera_channel": "D4(D4)", "nvr_serial": "0820241008CCRRFQ"}],
+        examples=[{}],
     )
 
 
@@ -299,18 +313,17 @@ class AlertListItem(BaseModel):
     received_at: datetime
     event_type: EventType = Field(
         ...,
-        description=(
-            "Normalized event classification. One of: `motion`, `person`, "
-            "`vehicle`, `intrusion`, `unknown`."
-        ),
+        description="Always `alert` in v1. See AlertResponse.event_type for the full reservation rationale.",
+        examples=["alert"],
     )
-    event_subtype: Optional[str] = None
+    event_subtype: Optional[str] = Field(None, examples=["ai_alert"])
     parser_confidence: ParserConfidence = Field(
         ...,
         description=(
-            "Parser confidence. One of: `exact`, `heuristic`, `llm_generated`, "
-            "`unparsed`. See `AlertParserInfo.confidence` for what each means."
+            "Parser confidence. Always `exact` in v1; `heuristic` / `llm_generated` / "
+            "`unparsed` are reserved for future enrichment that doesn't currently exist."
         ),
+        examples=["exact"],
     )
     subject: Optional[str] = None
 
