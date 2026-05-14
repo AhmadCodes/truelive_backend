@@ -32,6 +32,20 @@ celery_app.conf.update(
     worker_max_tasks_per_child=1000,
 )
 
+# Dedicated queues for the alerting pipeline. alert_parse handles MIME parsing
+# and persistence; alert_deliver runs with prefetch=1 so slow GuardDesk responses
+# don't block parallel deliveries. Configure both worker pools in deployment:
+#   celery -A app.tasks.celery_app worker -Q alert_parse,celery -c 4
+#   celery -A app.tasks.celery_app worker -Q alert_deliver -c 8 --prefetch-multiplier=1
+celery_app.conf.task_routes = {
+    "app.tasks.process_inbound_alert": {"queue": "alert_parse"},
+    "app.tasks.deliver_webhook": {"queue": "alert_deliver"},
+    "app.tasks.deliver_webhook_retry": {"queue": "alert_deliver"},
+    "app.tasks.rollover_alerting_partitions": {"queue": "celery"},
+    "app.tasks.drop_old_alerting_partitions": {"queue": "celery"},
+    "app.tasks.reconcile_smtp_ingest": {"queue": "alert_parse"},
+}
+
 # Beat schedule for periodic tasks
 celery_app.conf.beat_schedule = {
     'update-snapshots': {
@@ -47,6 +61,18 @@ celery_app.conf.beat_schedule = {
         'options': {
             'expires': 300  # Task expires after 5 minutes if not picked up
         }
+    },
+    'alerting-rollover-partitions': {
+        'task': 'app.tasks.rollover_alerting_partitions',
+        'schedule': crontab(hour=1, minute=30),  # Daily at 01:30 UTC
+    },
+    'alerting-drop-old-partitions': {
+        'task': 'app.tasks.drop_old_alerting_partitions',
+        'schedule': crontab(hour=2, minute=0),   # Daily at 02:00 UTC
+    },
+    'alerting-reconcile-ingest': {
+        'task': 'app.tasks.reconcile_smtp_ingest',
+        'schedule': 60,  # every minute
     },
 }
 
@@ -66,3 +92,12 @@ try:
     from app.tasks import snapshot_tasks, sureview_tasks
 except ImportError as e:
     logger.warning(f"Could not import task modules: {e}")
+
+try:
+    from app.tasks import (
+        process_inbound_alert,  # noqa: F401
+        deliver_webhook,        # noqa: F401
+        alerting_maintenance,   # noqa: F401
+    )
+except ImportError as e:
+    logger.warning(f"Could not import alerting task modules: {e}")
