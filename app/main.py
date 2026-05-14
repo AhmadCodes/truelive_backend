@@ -14,6 +14,7 @@ import logging
 from app.core.config import settings
 from app.database import check_db_health, SessionLocal
 from app.api.v1 import auth, sites, cameras, pcs, screens, views, users, categories, sureview, snapshots, configs, stream, invitations, audit_logs, settings as settings_router
+from app.api.v1 import alert_addresses, alerts as alerts_router, webhook_consumers, service_accounts
 
 
 # Configure logging
@@ -230,6 +231,33 @@ app.include_router(
     stream.router,
     prefix=f"{settings.API_V1_PREFIX}/stream",
     tags=["Streaming"]
+)
+
+# ---------------- Alerting feature ---------------- #
+# Alert addresses are mounted at the root API prefix so the existing
+# /cameras/{id}/alert-addresses path nests naturally.
+app.include_router(
+    alert_addresses.router,
+    prefix=settings.API_V1_PREFIX,
+    tags=["Alerting — Addresses"],
+)
+
+app.include_router(
+    alerts_router.router,
+    prefix=f"{settings.API_V1_PREFIX}/alerts",
+    tags=["Alerting — Alerts"],
+)
+
+app.include_router(
+    webhook_consumers.router,
+    prefix=f"{settings.API_V1_PREFIX}/alerting",
+    tags=["Alerting — Webhooks"],
+)
+
+app.include_router(
+    service_accounts.router,
+    prefix=f"{settings.API_V1_PREFIX}/service-accounts",
+    tags=["Service Accounts"],
 )
 
 

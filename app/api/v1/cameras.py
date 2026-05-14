@@ -77,6 +77,19 @@ async def create_camera(
     db.commit()
     db.refresh(new_camera)
 
+    # Auto-provision an alert address for the new camera. Best-effort: if the
+    # alerting tables haven't been migrated in some environment, swallow the
+    # error and log it — camera creation itself should not fail because of an
+    # ancillary feature.
+    try:
+        from app.api.v1.alert_addresses import _provision_address
+        _provision_address(db, new_camera.id)
+    except Exception:  # pragma: no cover
+        import logging
+        logging.getLogger(__name__).exception(
+            "auto-provision of alert address failed", extra={"camera_id": new_camera.id},
+        )
+
     # Return camera with site_name
     return {
         "id": new_camera.id,
