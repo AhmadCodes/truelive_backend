@@ -23,7 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import RedirectResponse, StreamingResponse
 from sqlalchemy import or_
 
-from app.api.deps import AdminUser, DBSession, require_scope, security
+from app.api.deps import DBSession, admin_or_scope
 from app.models.alerting import Alert, AlertMedia, RawMessage
 from app.models.webhook import WebhookConsumer, WebhookDelivery
 from app.schemas.alerting import (
@@ -114,7 +114,7 @@ def _build_response(db, alert: Alert) -> AlertResponse:
 )
 def list_alerts(
     db: DBSession,
-    _admin: AdminUser,
+    _auth = Depends(admin_or_scope("alerts:read")),
     camera_id: Optional[str] = Query(
         None,
         description="Filter to one specific camera's alerts.",
@@ -183,7 +183,7 @@ def list_alerts(
     ),
     responses={404: {"description": "Alert not found (typo or past 90-day retention)."}},
 )
-def get_alert(alert_id: str, db: DBSession, _admin: AdminUser):
+def get_alert(alert_id: str, db: DBSession, _auth = Depends(admin_or_scope("alerts:read"))):
     alert = db.query(Alert).filter(Alert.id == alert_id).one_or_none()
     if alert is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert not found")
@@ -218,7 +218,7 @@ def get_alert(alert_id: str, db: DBSession, _admin: AdminUser):
 def get_alert_raw(
     alert_id: str,
     db: DBSession,
-    _admin: AdminUser,
+    _auth = Depends(admin_or_scope("alerts:raw:read")),
     format: str = Query(
         "url", regex="^(url|stream)$",
         description=(
@@ -270,7 +270,7 @@ def get_alert_raw(
         503: {"description": "Storage backend unavailable."},
     },
 )
-def get_alert_media_url(alert_id: str, media_id: str, db: DBSession, _admin: AdminUser):
+def get_alert_media_url(alert_id: str, media_id: str, db: DBSession, _auth = Depends(admin_or_scope("alerts:read"))):
     m = db.query(AlertMedia).filter(
         AlertMedia.id == media_id, AlertMedia.alert_id == alert_id,
     ).one_or_none()
@@ -304,7 +304,7 @@ def get_alert_media_url(alert_id: str, media_id: str, db: DBSession, _admin: Adm
         "Delivery rows are retained ~30 days."
     ),
 )
-def list_deliveries(alert_id: str, db: DBSession, _admin: AdminUser):
+def list_deliveries(alert_id: str, db: DBSession, _auth = Depends(admin_or_scope("alerts:read"))):
     rows = (
         db.query(WebhookDelivery)
         .filter(WebhookDelivery.alert_id == alert_id)
@@ -334,7 +334,7 @@ def list_deliveries(alert_id: str, db: DBSession, _admin: AdminUser):
     ),
     responses={404: {"description": "Alert not found."}},
 )
-def redeliver(alert_id: str, db: DBSession, _admin: AdminUser):
+def redeliver(alert_id: str, db: DBSession, _auth = Depends(admin_or_scope("alerts:read"))):
     alert = db.query(Alert).filter(Alert.id == alert_id).one_or_none()
     if alert is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert not found")

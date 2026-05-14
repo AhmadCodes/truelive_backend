@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.api.deps import AdminUser, DBSession, require_scope
+from app.api.deps import DBSession, admin_or_scope
 from app.models.alerting import Alert
 from app.models.webhook import WebhookConsumer
 from app.schemas.alerting import (
@@ -46,7 +46,7 @@ router = APIRouter()
         "POSTs. To rotate a lost secret, `PATCH` with a new value (see below)."
     ),
 )
-def list_consumers(db: DBSession, _admin: AdminUser):
+def list_consumers(db: DBSession, _auth = Depends(admin_or_scope("webhook:manage"))):
     return db.query(WebhookConsumer).order_by(WebhookConsumer.created_at.desc()).all()
 
 
@@ -88,7 +88,7 @@ def list_consumers(db: DBSession, _admin: AdminUser):
 def create_consumer(
     body: WebhookConsumerCreate,
     db: DBSession,
-    _admin: AdminUser,
+    _auth = Depends(admin_or_scope("webhook:manage")),
 ):
     if db.query(WebhookConsumer).filter(WebhookConsumer.name == body.name).first():
         raise HTTPException(
@@ -129,7 +129,7 @@ def update_consumer(
     consumer_id: str,
     body: WebhookConsumerUpdate,
     db: DBSession,
-    _admin: AdminUser,
+    _auth = Depends(admin_or_scope("webhook:manage")),
 ):
     row = db.query(WebhookConsumer).filter(WebhookConsumer.id == consumer_id).one_or_none()
     if row is None:
@@ -160,7 +160,7 @@ def update_consumer(
 def delete_consumer(
     consumer_id: str,
     db: DBSession,
-    _admin: AdminUser,
+    _auth = Depends(admin_or_scope("webhook:manage")),
 ):
     row = db.query(WebhookConsumer).filter(WebhookConsumer.id == consumer_id).one_or_none()
     if row is None:
@@ -196,7 +196,7 @@ def delete_consumer(
 def test_consumer(
     consumer_id: str,
     db: DBSession,
-    _admin: AdminUser,
+    _auth = Depends(admin_or_scope("webhook:manage")),
 ):
     consumer = db.query(WebhookConsumer).filter(WebhookConsumer.id == consumer_id).one_or_none()
     if consumer is None:
