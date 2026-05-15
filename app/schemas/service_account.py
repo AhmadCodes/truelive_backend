@@ -25,6 +25,7 @@ Scope = Literal[
     "alerts:raw:read",
     "webhook:manage",
     "addresses:read",
+    "addresses:manage",
     "sites:read",
     "sites:manage",
     "cameras:read",
@@ -42,6 +43,10 @@ Alerting:
 - `webhook:manage`   — Full CRUD on /alerting/webhook-consumers, scoped to
                        rows the caller owns.
 - `addresses:read`   — GET on /cameras/{id}/alert-addresses.
+- `addresses:manage` — POST on /cameras/{id}/alert-addresses (provision) and
+                       DELETE / rotate / quarantine / unquarantine on
+                       /alert-addresses/{id}. Also satisfies `addresses:read`,
+                       so a manage-only grant covers both surfaces.
 
 Inventory (read + manage are independent; `:manage` also satisfies any
 `:read` requirement, so granting just `:manage` covers both):
@@ -89,7 +94,9 @@ class ServiceAccountCreate(BaseModel):
             "- `webhook:manage` — full CRUD on `/alerting/webhook-consumers`, "
             "restricted to consumers the caller owns.\n"
             "- `addresses:read` — read per-camera alert addresses "
-            "(`GET /cameras/{id}/alert-addresses`).\n\n"
+            "(`GET /cameras/{id}/alert-addresses`).\n"
+            "- `addresses:manage` — provision, revoke, rotate, quarantine, and "
+            "unquarantine alert addresses. Also satisfies `addresses:read`.\n\n"
             "Empty list is valid: the account exists but its tokens hold zero "
             "permissions (useful for pre-provisioning or temporary disable)."
         ),
@@ -107,13 +114,15 @@ class ServiceAccountUpdate(BaseModel):
             "- `alerts:read` — read normalized alerts, deliveries, and media URLs\n"
             "- `alerts:raw:read` — read the raw RFC822 source\n"
             "- `webhook:manage` — full CRUD on webhook consumers (own rows only)\n"
-            "- `addresses:read` — read per-camera alert addresses\n\n"
+            "- `addresses:read` — read per-camera alert addresses\n"
+            "- `addresses:manage` — provision, revoke, rotate, quarantine, and "
+            "unquarantine alert addresses (also satisfies `addresses:read`)\n\n"
             "**This is a full replacement, not a merge** — the list you send "
             "becomes the new list. Pass `[]` to strip all permissions while "
             "keeping the account row. Omit the field entirely to leave scopes "
             "unchanged."
         ),
-        examples=[["alerts:read", "alerts:raw:read", "webhook:manage", "addresses:read"]],
+        examples=[["alerts:read", "alerts:raw:read", "webhook:manage", "addresses:manage"]],
     )
     is_active: Optional[bool] = Field(
         None,
@@ -136,7 +145,9 @@ class ServiceAccountResponse(BaseModel):
             "- `alerts:read` — read normalized alerts, deliveries, and media URLs\n"
             "- `alerts:raw:read` — read the raw RFC822 source\n"
             "- `webhook:manage` — full CRUD on webhook consumers (own rows only)\n"
-            "- `addresses:read` — read per-camera alert addresses"
+            "- `addresses:read` — read per-camera alert addresses\n"
+            "- `addresses:manage` — provision, revoke, rotate, quarantine, and "
+            "unquarantine alert addresses (also satisfies `addresses:read`)"
         ),
     )
     is_active: bool = Field(

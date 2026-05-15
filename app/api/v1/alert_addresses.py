@@ -23,11 +23,12 @@ Path layout follows the existing project pattern (see `screens.py`, `pcs.py`):
 
 Auth model:
 - `GET /cameras/{id}/alert-addresses` — admin JWT OR service-account with the
-  `addresses:read` scope (so the downstream platform can discover the address
-  it should paste into the upstream sender's UI).
-- All mutations (create / delete / rotate / quarantine / unquarantine) require
-  an admin JWT. There is no `addresses:manage` scope by design — auto-provision
-  is automatic on camera create, and manual mutations are ops actions.
+  `addresses:read` or `addresses:manage` scope (so the downstream platform can
+  discover the address it should paste into the upstream sender's UI).
+- All mutations (create / delete / rotate / quarantine / unquarantine) — admin
+  JWT OR service-account with the `addresses:manage` scope. Auto-provision on
+  camera create still runs internally as part of the camera-create handler
+  and is unrelated to this auth path.
 """
 
 from __future__ import annotations
@@ -37,7 +38,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.api.deps import AdminUser, DBSession, admin_or_scope
+from app.api.deps import DBSession, admin_or_scope
 from app.core.config import settings
 from app.models.alerting import AlertAddress
 from app.models.camera import Camera
@@ -103,7 +104,7 @@ def _provision_address(db, camera_id: str) -> AlertAddress:
 def list_camera_addresses(
     camera_id: str,
     db: DBSession,
-    _auth = Depends(admin_or_scope("addresses:read")),
+    _auth = Depends(admin_or_scope("addresses:read", "addresses:manage")),
 ):
     camera = db.query(Camera).filter(Camera.id == camera_id).first()
     if camera is None:
@@ -143,7 +144,7 @@ def list_camera_addresses(
 def create_camera_address(
     camera_id: str,
     db: DBSession,
-    _admin: AdminUser,
+    _auth = Depends(admin_or_scope("addresses:manage")),
 ):
     camera = db.query(Camera).filter(Camera.id == camera_id).first()
     if camera is None:
@@ -179,7 +180,7 @@ def create_camera_address(
 def revoke_address(
     address_id: str,
     db: DBSession,
-    _admin: AdminUser,
+    _auth = Depends(admin_or_scope("addresses:manage")),
 ):
     row = db.query(AlertAddress).filter(AlertAddress.id == address_id).first()
     if row is None:
@@ -213,7 +214,7 @@ def revoke_address(
 def rotate_address(
     address_id: str,
     db: DBSession,
-    _admin: AdminUser,
+    _auth = Depends(admin_or_scope("addresses:manage")),
 ):
     row = db.query(AlertAddress).filter(AlertAddress.id == address_id).first()
     if row is None:
@@ -247,7 +248,7 @@ def rotate_address(
 def quarantine_address(
     address_id: str,
     db: DBSession,
-    _admin: AdminUser,
+    _auth = Depends(admin_or_scope("addresses:manage")),
 ):
     row = db.query(AlertAddress).filter(AlertAddress.id == address_id).first()
     if row is None:
@@ -275,7 +276,7 @@ def quarantine_address(
 def unquarantine_address(
     address_id: str,
     db: DBSession,
-    _admin: AdminUser,
+    _auth = Depends(admin_or_scope("addresses:manage")),
 ):
     row = db.query(AlertAddress).filter(AlertAddress.id == address_id).first()
     if row is None:
