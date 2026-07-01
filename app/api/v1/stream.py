@@ -1,21 +1,249 @@
 """
 WebSocket streaming endpoints for RTSP camera feeds.
+
+Cleanup guarantees for both the DB session and the FFmpeg subprocess are
+central to correctness — they were the root cause of two production outages
+(2026-06-18, 2026-07-01) traced to leaks in this module. See
+`experiments/incidents/2026-06-18_portal_slowdown_and_resource_leaks.md`.
+
+Design invariants:
+  * DB session lifetime is scoped to the camera lookup only, never held
+    across the long stream loop.
+  * FFmpeg subprocesses are always spawned inside an async context manager
+    that reaps on exit.
+  * All blocking I/O runs on the event loop (async subprocess pipes,
+    asyncio.to_thread for OpenCV).
+  * A per-worker semaphore caps concurrent streams as defense in depth.
 """
-import subprocess
+from __future__ import annotations
+
 import asyncio
 import logging
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Query, Depends
-from sqlalchemy.orm import Session
+import os
+from contextlib import asynccontextmanager, suppress
 from typing import Optional
 
-from app.api.deps import get_db
-from app.models.camera import Camera
+from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
+from sqlalchemy.orm import Session
+
 from app.core.security import decode_token
+from app.database import SessionLocal, get_db
+from app.models.camera import Camera
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+MAX_CONCURRENT_STREAMS = int(os.environ.get("STREAM_MAX_CONCURRENT_PER_WORKER", "16"))
+FFMPEG_REAP_TIMEOUT_SEC = float(os.environ.get("STREAM_FFMPEG_REAP_TIMEOUT_SEC", "5"))
+STREAM_CHUNK_SIZE_MPEG1 = 1024
+STREAM_CHUNK_SIZE_H264 = 8192
+JPEG_FPS = 30
+_JPEG_FRAME_INTERVAL_SEC = 1.0 / JPEG_FPS
+
+_stream_semaphore = asyncio.Semaphore(MAX_CONCURRENT_STREAMS)
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle context managers — the guarantee that we don't leak resources
+# ---------------------------------------------------------------------------
+
+@asynccontextmanager
+async def _db_session_scope():
+    """Short-lived DB session guaranteed to release on exit.
+
+    Use for one-shot lookups only — never hold across an await that could
+    block for more than milliseconds. We create the session via
+    SessionLocal() directly rather than through Depends(get_db) so the
+    lifetime is bounded by this `async with`, not by the entire endpoint
+    function's return.
+    """
+    db: Session = SessionLocal()
+    try:
+        yield db
+    finally:
+        with suppress(Exception):
+            db.rollback()  # release any open transaction (defensive)
+        with suppress(Exception):
+            db.close()
+
+
+@asynccontextmanager
+async def _ffmpeg_proc(cmd: list[str]):
+    """Spawn an FFmpeg subprocess with async pipes; guaranteed reap on exit.
+
+    Using asyncio.create_subprocess_exec (not subprocess.Popen) so the read
+    loop below runs on the event loop and integrates with FastAPI's
+    cancellation. The kill+wait in the finally block never propagates —
+    even if ffmpeg is already gone or wait times out, the outer scope must
+    still complete.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        yield proc
+    finally:
+        with suppress(ProcessLookupError):
+            proc.kill()
+        with suppress(asyncio.TimeoutError, Exception):
+            await asyncio.wait_for(proc.wait(), timeout=FFMPEG_REAP_TIMEOUT_SEC)
+
+
+@asynccontextmanager
+async def _opencv_capture(rtsp_url: str):
+    """Open a cv2.VideoCapture; guaranteed release() on exit.
+
+    OpenCV is CPU-bound C code — cap.read() must be wrapped in
+    asyncio.to_thread by callers so the event loop stays free.
+    """
+    import cv2  # local import so the module still loads if opencv is missing
+
+    cap = await asyncio.to_thread(cv2.VideoCapture, rtsp_url)
+    try:
+        yield cap
+    finally:
+        with suppress(Exception):
+            await asyncio.to_thread(cap.release)
+
+
+# ---------------------------------------------------------------------------
+# Small helpers
+# ---------------------------------------------------------------------------
+
+def _validate_ws_token(token: Optional[str]) -> bool:
+    """Return True iff `token` decodes to a valid JWT payload."""
+    if not token:
+        return False
+    try:
+        payload = decode_token(token)
+    except Exception as exc:
+        logger.error("WebSocket token verification failed: %s", exc)
+        return False
+    return bool(payload)
+
+
+async def _resolve_camera_rtsp(camera_id: str) -> Optional[str]:
+    """Look up a camera's RTSP URL. Session is opened+closed inside this call."""
+    async with _db_session_scope() as db:
+        camera = db.query(Camera).filter(Camera.id == camera_id).first()
+        if camera is None:
+            return None
+        return camera.rtsp_url or None
+
+
+def _build_mpeg1_cmd(rtsp_url: str) -> list[str]:
+    """FFmpeg command for MPEG1-TS output over WebSocket (JSMpeg player)."""
+    return [
+        "ffmpeg",
+        "-rtsp_transport", "tcp",
+        "-i", rtsp_url,
+        "-f", "mpegts",
+        "-codec:v", "mpeg1video",
+        "-s", "640x480",
+        "-b:v", "1000k",
+        "-bf", "0",
+        "-muxdelay", "0.001",
+        "-r", "25",
+        "-an",
+        "pipe:1",
+    ]
+
+
+def _build_h264_cmd(rtsp_url: str) -> list[str]:
+    """FFmpeg command for fragmented-MP4 H.264 output (browser MSE)."""
+    return [
+        "ffmpeg",
+        "-rtsp_transport", "tcp",
+        "-fflags", "nobuffer",
+        "-flags", "low_delay",
+        "-i", rtsp_url,
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-tune", "zerolatency",
+        "-g", "20",
+        "-keyint_min", "10",
+        "-sc_threshold", "0",
+        "-s", "1280x720",
+        "-b:v", "800k",
+        "-maxrate", "900k",
+        "-bufsize", "1800k",
+        "-r", "10",
+        "-pix_fmt", "yuv420p",
+        "-profile:v", "baseline",
+        "-level", "3.1",
+        "-f", "mp4",
+        "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+        "-an",
+        "pipe:1",
+    ]
+
+
+async def _pump_ffmpeg_to_ws(
+    ws: WebSocket,
+    proc: asyncio.subprocess.Process,
+    *,
+    chunk_size: int,
+    camera_id: str,
+    label: str,
+) -> None:
+    """Read from proc.stdout, forward to ws. Exits on EOF, error, or client close.
+
+    A WebSocketDisconnect raised by ws.send_bytes propagates out — the outer
+    handler catches it. Never hangs on a dead pipe: proc.stdout.read returns
+    b'' when ffmpeg exits.
+    """
+    total_bytes = 0
+    chunks = 0
+    try:
+        while True:
+            chunk = await proc.stdout.read(chunk_size)
+            if not chunk:
+                # EOF — ffmpeg has closed its stdout. Grab any stderr for the log.
+                stderr_bytes = b""
+                with suppress(Exception):
+                    stderr_bytes = await asyncio.wait_for(
+                        proc.stderr.read(), timeout=1.0
+                    )
+                rc = proc.returncode
+                if rc is None:
+                    with suppress(ProcessLookupError):
+                        proc.kill()
+                if rc is not None and rc != 0:
+                    logger.error(
+                        "ffmpeg exited with error for camera %s (%s) exit=%s stderr=%r",
+                        camera_id, label, rc,
+                        stderr_bytes.decode("utf-8", errors="ignore")[:500],
+                    )
+                return
+            await ws.send_bytes(chunk)
+            total_bytes += len(chunk)
+            chunks += 1
+    finally:
+        logger.info(
+            "stream pump exit camera=%s label=%s chunks=%d bytes=%d",
+            camera_id, label, chunks, total_bytes,
+        )
+
+
+def _semaphore_available() -> bool:
+    """True if at least one slot is free in the concurrency cap."""
+    # Semaphore._value is a private attribute but is the documented way to
+    # check availability without acquiring. Fine for a soft check before
+    # deciding whether to accept a new stream.
+    return _stream_semaphore._value > 0  # noqa: SLF001
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
 
 @router.get("/info", tags=["Streaming"])
 async def get_streaming_info():
@@ -25,9 +253,6 @@ async def get_streaming_info():
     WebSocket endpoints are not displayed in Swagger UI because OpenAPI 3.0
     doesn't support WebSocket documentation. Use this endpoint to discover
     available streaming options.
-
-    Returns:
-        Information about MPEG1 and JPEG streaming endpoints with usage examples
     """
     return {
         "message": "WebSocket streaming endpoints available",
@@ -36,559 +261,280 @@ async def get_streaming_info():
             {
                 "name": "MPEG1 Stream (FFmpeg-based)",
                 "method": "WebSocket",
-                "url": "ws://localhost:8000/api/v1/stream/ws/camera/{camera_id}?token={jwt_token}",
+                "url": "ws://<host>/api/v1/stream/ws/camera/{camera_id}?token={jwt_token}",
                 "description": "Stream RTSP camera as MPEG1 for JSMpeg player",
-                "features": {
-                    "resolution": "640x480",
-                    "fps": 25,
-                    "bitrate": "1000k",
-                    "format": "MPEG1",
-                    "latency": "low"
-                },
-                "requirements": [
-                    "FFmpeg installed on server",
-                    "JSMpeg player on client",
-                    "Valid JWT token"
-                ]
+                "features": {"resolution": "640x480", "fps": 25, "bitrate": "1000k",
+                             "format": "MPEG1", "latency": "low"},
+                "requirements": ["FFmpeg installed on server", "JSMpeg player on client",
+                                 "Valid JWT token"],
             },
             {
                 "name": "JPEG Stream (OpenCV-based)",
                 "method": "WebSocket",
-                "url": "ws://localhost:8000/api/v1/stream/ws/camera/{camera_id}/jpeg?token={jwt_token}",
+                "url": "ws://<host>/api/v1/stream/ws/camera/{camera_id}/jpeg?token={jwt_token}",
                 "description": "Stream camera as individual JPEG frames",
-                "features": {
-                    "resolution": "640x480",
-                    "fps": 30,
-                    "format": "JPEG",
-                    "quality": "80%"
-                },
-                "requirements": [
-                    "OpenCV (opencv-python) installed",
-                    "Custom frame renderer on client",
-                    "Valid JWT token"
-                ]
-            }
+                "features": {"resolution": "640x480", "fps": JPEG_FPS,
+                             "format": "JPEG", "quality": "80%"},
+                "requirements": ["OpenCV (opencv-python) installed",
+                                 "Custom frame renderer on client", "Valid JWT token"],
+            },
+            {
+                "name": "H.264 fMP4 Stream (low latency)",
+                "method": "WebSocket",
+                "url": "ws://<host>/api/v1/stream/ws/camera/{camera_id}/h264?token={jwt_token}",
+                "description": "Fragmented-MP4 H.264 for browser Media Source Extensions",
+                "features": {"resolution": "1280x720", "fps": 10, "bitrate": "800k",
+                             "format": "fMP4 (H.264)", "latency": "~300-500ms"},
+                "requirements": ["FFmpeg installed on server", "MSE-capable browser",
+                                 "Valid JWT token"],
+            },
         ],
         "authentication": {
             "method": "JWT token as query parameter",
-            "example": "?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-            "how_to_get_token": "POST /api/v1/auth/login"
+            "example": "?token=<jwt>",
+            "how_to_get_token": "POST /api/v1/auth/login",
         },
-        "example_usage": {
-            "javascript": """
-const token = "your_jwt_token_here";
-const cameraId = "12345";
-const ws = new WebSocket(`ws://localhost:8000/api/v1/stream/ws/camera/${cameraId}?token=${token}`);
-
-// For MPEG1 with JSMpeg
-const player = new JSMpeg.Player(wsUrl, {
-    canvas: document.getElementById('canvas'),
-    autoplay: true,
-    audio: false
-});
-            """,
-            "python": """
-import websockets
-import asyncio
-
-async def stream_camera():
-    token = "your_jwt_token_here"
-    camera_id = "12345"
-    uri = f"ws://localhost:8000/api/v1/stream/ws/camera/{camera_id}?token={token}"
-
-    async with websockets.connect(uri) as websocket:
-        while True:
-            data = await websocket.recv()
-            # Process MPEG1 data
-            print(f"Received {len(data)} bytes")
-            """
+        "limits": {
+            "max_concurrent_streams_per_worker": MAX_CONCURRENT_STREAMS,
+            "close_code_when_full": 1013,
         },
-        "documentation": "See STREAMING.md for complete implementation guide",
-        "troubleshooting": {
-            "ffmpeg_not_found": "Rebuild Docker containers: docker-compose build --no-cache",
-            "connection_rejected": "Check JWT token validity and camera_id existence",
-            "high_cpu": "Limit concurrent streams or reduce bitrate/resolution"
-        }
     }
+
+
+async def _run_stream(
+    websocket: WebSocket,
+    camera_id: str,
+    token: Optional[str],
+    build_cmd,
+    chunk_size: int,
+    label: str,
+) -> None:
+    """Shared FFmpeg-based stream driver (MPEG1 and H.264).
+
+    Encapsulates the accept -> auth -> lookup -> pump -> cleanup lifecycle
+    with guaranteed teardown of both the DB session and the FFmpeg process.
+    """
+    await websocket.accept()
+    try:
+        if not _validate_ws_token(token):
+            await websocket.close(code=1008, reason="Authentication required: invalid or expired token")
+            return
+
+        rtsp_url = await _resolve_camera_rtsp(camera_id)
+        if rtsp_url is None:
+            await websocket.close(code=1008, reason=f"Camera '{camera_id}' not found or has no RTSP URL")
+            return
+        # DB session is closed here. From this point on we hold no DB resources.
+
+        if not _semaphore_available():
+            await websocket.close(code=1013, reason="Too many concurrent streams; try again shortly")
+            return
+
+        async with _stream_semaphore:
+            logger.info("stream starting camera=%s label=%s", camera_id, label)
+            async with _ffmpeg_proc(build_cmd(rtsp_url)) as proc:
+                await _pump_ffmpeg_to_ws(
+                    websocket, proc,
+                    chunk_size=chunk_size, camera_id=camera_id, label=label,
+                )
+
+    except WebSocketDisconnect:
+        logger.info("client disconnected camera=%s label=%s", camera_id, label)
+    except Exception:
+        logger.exception("stream failed camera=%s label=%s", camera_id, label)
+        with suppress(Exception):
+            await websocket.close(code=1011, reason="Internal server error")
+    finally:
+        with suppress(Exception):
+            await websocket.close()
 
 
 @router.websocket("/ws/camera/{camera_id}")
 async def stream_camera(
     websocket: WebSocket,
     camera_id: str,
-    token: Optional[str] = Query(None, description="JWT access token for authentication")
-):
-    """
-    WebSocket endpoint to stream camera feed as MPEG1 for JSMpeg player.
-
-    Client connects to: ws://localhost:8000/api/v1/stream/ws/camera/{camera_id}?token={jwt_token}
-
-    The stream is converted from RTSP to MPEG1 format using FFmpeg for browser playback.
-
-    Args:
-        websocket: WebSocket connection
-        camera_id: Camera ID to stream
-        token: JWT access token for authentication
-
-    Security:
-        Requires valid JWT token passed as query parameter
-    """
-    # Accept WebSocket connection with CORS headers
-    # Note: WebSocket connections don't use traditional CORS, but we accept all origins here
-    # Authentication is handled via JWT token instead
-    await websocket.accept()
-
-    try:
-        # Authenticate user
-        if not token:
-            await websocket.close(code=1008, reason="Authentication required: Missing token")
-            return
-
-        # Verify JWT token
-        try:
-            payload = decode_token(token)
-            if not payload:
-                await websocket.close(code=1008, reason="Invalid or expired token")
-                return
-        except Exception as e:
-            logger.error(f"Token verification failed: {e}")
-            await websocket.close(code=1008, reason="Invalid or expired token")
-            return
-
-        # Get database session
-        db = next(get_db())
-
-        try:
-            # Get camera from database
-            camera = db.query(Camera).filter(Camera.id == camera_id).first()
-            if not camera:
-                await websocket.close(code=1008, reason=f"Camera '{camera_id}' not found")
-                return
-
-            rtsp_url = camera.rtsp_url
-            if not rtsp_url:
-                await websocket.close(code=1008, reason=f"Camera '{camera_id}' has no RTSP URL")
-                return
-
-            logger.info(f"Starting stream for camera {camera_id} (requested by user)")
-
-            # FFmpeg command to convert RTSP to MPEG1
-            command = [
-                'ffmpeg',
-                '-rtsp_transport', 'tcp',    # Use TCP instead of UDP for more reliability
-                '-i', rtsp_url,
-                '-f', 'mpegts',
-                '-codec:v', 'mpeg1video',
-                '-s', '640x480',      # Resolution
-                '-b:v', '1000k',      # Bitrate
-                '-bf', '0',           # No B-frames
-                '-muxdelay', '0.001', # Low latency
-                '-r', '25',           # Frame rate (25 FPS)
-                '-an',                # No audio
-                'pipe:1'              # Output to stdout
-            ]
-
-            process = None
-            try:
-                # Start FFmpeg process
-                process = subprocess.Popen(
-                    command,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    bufsize=10**8
-                )
-
-                logger.info(f"FFmpeg process started for camera {camera_id}")
-
-                # Stream data to WebSocket
-                chunk_count = 0
-                while True:
-                    try:
-                        # Read chunks from FFmpeg
-                        chunk = process.stdout.read(1024)
-                        if not chunk:
-                            # Check if process has exited with error
-                            exit_code = process.poll()
-                            if exit_code is not None and exit_code != 0:
-                                stderr_output = process.stderr.read().decode('utf-8', errors='ignore')
-                                logger.error(f"FFmpeg failed for camera {camera_id} with exit code {exit_code}: {stderr_output[:500]}")
-                            else:
-                                logger.warning(f"FFmpeg stream ended for camera {camera_id}")
-                            break
-
-                        # Send to WebSocket
-                        await websocket.send_bytes(chunk)
-                        chunk_count += 1
-
-                        # Small delay to prevent overwhelming the client
-                        await asyncio.sleep(0.01)
-
-                    except WebSocketDisconnect:
-                        logger.info(f"Client disconnected from camera {camera_id} stream")
-                        break
-                    except Exception as e:
-                        logger.error(f"Streaming error for camera {camera_id}: {e}")
-                        break
-
-                logger.info(f"Stream ended for camera {camera_id} after {chunk_count} chunks")
-
-            finally:
-                # Cleanup FFmpeg process
-                if process:
-                    try:
-                        process.kill()
-                        process.wait(timeout=5)
-                    except Exception as e:
-                        logger.error(f"Error killing FFmpeg process: {e}")
-
-        finally:
-            db.close()
-
-    except Exception as e:
-        logger.error(f"WebSocket stream error: {e}")
-        try:
-            await websocket.close(code=1011, reason="Internal server error")
-        except:
-            pass
-
-    finally:
-        try:
-            await websocket.close()
-        except:
-            pass
-
-
-@router.websocket("/ws/camera/{camera_id}/jpeg")
-async def stream_camera_jpeg(
-    websocket: WebSocket,
-    camera_id: str,
-    token: Optional[str] = Query(None, description="JWT access token for authentication")
-):
-    """
-    Alternative WebSocket endpoint using OpenCV to stream JPEG frames.
-
-    This is a simpler implementation that doesn't require FFmpeg.
-    Useful for environments where FFmpeg is not available.
-
-    Client connects to: ws://localhost:8000/api/v1/stream/ws/camera/{camera_id}/jpeg?token={jwt_token}
-
-    Args:
-        websocket: WebSocket connection
-        camera_id: Camera ID to stream
-        token: JWT access token for authentication
-
-    Security:
-        Requires valid JWT token passed as query parameter
-
-    Note:
-        Requires opencv-python package installed
-    """
-    await websocket.accept()
-
-    try:
-        # Authenticate user
-        if not token:
-            await websocket.close(code=1008, reason="Authentication required: Missing token")
-            return
-
-        # Verify JWT token
-        try:
-            payload = decode_token(token)
-            if not payload:
-                await websocket.close(code=1008, reason="Invalid or expired token")
-                return
-        except Exception as e:
-            logger.error(f"Token verification failed: {e}")
-            await websocket.close(code=1008, reason="Invalid or expired token")
-            return
-
-        # Get database session
-        db = next(get_db())
-
-        try:
-            # Get camera from database
-            camera = db.query(Camera).filter(Camera.id == camera_id).first()
-            if not camera:
-                await websocket.close(code=1008, reason=f"Camera '{camera_id}' not found")
-                return
-
-            rtsp_url = camera.rtsp_url
-            if not rtsp_url:
-                await websocket.close(code=1008, reason=f"Camera '{camera_id}' has no RTSP URL")
-                return
-
-            logger.info(f"Starting JPEG stream for camera {camera_id}")
-
-            try:
-                import cv2
-            except ImportError:
-                await websocket.close(code=1011, reason="OpenCV not installed on server")
-                logger.error("opencv-python not installed. Install with: pip install opencv-python")
-                return
-
-            cap = cv2.VideoCapture(rtsp_url)
-
-            if not cap.isOpened():
-                await websocket.close(code=1011, reason="Failed to open RTSP stream")
-                logger.error(f"Failed to open RTSP stream for camera {camera_id}: {rtsp_url}")
-                return
-
-            try:
-                frame_count = 0
-                while True:
-                    ret, frame = cap.read()
-                    if not ret:
-                        logger.warning(f"Failed to read frame from camera {camera_id}")
-                        break
-
-                    # Resize frame for better performance
-                    frame = cv2.resize(frame, (640, 480))
-
-                    # Encode frame as JPEG
-                    _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-
-                    # Send to WebSocket
-                    await websocket.send_bytes(buffer.tobytes())
-                    frame_count += 1
-
-                    # ~30 FPS
-                    await asyncio.sleep(0.033)
-
-                logger.info(f"JPEG stream ended for camera {camera_id} after {frame_count} frames")
-
-            except WebSocketDisconnect:
-                logger.info(f"Client disconnected from camera {camera_id} JPEG stream")
-            except Exception as e:
-                logger.error(f"JPEG streaming error for camera {camera_id}: {e}")
-            finally:
-                cap.release()
-
-        finally:
-            db.close()
-
-    except Exception as e:
-        logger.error(f"WebSocket JPEG stream error: {e}")
-        try:
-            await websocket.close(code=1011, reason="Internal server error")
-        except:
-            pass
-
-    finally:
-        try:
-            await websocket.close()
-        except:
-            pass
+    token: Optional[str] = Query(None, description="JWT access token for authentication"),
+) -> None:
+    """WebSocket: MPEG1-TS stream (JSMpeg player)."""
+    await _run_stream(
+        websocket, camera_id, token,
+        build_cmd=_build_mpeg1_cmd,
+        chunk_size=STREAM_CHUNK_SIZE_MPEG1,
+        label="mpeg1",
+    )
 
 
 @router.websocket("/ws/camera/{camera_id}/h264")
 async def stream_camera_h264(
     websocket: WebSocket,
     camera_id: str,
-    token: Optional[str] = Query(None, description="JWT access token for authentication")
-):
-    """
-    LOW-LATENCY WebSocket endpoint streaming H.264 video for Media Source Extensions (MSE).
+    token: Optional[str] = Query(None, description="JWT access token for authentication"),
+) -> None:
+    """WebSocket: fragmented-MP4 H.264 stream (browser MSE, ~300-500ms latency)."""
+    await _run_stream(
+        websocket, camera_id, token,
+        build_cmd=_build_h264_cmd,
+        chunk_size=STREAM_CHUNK_SIZE_H264,
+        label="h264",
+    )
 
-    Client connects to: ws://localhost:8000/api/v1/stream/ws/camera/{camera_id}/h264?token={jwt_token}
 
-    Uses fragmented MP4 (fMP4) format with H.264 codec for native browser playback
-    with minimal latency (~300-500ms).
+@router.websocket("/ws/camera/{camera_id}/jpeg")
+async def stream_camera_jpeg(
+    websocket: WebSocket,
+    camera_id: str,
+    token: Optional[str] = Query(None, description="JWT access token for authentication"),
+) -> None:
+    """WebSocket: JPEG frames via OpenCV (no FFmpeg required).
 
-    Features:
-        - Ultra-low latency (~300-500ms vs 2-3 seconds)
-        - H.264 compression (better than JPEG)
-        - Works with browser Media Source Extensions
-        - No external libraries needed on client
+    Cleanup shape matches the FFmpeg handlers — same guarantees on DB
+    session and VideoCapture release.
     """
     await websocket.accept()
-
     try:
-        # Authenticate
-        if not token:
-            await websocket.close(code=1008, reason="Authentication required: Missing token")
+        if not _validate_ws_token(token):
+            await websocket.close(code=1008, reason="Authentication required: invalid or expired token")
+            return
+
+        rtsp_url = await _resolve_camera_rtsp(camera_id)
+        if rtsp_url is None:
+            await websocket.close(code=1008, reason=f"Camera '{camera_id}' not found or has no RTSP URL")
             return
 
         try:
-            payload = decode_token(token)
-            if not payload:
-                await websocket.close(code=1008, reason="Invalid or expired token")
-                return
-        except Exception as e:
-            logger.error(f"Token verification failed: {e}")
-            await websocket.close(code=1008, reason="Invalid or expired token")
+            import cv2  # noqa: F401
+        except ImportError:
+            logger.error("opencv-python not installed; JPEG endpoint unavailable")
+            await websocket.close(code=1011, reason="OpenCV not installed on server")
             return
 
-        db = next(get_db())
+        if not _semaphore_available():
+            await websocket.close(code=1013, reason="Too many concurrent streams; try again shortly")
+            return
 
-        try:
-            camera = db.query(Camera).filter(Camera.id == camera_id).first()
-            if not camera:
-                await websocket.close(code=1008, reason=f"Camera '{camera_id}' not found")
-                return
+        async with _stream_semaphore:
+            logger.info("stream starting camera=%s label=jpeg", camera_id)
+            frame_count = 0
+            try:
+                async with _opencv_capture(rtsp_url) as cap:
+                    is_open = await asyncio.to_thread(cap.isOpened)
+                    if not is_open:
+                        await websocket.close(code=1011, reason="Failed to open RTSP stream")
+                        logger.error("cv2 failed to open RTSP for camera %s", camera_id)
+                        return
+                    import cv2 as _cv2
+                    while True:
+                        ret, frame = await asyncio.to_thread(cap.read)
+                        if not ret or frame is None:
+                            logger.warning("cv2 read failed for camera %s (source ended?)", camera_id)
+                            break
+                        frame = await asyncio.to_thread(_cv2.resize, frame, (640, 480))
+                        ok, buf = await asyncio.to_thread(
+                            _cv2.imencode, ".jpg", frame,
+                            [_cv2.IMWRITE_JPEG_QUALITY, 80],
+                        )
+                        if not ok:
+                            continue
+                        await websocket.send_bytes(buf.tobytes())
+                        frame_count += 1
+                        await asyncio.sleep(_JPEG_FRAME_INTERVAL_SEC)
+            finally:
+                logger.info("jpeg stream ended camera=%s frames=%d", camera_id, frame_count)
 
-            rtsp_url = camera.rtsp_url
-            if not rtsp_url:
-                await websocket.close(code=1008, reason=f"Camera '{camera_id}' has no RTSP URL")
-                return
-
-            logger.info(f"Starting LOW-LATENCY H.264 stream for camera {camera_id}")
-
-            # FFmpeg command for ultra-low-latency H.264 with reduced bitrate (10fps)
-            command = [
-                'ffmpeg',
-                '-rtsp_transport', 'tcp',
-                '-fflags', 'nobuffer',
-                '-flags', 'low_delay',
-                '-i', rtsp_url,
-                '-c:v', 'libx264',
-                '-preset', 'ultrafast',
-                '-tune', 'zerolatency',
-                '-g', '20',              # Keyframe every 2 seconds (10fps * 2s)
-                '-keyint_min', '10',     # Min keyframe interval
-                '-sc_threshold', '0',
-                '-s', '1280x720',
-                '-b:v', '800k',          # Reduced bitrate for 10fps
-                '-maxrate', '900k',      # Slightly higher max for peaks
-                '-bufsize', '1800k',     # 2x maxrate
-                '-r', '10',              # 10 frames per second
-                '-pix_fmt', 'yuv420p',
-                '-profile:v', 'baseline',
-                '-level', '3.1',
-                '-f', 'mp4',
-                '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
-                '-an',
-                'pipe:1'
-            ]
-
-            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
-            logger.info(f"FFmpeg H.264 process started for camera {camera_id}")
-
-            chunk_count = 0
-            total_bytes = 0
-
-            while True:
-                try:
-                    chunk = process.stdout.read(8192)
-                    if not chunk:
-                        exit_code = process.poll()
-                        if exit_code is not None and exit_code != 0:
-                            stderr_output = process.stderr.read().decode('utf-8', errors='ignore')
-                            logger.error(f"FFmpeg H.264 failed for camera {camera_id} (exit {exit_code}): {stderr_output[:1000]}")
-                        break
-
-                    await websocket.send_bytes(chunk)
-                    chunk_count += 1
-                    total_bytes += len(chunk)
-
-                except WebSocketDisconnect:
-                    logger.info(f"Client disconnected from H.264 stream for camera {camera_id}")
-                    break
-                except Exception as e:
-                    logger.error(f"H.264 streaming error for camera {camera_id}: {e}")
-                    break
-
-            logger.info(f"H.264 stream ended for camera {camera_id} - {chunk_count} chunks, {total_bytes/1024/1024:.2f} MB")
-
-            if process:
-                try:
-                    process.kill()
-                    process.wait(timeout=5)
-                except Exception as e:
-                    logger.error(f"Error killing FFmpeg H.264 process: {e}")
-
-        finally:
-            db.close()
-
-    except Exception as e:
-        logger.error(f"WebSocket H.264 stream error: {e}")
-        try:
+    except WebSocketDisconnect:
+        logger.info("client disconnected camera=%s label=jpeg", camera_id)
+    except Exception:
+        logger.exception("jpeg stream failed camera=%s", camera_id)
+        with suppress(Exception):
             await websocket.close(code=1011, reason="Internal server error")
-        except:
-            pass
-
     finally:
-        try:
+        with suppress(Exception):
             await websocket.close()
-        except:
-            pass
 
 
 @router.get("/test/{camera_id}", tags=["Streaming"])
 async def test_camera_stream(
     camera_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     Test camera RTSP connectivity and return diagnostic information.
-    
-    Returns:
-        Detailed diagnostics about camera reachability, RTSP URL validity,
-        and FFmpeg/OpenCV compatibility.
+
+    Same defect class as the WebSocket handlers used to have: this
+    endpoint used subprocess.run() and cv2.VideoCapture directly on the
+    event loop, blocking the worker for up to 10s per call. Rewritten to
+    use asyncio.create_subprocess_exec + asyncio.to_thread so the worker
+    stays responsive.
     """
+    camera = db.query(Camera).filter(Camera.id == camera_id).first()
+    if not camera:
+        return {"status": "error", "message": f"Camera {camera_id} not found"}
+    rtsp_url = camera.rtsp_url
+    if not rtsp_url:
+        return {"status": "error", "message": "Camera has no RTSP URL"}
+
+    result: dict = {
+        "camera_id": camera_id,
+        "camera_name": camera.name,
+        "rtsp_url": rtsp_url,
+        "tests": {},
+    }
+
+    # Test 1: ffprobe via async subprocess (non-blocking)
     try:
-        # Get camera
-        camera = db.query(Camera).filter(Camera.id == camera_id).first()
-        if not camera:
-            return {"status": "error", "message": f"Camera {camera_id} not found"}
-        
-        rtsp_url = camera.rtsp_url
-        if not rtsp_url:
-            return {"status": "error", "message": "Camera has no RTSP URL"}
-        
-        # Test with ffprobe
-        import subprocess
-        result = {
-            "camera_id": camera_id,
-            "camera_name": camera.name,
-            "rtsp_url": rtsp_url,
-            "tests": {}
-        }
-        
-        # Test 1: FFprobe
+        proc = await asyncio.create_subprocess_exec(
+            "ffprobe", "-rtsp_transport", "tcp", rtsp_url,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
         try:
-            proc = subprocess.run(
-                ['ffprobe', '-rtsp_transport', 'tcp', rtsp_url],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+        except asyncio.TimeoutError:
+            with suppress(ProcessLookupError):
+                proc.kill()
+            with suppress(Exception):
+                await asyncio.wait_for(proc.wait(), timeout=2)
+            result["tests"]["ffmpeg"] = {"status": "timeout", "message": "FFmpeg connection timed out"}
+        else:
             if proc.returncode == 0:
                 result["tests"]["ffmpeg"] = {"status": "success", "message": "FFmpeg can access stream"}
             else:
-                error_lines = proc.stderr.split('\n')[-5:]
+                stderr_text = stderr.decode("utf-8", errors="ignore")
+                error_lines = stderr_text.strip().split("\n")[-5:]
                 result["tests"]["ffmpeg"] = {
                     "status": "failed",
                     "exit_code": proc.returncode,
-                    "error": '\n'.join(error_lines)
+                    "error": "\n".join(error_lines),
                 }
-        except subprocess.TimeoutExpired:
-            result["tests"]["ffmpeg"] = {"status": "timeout", "message": "FFmpeg connection timed out"}
-        except Exception as e:
-            result["tests"]["ffmpeg"] = {"status": "error", "message": str(e)}
-        
-        # Test 2: OpenCV
-        try:
-            import cv2
-            cap = cv2.VideoCapture(rtsp_url)
-            if cap.isOpened():
-                ret, frame = cap.read()
-                cap.release()
-                if ret:
-                    result["tests"]["opencv"] = {"status": "success", "message": "OpenCV can read frames"}
-                else:
-                    result["tests"]["opencv"] = {"status": "failed", "message": "OpenCV opened but cannot read frames"}
-            else:
-                result["tests"]["opencv"] = {"status": "failed", "message": "OpenCV cannot open stream"}
-        except Exception as e:
-            result["tests"]["opencv"] = {"status": "error", "message": str(e)}
-        
-        # Overall status
-        all_passed = all(t.get("status") == "success" for t in result["tests"].values())
-        result["overall_status"] = "ready" if all_passed else "failed"
-        
-        return result
-        
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-    finally:
-        db.close()
+    except FileNotFoundError:
+        result["tests"]["ffmpeg"] = {"status": "error", "message": "ffprobe binary not found on PATH"}
+    except Exception as exc:
+        result["tests"]["ffmpeg"] = {"status": "error", "message": str(exc)}
+
+    # Test 2: OpenCV via to_thread (non-blocking)
+    try:
+        import cv2
+
+        async def _opencv_test() -> dict:
+            cap = await asyncio.to_thread(cv2.VideoCapture, rtsp_url)
+            try:
+                if not await asyncio.to_thread(cap.isOpened):
+                    return {"status": "failed", "message": "OpenCV cannot open stream"}
+                ret, _frame = await asyncio.to_thread(cap.read)
+                if not ret:
+                    return {"status": "failed", "message": "OpenCV opened but cannot read frames"}
+                return {"status": "success", "message": "OpenCV can read frames"}
+            finally:
+                with suppress(Exception):
+                    await asyncio.to_thread(cap.release)
+
+        result["tests"]["opencv"] = await asyncio.wait_for(_opencv_test(), timeout=10)
+    except asyncio.TimeoutError:
+        result["tests"]["opencv"] = {"status": "timeout", "message": "OpenCV probe timed out"}
+    except ImportError:
+        result["tests"]["opencv"] = {"status": "error", "message": "opencv-python not installed"}
+    except Exception as exc:
+        result["tests"]["opencv"] = {"status": "error", "message": str(exc)}
+
+    all_passed = all(t.get("status") == "success" for t in result["tests"].values())
+    result["overall_status"] = "ready" if all_passed else "failed"
+    return result
