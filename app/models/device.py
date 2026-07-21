@@ -80,26 +80,10 @@ class Device(BaseModel):
         back_populates="device",
         cascade="all, delete-orphan"
     )
-    category_mappings = relationship(
-        "SiteCategoryMapping",
-        back_populates="device",
-        cascade="all, delete-orphan"
-    )
     screen_mappings = relationship(
         "ScreenMapping",
         back_populates="device",
         foreign_keys="ScreenMapping.device_id"
-    )
-    layout_config = relationship(
-        "SiteCamerasLayoutConfig",
-        back_populates="device",
-        uselist=False,  # One-to-one relationship
-        cascade="all, delete-orphan"
-    )
-    layout_slots = relationship(
-        "SiteCamerasLayout",
-        back_populates="device",
-        cascade="all, delete-orphan"
     )
 
     # Table constraints

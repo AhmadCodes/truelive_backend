@@ -96,6 +96,22 @@ class Site(BaseModel):
         back_populates="site",
         cascade="all, delete-orphan"
     )
+    category_mappings = relationship(
+        "SiteCategoryMapping",
+        back_populates="site",
+        cascade="all, delete-orphan"
+    )
+    layout_config = relationship(
+        "SiteCamerasLayoutConfig",
+        back_populates="site",
+        uselist=False,  # One-to-one relationship
+        cascade="all, delete-orphan"
+    )
+    layout_slots = relationship(
+        "SiteCamerasLayout",
+        back_populates="site",
+        cascade="all, delete-orphan"
+    )
 
     # Table constraints
     __table_args__ = (

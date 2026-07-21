@@ -18,22 +18,7 @@ from app.schemas.device import (
     DeviceUpdate,
     DeviceResponse,
     DeviceDetailResponse,
-    DeviceListResponse,
-    CategoryAssignment
-)
-from app.schemas.site_camera_layout import (
-    AutoPopulateResponse,
-    BulkAutoPopulateResponse,
-    SiteCameraLayoutConfigResponse,
-    SaveLayoutRequest,
-    SaveLayoutResponse
-)
-from app.services.site_camera_layout_service import (
-    auto_populate_device_cameras,
-    auto_populate_all_devices,
-    get_device_camera_layout,
-    save_device_camera_layout,
-    delete_device_camera_layout
+    DeviceListResponse
 )
 
 router = APIRouter()
@@ -63,9 +48,12 @@ def _to_detail(device: Device, include_cameras: bool = False) -> DeviceDetailRes
     if include_cameras:
         data.camera_count = len(device.cameras) if device.cameras else 0
 
+    # Categories describe the *place*: a device reports the categories of its
+    # parent site.
+    site_mappings = device.site.category_mappings if device.site else None
     data.categories = [
-        mapping.category for mapping in device.category_mappings
-    ] if device.category_mappings else []
+        mapping.category for mapping in site_mappings
+    ] if site_mappings else []
 
     return data
 
@@ -95,9 +83,11 @@ async def list_devices(
     if site_id:
         query = query.filter(Device.site_id == site_id)
 
-    # Apply category filter if provided
+    # Apply category filter if provided — categories hang off the parent site
     if category_id:
-        query = query.join(SiteCategoryMapping).filter(
+        query = query.join(
+            SiteCategoryMapping, SiteCategoryMapping.site_id == Device.site_id
+        ).filter(
             SiteCategoryMapping.category_id == category_id
         )
 
@@ -158,7 +148,7 @@ async def get_device(
     _auth = Depends(user_or_scope("devices:read", "devices:manage"))
 ):
     """
-    Get single device with full details including cameras and categories.
+    Get single device with full details including cameras and its site's categories.
     """
     device = db.query(Device).filter(Device.id == device_id).first()
 
@@ -181,8 +171,8 @@ async def update_device(
     """
     Update device details.
 
-    Setting **site_id** moves the device to another site; its cameras and
-    layouts move with it.
+    Setting **site_id** moves the device to another site; its cameras move
+    with it, and it inherits the new site's categories and camera layout.
 
     Requires admin or super_admin privileges.
     """
@@ -222,7 +212,7 @@ async def delete_device(
     _auth = Depends(admin_or_scope("devices:manage"))
 ):
     """
-    Delete device and all associated data (cascades to cameras and layouts).
+    Delete device and all associated data (cascades to cameras).
 
     Requires admin or super_admin privileges.
     """
@@ -238,265 +228,3 @@ async def delete_device(
     db.commit()
 
     return None
-
-
-@router.put("/{device_id}/category")
-async def assign_category_to_device(
-    device_id: str,
-    category_data: CategoryAssignment,
-    db: DBSession,
-    _auth = Depends(admin_or_scope("devices:manage"))
-):
-    """
-    Assign category to device.
-
-    Requires admin or super_admin privileges.
-    """
-    device = db.query(Device).filter(Device.id == device_id).first()
-
-    if not device:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Device '{device_id}' not found"
-        )
-
-    # Check if mapping already exists
-    existing_mapping = db.query(SiteCategoryMapping).filter(
-        SiteCategoryMapping.device_id == device_id,
-        SiteCategoryMapping.category_id == category_data.category_id
-    ).first()
-
-    if not existing_mapping:
-        # Create new mapping
-        mapping = SiteCategoryMapping(
-            device_id=device_id,
-            category_id=category_data.category_id
-        )
-        db.add(mapping)
-        db.commit()
-
-    return {"message": "Category assigned successfully"}
-
-
-@router.post("/{device_id}/auto-populate-cameras", response_model=AutoPopulateResponse)
-async def auto_populate_device_camera_layout(
-    device_id: str,
-    db: DBSession,
-    _auth = Depends(admin_or_scope("devices:manage"))
-):
-    """
-    Auto-populate camera layout for a single device.
-
-    Creates or updates:
-    - Layout configuration with optimal grid dimensions based on camera count
-    - A layout entry for each camera in row-major order
-
-    Grid sizing logic:
-    - 1 camera → 1×1 grid
-    - 2 cameras → 1×2 grid
-    - 3-4 cameras → 2×2 grid
-    - 5-6 cameras → 2×3 grid
-    - 7-9 cameras → 3×3 grid
-    - 10-12 cameras → 3×4 grid
-    - 13-16 cameras → 4×4 grid
-
-    Maximum of 16 cameras can be assigned to a device camera layout.
-
-    Requires admin or super_admin privileges.
-    """
-    try:
-        result = auto_populate_device_cameras(device_id, db)
-        return result
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to auto-populate device cameras: {str(e)}"
-        )
-
-
-@router.post("/auto-populate-all-cameras", response_model=BulkAutoPopulateResponse)
-async def auto_populate_all_device_cameras(
-    db: DBSession,
-    _auth = Depends(admin_or_scope("devices:manage"))
-):
-    """
-    Auto-populate camera layouts for all devices that have cameras.
-
-    Processes each device that has cameras and creates/updates:
-    - Layout configuration with optimal grid dimensions
-    - A layout entry for each camera
-
-    Devices without cameras are skipped.
-
-    Returns summary including:
-    - Total devices found
-    - Devices successfully processed
-    - Devices skipped (no cameras or errors)
-    - Total cameras populated across all devices
-    - Individual device results
-    - Any errors encountered
-
-    Requires admin or super_admin privileges.
-    """
-    try:
-        result = auto_populate_all_devices(db)
-        return result
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to auto-populate all device cameras: {str(e)}"
-        )
-
-
-# Manual camera layout management endpoints
-
-@router.get("/{device_id}/camera-layout", response_model=SiteCameraLayoutConfigResponse)
-async def get_device_camera_layout_config(
-    device_id: str,
-    db: DBSession,
-    _auth = Depends(user_or_scope("devices:read", "devices:manage"))
-):
-    """
-    Get the current camera layout configuration for a device.
-
-    Returns:
-    - Grid dimensions (n_rows × n_cols)
-    - Total available slots
-    - Number of cameras populated
-    - Camera assignments with slot positions and camera names
-    - Timestamps
-
-    Returns 404 if:
-    - Device not found
-    - No layout configuration exists for the device
-    """
-    try:
-        result = get_device_camera_layout(device_id, db)
-        return result
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get camera layout: {str(e)}"
-        )
-
-
-@router.put("/{device_id}/camera-layout", response_model=SaveLayoutResponse)
-async def save_device_camera_layout_config(
-    device_id: str,
-    layout_data: SaveLayoutRequest,
-    db: DBSession,
-    _auth = Depends(admin_or_scope("devices:manage"))
-):
-    """
-    Manually create or update camera layout configuration for a device.
-
-    Request body:
-    - n_rows: Number of rows (1-4)
-    - n_cols: Number of columns (1-4)
-    - camera_slots: Array of camera slot assignments
-      - Each slot specifies: slot_row, slot_col, camera_id
-
-    Validation:
-    - All camera IDs must exist and belong to this device
-    - No duplicate camera IDs allowed
-    - No duplicate slot positions allowed
-    - Slot positions must be within grid bounds
-    - Empty slots are allowed (just omit them)
-
-    Operation:
-    - Deletes existing layout configuration
-    - Creates new configuration with specified grid and cameras
-    - Transactional (all-or-nothing)
-
-    Returns:
-    - Summary of saved layout including grid size and camera count
-
-    Errors:
-    - 400: Validation errors (invalid cameras, duplicates, etc.)
-    - 404: Device or camera not found
-
-    Requires admin or super_admin privileges.
-    """
-    try:
-        # Convert Pydantic models to dicts for service function
-        camera_slots = [
-            {
-                "slot_row": slot.slot_row,
-                "slot_col": slot.slot_col,
-                "camera_id": slot.camera_id
-            }
-            for slot in layout_data.camera_slots
-        ]
-
-        result = save_device_camera_layout(
-            device_id=device_id,
-            n_rows=layout_data.n_rows,
-            n_cols=layout_data.n_cols,
-            camera_slots=camera_slots,
-            db=db
-        )
-        return result
-    except ValueError as e:
-        # Validation or not found errors
-        error_msg = str(e)
-        if "not found" in error_msg.lower():
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=error_msg
-            )
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_msg
-            )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to save camera layout: {str(e)}"
-        )
-
-
-@router.delete("/{device_id}/camera-layout", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_device_camera_layout_config(
-    device_id: str,
-    db: DBSession,
-    _auth = Depends(admin_or_scope("devices:manage"))
-):
-    """
-    Delete the camera layout configuration for a device.
-
-    Deletes:
-    - The layout configuration record
-    - All associated layout slot records (cascade)
-
-    Returns:
-    - 204 No Content on success
-
-    Errors:
-    - 404: Device not found or no layout exists
-
-    Requires admin or super_admin privileges.
-    """
-    try:
-        delete_device_camera_layout(device_id, db)
-        return None
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete camera layout: {str(e)}"
-        )

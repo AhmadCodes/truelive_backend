@@ -86,9 +86,23 @@ def get_cameras_for_config(
         return cameras
 
 
+def _get_parent_site_id(camera: Camera, db: Session) -> Optional[str]:
+    """
+    Resolve the Site a camera sits at, via the device it hangs off.
+
+    Categories and camera layouts belong to the Site, while the camera itself
+    belongs to a Device. Returns None when the camera has no device.
+    """
+    if not camera.device_id:
+        return None
+
+    device = db.query(Device).filter(Device.id == camera.device_id).first()
+    return device.site_id if device else None
+
+
 def get_location_uris_for_camera(camera: Camera, db: Session) -> List[Dict[str, str]]:
     """
-    Get LocationUris array for a camera (all cameras from its device).
+    Get LocationUris array for a camera (the layout of its device's parent site).
 
     Args:
         camera: Camera object
@@ -99,23 +113,24 @@ def get_location_uris_for_camera(camera: Camera, db: Session) -> List[Dict[str, 
     """
     location_uris = []
 
-    if not camera.device_id:
+    site_id = _get_parent_site_id(camera, db)
+    if not site_id:
         return location_uris
 
-    # Get all site_cameras_layout entries for this device
-    device_layouts = db.query(SiteCamerasLayout).filter(
-        SiteCamerasLayout.device_id == camera.device_id
+    # Get all site_cameras_layout entries for the camera's parent site
+    site_layouts = db.query(SiteCamerasLayout).filter(
+        SiteCamerasLayout.site_id == site_id
     ).all()
 
     # Get cameras from layouts
-    for layout in device_layouts:
-        device_camera = db.query(Camera).filter(Camera.id == layout.camera_id).first()
-        if device_camera and device_camera.rtsp_url:
+    for layout in site_layouts:
+        layout_camera = db.query(Camera).filter(Camera.id == layout.camera_id).first()
+        if layout_camera and layout_camera.rtsp_url:
             # Process URL to encode passwords
-            processed_url = encode_rtsp_password(device_camera.rtsp_url)
+            processed_url = encode_rtsp_password(layout_camera.rtsp_url)
             location_uris.append({
                 "url": processed_url,
-                "osd_text": device_camera.name if device_camera.name else ""
+                "osd_text": layout_camera.name if layout_camera.name else ""
             })
 
     return location_uris
@@ -123,7 +138,7 @@ def get_location_uris_for_camera(camera: Camera, db: Session) -> List[Dict[str, 
 
 def get_osd_color_for_camera(camera: Camera, db: Session) -> str:
     """
-    Get OSD color for a camera from its device category.
+    Get OSD color for a camera from the category of its device's parent site.
 
     Args:
         camera: Camera object
@@ -134,12 +149,13 @@ def get_osd_color_for_camera(camera: Camera, db: Session) -> str:
     """
     default_color = "0xFFFFFFFF"  # White
 
-    if not camera.device_id:
+    site_id = _get_parent_site_id(camera, db)
+    if not site_id:
         return default_color
 
-    # Get device category mapping
+    # Get site category mapping
     mapping = db.query(SiteCategoryMapping).filter(
-        SiteCategoryMapping.device_id == camera.device_id
+        SiteCategoryMapping.site_id == site_id
     ).first()
 
     if mapping and mapping.category and mapping.category.color is not None:

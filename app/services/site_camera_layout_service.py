@@ -1,15 +1,16 @@
 """
-Service for managing device camera layout auto-population.
+Service for managing site camera layout auto-population.
 
-Note: the ``Site*`` model/table names (``SiteCamerasLayoutConfig``,
-``SiteCamerasLayout``) are frozen, but as of migration 008 camera layouts hang
-off a **Device** (NVR/DVR) via the ``device_id`` column.
+Camera layouts hang off a **Site** (the physical place) via the ``site_id``
+column as of migration 010. A site's grid may draw cameras from any device
+belonging to that site — cameras themselves still belong to a device.
 """
 
 import logging
 from typing import Tuple, List, Dict, Any
 from sqlalchemy.orm import Session
 
+from app.models.site import Site
 from app.models.device import Device
 from app.models.camera import Camera
 from app.models.site_camera_layout import SiteCamerasLayoutConfig, SiteCamerasLayout
@@ -52,20 +53,44 @@ def calculate_grid_dimensions(camera_count: int) -> Tuple[int, int]:
         return (4, 4)
 
 
-def auto_populate_device_cameras(
-    device_id: str,
+def _site_cameras(site_id: str, db: Session, limit: int = None) -> List[Camera]:
+    """
+    Cameras belonging to every device at a site, ordered by device name then
+    camera name.
+
+    A site may hold more than one recorder; the grid draws from all of them.
+    The ordering keeps a single-device site's output identical to the previous
+    device-scoped behaviour.
+    """
+    query = db.query(Camera).join(
+        Device, Camera.device_id == Device.id
+    ).filter(
+        Device.site_id == site_id
+    ).order_by(Device.name, Camera.name)
+
+    if limit is not None:
+        query = query.limit(limit)
+
+    return query.all()
+
+
+def auto_populate_site_cameras(
+    site_id: str,
     db: Session,
     max_cameras: int = 16
 ) -> Dict[str, Any]:
     """
-    Auto-populate device camera layout for a single device.
+    Auto-populate the camera layout for a single site.
 
     Creates or updates:
     - SiteCamerasLayoutConfig with optimal grid dimensions
     - SiteCamerasLayout entries for each camera
 
+    Cameras are pulled from **every device** belonging to the site, ordered by
+    device name then camera name.
+
     Args:
-        device_id: Device identifier
+        site_id: Site identifier
         db: Database session
         max_cameras: Maximum cameras to include (default 16)
 
@@ -73,20 +98,18 @@ def auto_populate_device_cameras(
         Dict with results including camera count, grid size, etc.
 
     Raises:
-        ValueError: If device not found or has no cameras
+        ValueError: If site not found or has no cameras
     """
-    # Get device
-    device = db.query(Device).filter(Device.id == device_id).first()
-    if not device:
-        raise ValueError(f"Device {device_id} not found")
+    # Get site
+    site = db.query(Site).filter(Site.id == site_id).first()
+    if not site:
+        raise ValueError(f"Site {site_id} not found")
 
-    # Get cameras for device (ordered by name)
-    cameras = db.query(Camera).filter(
-        Camera.device_id == device_id
-    ).order_by(Camera.name).limit(max_cameras).all()
+    # Get cameras across all of the site's devices
+    cameras = _site_cameras(site_id, db, limit=max_cameras)
 
     if not cameras:
-        raise ValueError(f"Device {device_id} has no cameras")
+        raise ValueError(f"Site {site_id} has no cameras")
 
     camera_count = len(cameras)
 
@@ -94,7 +117,7 @@ def auto_populate_device_cameras(
     rows, cols = calculate_grid_dimensions(camera_count)
 
     logger.info(
-        f"Auto-populating device {device_id} ({device.name}): "
+        f"Auto-populating site {site_id} ({site.name}): "
         f"{camera_count} cameras → {rows}×{cols} grid"
     )
 
@@ -102,18 +125,18 @@ def auto_populate_device_cameras(
     try:
         # Delete existing layout entries
         db.query(SiteCamerasLayout).filter(
-            SiteCamerasLayout.device_id == device_id
+            SiteCamerasLayout.site_id == site_id
         ).delete()
 
         # Delete existing config
         db.query(SiteCamerasLayoutConfig).filter(
-            SiteCamerasLayoutConfig.device_id == device_id
+            SiteCamerasLayoutConfig.site_id == site_id
         ).delete()
 
         # Create new config
         config = SiteCamerasLayoutConfig(
-            device_id=device_id,
-            device_name=device.name,
+            site_id=site_id,
+            site_name=site.name,
             n_rows=rows,
             n_cols=cols
         )
@@ -129,8 +152,8 @@ def auto_populate_device_cameras(
                     camera = cameras[camera_idx]
 
                     layout_entry = SiteCamerasLayout(
-                        device_id=device_id,
-                        device_name=device.name,
+                        site_id=site_id,
+                        site_name=site.name,
                         slot_row=row,
                         slot_col=col,
                         camera_id=camera.id
@@ -145,12 +168,12 @@ def auto_populate_device_cameras(
 
         logger.info(
             f"Successfully populated {cameras_populated} cameras "
-            f"for device {device_id} in {rows}×{cols} grid"
+            f"for site {site_id} in {rows}×{cols} grid"
         )
 
         return {
-            "device_id": device_id,
-            "device_name": device.name,
+            "site_id": site_id,
+            "site_name": site.name,
             "camera_count": camera_count,
             "grid_size": f"{rows}×{cols}",
             "cameras_populated": cameras_populated,
@@ -159,13 +182,13 @@ def auto_populate_device_cameras(
 
     except Exception as e:
         db.rollback()
-        logger.error(f"Error populating device cameras for {device_id}: {e}")
+        logger.error(f"Error populating site cameras for {site_id}: {e}")
         raise
 
 
-def auto_populate_all_devices(db: Session) -> Dict[str, Any]:
+def auto_populate_all_sites(db: Session) -> Dict[str, Any]:
     """
-    Auto-populate device camera layouts for all devices that have cameras.
+    Auto-populate camera layouts for all sites that have cameras.
 
     Args:
         db: Database session
@@ -173,51 +196,53 @@ def auto_populate_all_devices(db: Session) -> Dict[str, Any]:
     Returns:
         Dict with summary of results
     """
-    # Get all devices
-    devices = db.query(Device).all()
+    # Get all sites
+    sites = db.query(Site).all()
 
     results = []
     errors = []
-    devices_processed = 0
-    devices_skipped = 0
+    sites_processed = 0
+    sites_skipped = 0
     total_cameras = 0
 
-    for device in devices:
+    for site in sites:
         try:
-            # Check if device has cameras
-            camera_count = db.query(Camera).filter(
-                Camera.device_id == device.id
+            # Check if the site has cameras on any of its devices
+            camera_count = db.query(Camera).join(
+                Device, Camera.device_id == Device.id
+            ).filter(
+                Device.site_id == site.id
             ).count()
 
             if camera_count == 0:
-                logger.info(f"Skipping device {device.id} ({device.name}): no cameras")
-                devices_skipped += 1
+                logger.info(f"Skipping site {site.id} ({site.name}): no cameras")
+                sites_skipped += 1
                 continue
 
-            # Auto-populate this device
-            result = auto_populate_device_cameras(device.id, db)
+            # Auto-populate this site
+            result = auto_populate_site_cameras(site.id, db)
             results.append(result)
-            devices_processed += 1
+            sites_processed += 1
             total_cameras += result["cameras_populated"]
 
             logger.info(
-                f"Processed device {device.id} ({device.name}): "
+                f"Processed site {site.id} ({site.name}): "
                 f"{result['cameras_populated']} cameras"
             )
 
         except Exception as e:
-            logger.error(f"Error processing device {device.id}: {e}")
+            logger.error(f"Error processing site {site.id}: {e}")
             errors.append({
-                "device_id": device.id,
-                "device_name": device.name,
+                "site_id": site.id,
+                "site_name": site.name,
                 "error": str(e)
             })
-            devices_skipped += 1
+            sites_skipped += 1
 
     return {
-        "total_devices": len(devices),
-        "devices_processed": devices_processed,
-        "devices_skipped": devices_skipped,
+        "total_sites": len(sites),
+        "sites_processed": sites_processed,
+        "sites_skipped": sites_skipped,
         "total_cameras_populated": total_cameras,
         "results": results,
         "errors": errors
@@ -226,32 +251,32 @@ def auto_populate_all_devices(db: Session) -> Dict[str, Any]:
 
 # Manual layout management functions
 
-def get_device_camera_layout(device_id: str, db: Session) -> Dict[str, Any]:
+def get_site_camera_layout(site_id: str, db: Session) -> Dict[str, Any]:
     """
-    Get the camera layout configuration for a device.
+    Get the camera layout configuration for a site.
 
     Args:
-        device_id: Device identifier
+        site_id: Site identifier
         db: Database session
 
     Returns:
         Dict with layout configuration and camera slots
 
     Raises:
-        ValueError: If device or layout not found
+        ValueError: If site or layout not found
     """
-    # Get device
-    device = db.query(Device).filter(Device.id == device_id).first()
-    if not device:
-        raise ValueError(f"Device {device_id} not found")
+    # Get site
+    site = db.query(Site).filter(Site.id == site_id).first()
+    if not site:
+        raise ValueError(f"Site {site_id} not found")
 
     # Get layout config
     config = db.query(SiteCamerasLayoutConfig).filter(
-        SiteCamerasLayoutConfig.device_id == device_id
+        SiteCamerasLayoutConfig.site_id == site_id
     ).first()
 
     if not config:
-        raise ValueError(f"No layout configuration found for device {device_id}")
+        raise ValueError(f"No layout configuration found for site {site_id}")
 
     # Get layout slots with camera names
     layout_slots = db.query(
@@ -262,7 +287,7 @@ def get_device_camera_layout(device_id: str, db: Session) -> Dict[str, Any]:
     ).join(
         Camera, Camera.id == SiteCamerasLayout.camera_id
     ).filter(
-        SiteCamerasLayout.device_id == device_id
+        SiteCamerasLayout.site_id == site_id
     ).order_by(
         SiteCamerasLayout.slot_row,
         SiteCamerasLayout.slot_col
@@ -280,8 +305,8 @@ def get_device_camera_layout(device_id: str, db: Session) -> Dict[str, Any]:
     ]
 
     return {
-        "device_id": device_id,
-        "device_name": config.device_name,
+        "site_id": site_id,
+        "site_name": config.site_name,
         "n_rows": config.n_rows,
         "n_cols": config.n_cols,
         "total_slots": config.n_rows * config.n_cols,
@@ -292,18 +317,21 @@ def get_device_camera_layout(device_id: str, db: Session) -> Dict[str, Any]:
     }
 
 
-def save_device_camera_layout(
-    device_id: str,
+def save_site_camera_layout(
+    site_id: str,
     n_rows: int,
     n_cols: int,
     camera_slots: List[Dict[str, Any]],
     db: Session
 ) -> Dict[str, Any]:
     """
-    Manually save or update camera layout configuration for a device.
+    Manually save or update the camera layout configuration for a site.
+
+    A slot may reference a camera on **any** device belonging to the site; a
+    camera on a device at a different site is rejected.
 
     Args:
-        device_id: Device identifier
+        site_id: Site identifier
         n_rows: Number of rows in grid (1-4)
         n_cols: Number of columns in grid (1-4)
         camera_slots: List of camera slot assignments
@@ -313,53 +341,56 @@ def save_device_camera_layout(
         Dict with summary of saved layout
 
     Raises:
-        ValueError: If device not found, cameras don't belong to device, or validation fails
+        ValueError: If the site is not found, a camera is not available at the
+            site, or validation fails
     """
-    # Get device
-    device = db.query(Device).filter(Device.id == device_id).first()
-    if not device:
-        raise ValueError(f"Device {device_id} not found")
+    # Get site
+    site = db.query(Site).filter(Site.id == site_id).first()
+    if not site:
+        raise ValueError(f"Site {site_id} not found")
 
-    # Validate all camera IDs exist and belong to this device
+    # Validate all camera IDs exist and are available at this site
     if camera_slots:
         camera_ids = [slot['camera_id'] for slot in camera_slots]
-        cameras = db.query(Camera).filter(
+
+        # One query resolves both existence and the camera's owning site
+        rows = db.query(Camera.id, Device.site_id).join(
+            Device, Camera.device_id == Device.id
+        ).filter(
             Camera.id.in_(camera_ids)
         ).all()
+        camera_site = {camera_id: owning_site for camera_id, owning_site in rows}
 
-        # Check all cameras exist
-        found_camera_ids = {cam.id for cam in cameras}
         for camera_id in camera_ids:
-            if camera_id not in found_camera_ids:
+            if camera_id not in camera_site:
                 raise ValueError(f"Camera {camera_id} not found")
 
-        # Check all cameras belong to this device
-        for camera in cameras:
-            if camera.device_id != device_id:
+            if camera_site[camera_id] != site_id:
                 raise ValueError(
-                    f"Camera {camera.id} does not belong to device {device_id}"
+                    f"Camera {camera_id} is not available at site "
+                    f"'{site.name}' and cannot be placed in its layout"
                 )
 
     logger.info(
-        f"Saving manual layout for device {device_id} ({device.name}): "
+        f"Saving manual layout for site {site_id} ({site.name}): "
         f"{n_rows}×{n_cols} grid with {len(camera_slots)} cameras"
     )
 
     try:
         # Delete existing layout entries
         db.query(SiteCamerasLayout).filter(
-            SiteCamerasLayout.device_id == device_id
+            SiteCamerasLayout.site_id == site_id
         ).delete()
 
         # Delete existing config
         db.query(SiteCamerasLayoutConfig).filter(
-            SiteCamerasLayoutConfig.device_id == device_id
+            SiteCamerasLayoutConfig.site_id == site_id
         ).delete()
 
         # Create new config
         config = SiteCamerasLayoutConfig(
-            device_id=device_id,
-            device_name=device.name,
+            site_id=site_id,
+            site_name=site.name,
             n_rows=n_rows,
             n_cols=n_cols
         )
@@ -368,8 +399,8 @@ def save_device_camera_layout(
         # Create new layout entries
         for slot in camera_slots:
             layout_entry = SiteCamerasLayout(
-                device_id=device_id,
-                device_name=device.name,
+                site_id=site_id,
+                site_name=site.name,
                 slot_row=slot['slot_row'],
                 slot_col=slot['slot_col'],
                 camera_id=slot['camera_id']
@@ -380,60 +411,65 @@ def save_device_camera_layout(
         db.commit()
 
         logger.info(
-            f"Successfully saved layout for device {device_id}: "
+            f"Successfully saved layout for site {site_id}: "
             f"{len(camera_slots)} cameras in {n_rows}×{n_cols} grid"
         )
 
         return {
-            "device_id": device_id,
-            "device_name": device.name,
+            "site_id": site_id,
+            "site_name": site.name,
             "n_rows": n_rows,
             "n_cols": n_cols,
             "total_slots": n_rows * n_cols,
             "cameras_populated": len(camera_slots),
-            "message": f"Camera layout saved successfully"
+            "message": "Camera layout saved successfully"
         }
 
     except Exception as e:
         db.rollback()
-        logger.error(f"Error saving layout for device {device_id}: {e}")
+        logger.error(f"Error saving layout for site {site_id}: {e}")
         raise
 
 
-def delete_device_camera_layout(device_id: str, db: Session) -> None:
+def delete_site_camera_layout(site_id: str, db: Session) -> None:
     """
-    Delete the camera layout configuration for a device.
+    Delete the camera layout configuration for a site.
 
     Args:
-        device_id: Device identifier
+        site_id: Site identifier
         db: Database session
 
     Raises:
-        ValueError: If device not found or no layout exists
+        ValueError: If site not found or no layout exists
     """
-    # Check if device exists
-    device = db.query(Device).filter(Device.id == device_id).first()
-    if not device:
-        raise ValueError(f"Device {device_id} not found")
+    # Check if site exists
+    site = db.query(Site).filter(Site.id == site_id).first()
+    if not site:
+        raise ValueError(f"Site {site_id} not found")
 
     # Check if layout exists
     config = db.query(SiteCamerasLayoutConfig).filter(
-        SiteCamerasLayoutConfig.device_id == device_id
+        SiteCamerasLayoutConfig.site_id == site_id
     ).first()
 
     if not config:
-        raise ValueError(f"No layout configuration found for device {device_id}")
+        raise ValueError(f"No layout configuration found for site {site_id}")
 
-    logger.info(f"Deleting layout for device {device_id} ({device.name})")
+    logger.info(f"Deleting layout for site {site_id} ({site.name})")
 
     try:
-        # Delete config (will cascade to layout slots)
+        # site_cameras_layout has no FK to the config table (both key off
+        # sites.id) and the config→slots relationship is viewonly, so nothing
+        # cascades: the slots must be removed explicitly, as save_ does.
+        db.query(SiteCamerasLayout).filter(
+            SiteCamerasLayout.site_id == site_id
+        ).delete()
         db.delete(config)
         db.commit()
 
-        logger.info(f"Successfully deleted layout for device {device_id}")
+        logger.info(f"Successfully deleted layout for site {site_id}")
 
     except Exception as e:
         db.rollback()
-        logger.error(f"Error deleting layout for device {device_id}: {e}")
+        logger.error(f"Error deleting layout for site {site_id}: {e}")
         raise
