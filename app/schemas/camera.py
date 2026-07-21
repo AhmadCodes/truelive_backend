@@ -15,14 +15,14 @@ class CameraBase(BaseModel):
     main_stream_url: Optional[str] = Field(None, description="Main stream URL for camera (optional)")
     sureview_camera: bool = Field(False, description="Flag indicating if this is a SureView integrated camera")
     new: bool = Field(True, description="Flag indicating if this is a newly added camera")
-    use_tcp: Optional[bool] = Field(None, description="Force RTSP over TCP; null to inherit from site")
+    use_tcp: Optional[bool] = Field(None, description="Force RTSP over TCP; null to inherit from device")
 
 
 class CameraCreate(CameraBase):
     """Schema for creating a new camera."""
 
     id: str = Field(..., min_length=1, max_length=255, description="Unique identifier for the camera")
-    site_id: str = Field(..., min_length=1, max_length=255, description="Site this camera belongs to")
+    device_id: str = Field(..., min_length=1, max_length=255, description="Device this camera belongs to")
 
 
 class CameraUpdate(BaseModel):
@@ -33,16 +33,19 @@ class CameraUpdate(BaseModel):
     main_stream_url: Optional[str] = Field(None, description="Main stream URL for camera")
     sureview_camera: Optional[bool] = Field(None, description="Flag indicating if this is a SureView integrated camera")
     new: Optional[bool] = Field(None, description="Flag indicating if this is a newly added camera")
-    use_tcp: Optional[bool] = Field(None, description="Force RTSP over TCP; null to inherit from site (PUT null to clear override)")
-    site_id: Optional[str] = Field(None, min_length=1, max_length=255, description="Site this camera belongs to")
+    use_tcp: Optional[bool] = Field(
+        None,
+        description="Force RTSP over TCP; null to inherit from device (PUT null to clear override)"
+    )
+    device_id: Optional[str] = Field(None, min_length=1, max_length=255, description="Device this camera belongs to")
 
 
 class CameraResponse(BaseModel):
     """Basic camera response schema."""
 
     id: str
-    site_id: str
-    site_name: Optional[str] = None
+    device_id: str
+    device_name: Optional[str] = None
     name: str
     rtsp_url: str
     main_stream_url: Optional[str]
@@ -68,7 +71,7 @@ class CameraSummary(BaseModel):
     """Summary schema for listing cameras."""
 
     id: str
-    site_id: str
+    device_id: str
     name: str
     sureview_camera: bool
     new: bool

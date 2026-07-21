@@ -21,7 +21,7 @@ class ScreenMapping(BaseModel):
         view_id: Reference to the view
         slot_row: Row position in the grid (1-indexed)
         slot_col: Column position in the grid (1-indexed)
-        site_id: Reference to the site
+        device_id: Reference to the device
         camera_id: Reference to the camera
         playing_state: Whether this camera is currently playing
     """
@@ -72,11 +72,11 @@ class ScreenMapping(BaseModel):
     )
 
     # Camera assignment
-    site_id = Column(
+    device_id = Column(
         String(255),
-        ForeignKey('sites.id', ondelete='CASCADE'),
+        ForeignKey('devices.id', ondelete='CASCADE'),
         nullable=True,
-        comment="ID of the site"
+        comment="ID of the device"
     )
 
     camera_id = Column(
@@ -105,7 +105,7 @@ class ScreenMapping(BaseModel):
         Index('idx_screen_mappings_pc', 'pc_id'),
         Index('idx_screen_mappings_screen', 'screen_id'),
         Index('idx_screen_mappings_view', 'view_id'),
-        Index('idx_screen_mappings_site', 'site_id'),
+        Index('idx_screen_mappings_device', 'device_id'),
         Index('idx_screen_mappings_camera', 'camera_id'),
     )
 
@@ -128,11 +128,11 @@ class ScreenMapping(BaseModel):
         doc="View this mapping belongs to"
     )
 
-    site = relationship(
-        "Site",
+    device = relationship(
+        "Device",
         back_populates="screen_mappings",
-        foreign_keys=[site_id],
-        doc="Site of the camera"
+        foreign_keys=[device_id],
+        doc="Device of the camera"
     )
 
     camera = relationship(
@@ -162,7 +162,7 @@ class ScreenMapping(BaseModel):
             'view_id': self.view_id,
             'slot_row': self.slot_row,
             'slot_col': self.slot_col,
-            'site_id': self.site_id,
+            'device_id': self.device_id,
             'camera_id': self.camera_id,
             'playing_state': self.playing_state,
             'created_at': self.created_at,

@@ -41,9 +41,9 @@ class SyncJobResponse(BaseModel):
                 "completed_at": "2025-10-22T07:15:32Z",
                 "created_at": "2025-10-22T07:12:50Z",
                 "result": {
-                    "sites_updated": 57,
+                    "devices_updated": 57,
                     "cameras_updated": 430,
-                    "sites_removed": 0,
+                    "devices_removed": 0,
                     "cameras_removed": 0,
                     "errors": 0
                 },

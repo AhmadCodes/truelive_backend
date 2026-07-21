@@ -136,8 +136,8 @@ class CameraMappingInfo(BaseModel):
 
     slot_row: int
     slot_col: int
-    site_id: Optional[str] = None
-    site_name: Optional[str] = None
+    device_id: Optional[str] = None
+    device_name: Optional[str] = None
     camera_id: Optional[str] = None
     camera_name: Optional[str] = None
     playing_state: bool = False
@@ -182,7 +182,7 @@ class ScreenMappingBase(BaseModel):
 
     slot_row: int = Field(..., ge=1, description="Grid row position (1-indexed)")
     slot_col: int = Field(..., ge=1, description="Grid column position (1-indexed)")
-    site_id: Optional[str] = Field(None, description="Site ID")
+    device_id: Optional[str] = Field(None, description="Device ID")
     camera_id: Optional[str] = Field(None, description="Camera ID")
     playing_state: bool = Field(False, description="Active playback state")
 
@@ -196,7 +196,7 @@ class ScreenMappingCreate(ScreenMappingBase):
 class ScreenMappingUpdate(BaseModel):
     """Schema for updating a screen mapping."""
 
-    site_id: Optional[str] = Field(None, description="Site ID")
+    device_id: Optional[str] = Field(None, description="Device ID")
     camera_id: Optional[str] = Field(None, description="Camera ID")
     playing_state: Optional[bool] = Field(None, description="Active playback state")
 
@@ -210,7 +210,7 @@ class ScreenMappingResponse(BaseModel):
     view_id: str
     slot_row: int
     slot_col: int
-    site_id: Optional[str] = None
+    device_id: Optional[str] = None
     camera_id: Optional[str] = None
     playing_state: bool
 

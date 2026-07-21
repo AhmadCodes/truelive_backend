@@ -10,7 +10,7 @@ from typing import Annotated, List, Optional
 
 from app.api.deps import DBSession, user_or_scope, admin_or_scope
 from app.models.camera import Camera
-from app.models.site import Site
+from app.models.device import Device
 from app.schemas.camera import (
     CameraCreate,
     CameraUpdate,
@@ -43,7 +43,7 @@ async def create_camera(
         Created camera details
 
     Raises:
-        HTTPException: If camera ID already exists or site not found
+        HTTPException: If camera ID already exists or device not found
     """
     # Check if camera ID already exists
     existing_camera = db.query(Camera).filter(Camera.id == camera_data.id).first()
@@ -53,18 +53,18 @@ async def create_camera(
             detail=f"Camera with ID '{camera_data.id}' already exists"
         )
 
-    # Verify site exists
-    site = db.query(Site).filter(Site.id == camera_data.site_id).first()
-    if not site:
+    # Verify device exists
+    device = db.query(Device).filter(Device.id == camera_data.device_id).first()
+    if not device:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Site with ID '{camera_data.site_id}' not found"
+            detail=f"Device with ID '{camera_data.device_id}' not found"
         )
 
     # Create new camera
     new_camera = Camera(
         id=camera_data.id,
-        site_id=camera_data.site_id,
+        device_id=camera_data.device_id,
         name=camera_data.name,
         rtsp_url=camera_data.rtsp_url,
         main_stream_url=camera_data.main_stream_url,
@@ -90,11 +90,11 @@ async def create_camera(
             "auto-provision of alert address failed", extra={"camera_id": new_camera.id},
         )
 
-    # Return camera with site_name
+    # Return camera with device_name
     return {
         "id": new_camera.id,
-        "site_id": new_camera.site_id,
-        "site_name": site.name,
+        "device_id": new_camera.device_id,
+        "device_name": device.name,
         "name": new_camera.name,
         "rtsp_url": new_camera.rtsp_url,
         "main_stream_url": new_camera.main_stream_url,
@@ -112,7 +112,7 @@ async def list_cameras(
     db: DBSession,
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(50, ge=1, le=1000, description="Number of records to return"),
-    site_id: Optional[str] = Query(None, description="Filter by site ID"),
+    device_id: Optional[str] = Query(None, description="Filter by device ID"),
     sureview_camera: Optional[bool] = Query(None, description="Filter by SureView camera flag"),
     new: Optional[bool] = Query(None, description="Filter by new camera flag"),
     search: Optional[str] = Query(None, description="Search by camera name or ID")
@@ -127,21 +127,21 @@ async def list_cameras(
         db: Database session
         skip: Number of records to skip (pagination)
         limit: Number of records to return (pagination)
-        site_id: Filter by site ID
+        device_id: Filter by device ID
         sureview_camera: Filter by SureView camera flag
         new: Filter by new camera flag
         search: Search by camera name or ID
 
     Returns:
-        List of cameras with site names
+        List of cameras with device names
     """
     from sqlalchemy.orm import joinedload
 
-    query = db.query(Camera).options(joinedload(Camera.site))
+    query = db.query(Camera).options(joinedload(Camera.device))
 
     # Apply filters
-    if site_id:
-        query = query.filter(Camera.site_id == site_id)
+    if device_id:
+        query = query.filter(Camera.device_id == device_id)
 
     if sureview_camera is not None:
         query = query.filter(Camera.sureview_camera == sureview_camera)
@@ -162,13 +162,13 @@ async def list_cameras(
     # Apply pagination
     cameras = query.offset(skip).limit(limit).all()
 
-    # Add site_name to each camera
+    # Add device_name to each camera
     result = []
     for camera in cameras:
         camera_dict = {
             "id": camera.id,
-            "site_id": camera.site_id,
-            "site_name": camera.site.name if camera.site else None,
+            "device_id": camera.device_id,
+            "device_name": camera.device.name if camera.device else None,
             "name": camera.name,
             "rtsp_url": camera.rtsp_url,
             "main_stream_url": camera.main_stream_url,
@@ -187,7 +187,7 @@ async def list_cameras(
 async def count_cameras(
     _auth: Annotated[object, Depends(user_or_scope("cameras:read", "cameras:manage"))],
     db: DBSession,
-    site_id: Optional[str] = Query(None, description="Filter by site ID"),
+    device_id: Optional[str] = Query(None, description="Filter by device ID"),
     sureview_camera: Optional[bool] = Query(None, description="Filter by SureView camera flag"),
     new: Optional[bool] = Query(None, description="Filter by new camera flag")
 ):
@@ -197,7 +197,7 @@ async def count_cameras(
     Args:
         current_user: Current authenticated user
         db: Database session
-        site_id: Filter by site ID
+        device_id: Filter by device ID
         sureview_camera: Filter by SureView camera flag
         new: Filter by new camera flag
 
@@ -206,8 +206,8 @@ async def count_cameras(
     """
     query = db.query(func.count(Camera.id))
 
-    if site_id:
-        query = query.filter(Camera.site_id == site_id)
+    if device_id:
+        query = query.filter(Camera.device_id == device_id)
 
     if sureview_camera is not None:
         query = query.filter(Camera.sureview_camera == sureview_camera)
@@ -237,14 +237,14 @@ async def get_camera(
         db: Database session
 
     Returns:
-        Camera details with site name
+        Camera details with device name
 
     Raises:
         HTTPException: If camera not found
     """
     from sqlalchemy.orm import joinedload
 
-    camera = db.query(Camera).options(joinedload(Camera.site)).filter(Camera.id == camera_id).first()
+    camera = db.query(Camera).options(joinedload(Camera.device)).filter(Camera.id == camera_id).first()
 
     if not camera:
         raise HTTPException(
@@ -252,11 +252,11 @@ async def get_camera(
             detail=f"Camera with ID '{camera_id}' not found"
         )
 
-    # Add site_name to response
+    # Add device_name to response
     return {
         "id": camera.id,
-        "site_id": camera.site_id,
-        "site_name": camera.site.name if camera.site else None,
+        "device_id": camera.device_id,
+        "device_name": camera.device.name if camera.device else None,
         "name": camera.name,
         "rtsp_url": camera.rtsp_url,
         "main_stream_url": camera.main_stream_url,
@@ -290,7 +290,7 @@ async def update_camera(
         Updated camera details
 
     Raises:
-        HTTPException: If camera not found or site not found
+        HTTPException: If camera not found or device not found
     """
     camera = db.query(Camera).filter(Camera.id == camera_id).first()
 
@@ -300,15 +300,15 @@ async def update_camera(
             detail=f"Camera with ID '{camera_id}' not found"
         )
 
-    # If site_id is being updated, verify the new site exists
-    if camera_data.site_id and camera_data.site_id != camera.site_id:
-        site = db.query(Site).filter(Site.id == camera_data.site_id).first()
-        if not site:
+    # If device_id is being updated, verify the new device exists
+    if camera_data.device_id and camera_data.device_id != camera.device_id:
+        device = db.query(Device).filter(Device.id == camera_data.device_id).first()
+        if not device:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Site with ID '{camera_data.site_id}' not found"
+                detail=f"Device with ID '{camera_data.device_id}' not found"
             )
-        camera.site_id = camera_data.site_id
+        camera.device_id = camera_data.device_id
 
     # Update fields if provided
     if camera_data.name is not None:
@@ -326,7 +326,7 @@ async def update_camera(
     if camera_data.new is not None:
         camera.new = camera_data.new
 
-    # Tri-state update for use_tcp: null explicitly clears the override (inherit from site).
+    # Tri-state update for use_tcp: null explicitly clears the override (inherit from device).
     # Distinguish "field absent" (no change) from "field explicitly null" via exclude_unset.
     update_data = camera_data.model_dump(exclude_unset=True)
     if "use_tcp" in update_data:
@@ -335,14 +335,14 @@ async def update_camera(
     db.commit()
     db.refresh(camera)
 
-    # Reload site relationship and return with site_name
+    # Reload device relationship and return with device_name
     from sqlalchemy.orm import joinedload
-    camera = db.query(Camera).options(joinedload(Camera.site)).filter(Camera.id == camera_id).first()
+    camera = db.query(Camera).options(joinedload(Camera.device)).filter(Camera.id == camera_id).first()
 
     return {
         "id": camera.id,
-        "site_id": camera.site_id,
-        "site_name": camera.site.name if camera.site else None,
+        "device_id": camera.device_id,
+        "device_name": camera.device.name if camera.device else None,
         "name": camera.name,
         "rtsp_url": camera.rtsp_url,
         "main_stream_url": camera.main_stream_url,
@@ -464,51 +464,51 @@ async def toggle_camera_new_flag(
     }
 
 
-@router.get("/site/{site_id}", response_model=List[CameraDetailResponse])
-async def get_cameras_by_site(
-    site_id: str,
+@router.get("/device/{device_id}", response_model=List[CameraDetailResponse])
+async def get_cameras_by_device(
+    device_id: str,
     _auth: Annotated[object, Depends(user_or_scope("cameras:read", "cameras:manage"))],
     db: DBSession
 ):
     """
-    Get all cameras for a specific site.
+    Get all cameras for a specific device.
 
-    This is a convenience endpoint that's equivalent to GET /cameras?site_id={site_id}
+    This is a convenience endpoint that's equivalent to GET /cameras?device_id={device_id}
     but follows REST conventions for nested resources.
 
     All authenticated users can view cameras.
 
     Args:
-        site_id: Site ID
+        device_id: Device ID
         current_user: Current authenticated user
         db: Database session
 
     Returns:
-        List of cameras for the site with site names
+        List of cameras for the device with device names
 
     Raises:
-        HTTPException: If site not found
+        HTTPException: If device not found
     """
     from sqlalchemy.orm import joinedload
 
-    # Verify site exists
-    site = db.query(Site).filter(Site.id == site_id).first()
-    if not site:
+    # Verify device exists
+    device = db.query(Device).filter(Device.id == device_id).first()
+    if not device:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Site with ID '{site_id}' not found"
+            detail=f"Device with ID '{device_id}' not found"
         )
 
-    # Get cameras for the site
-    cameras = db.query(Camera).options(joinedload(Camera.site)).filter(Camera.site_id == site_id).order_by(Camera.created_at.desc()).all()
+    # Get cameras for the device
+    cameras = db.query(Camera).options(joinedload(Camera.device)).filter(Camera.device_id == device_id).order_by(Camera.created_at.desc()).all()
 
-    # Add site_name to each camera
+    # Add device_name to each camera
     result = []
     for camera in cameras:
         camera_dict = {
             "id": camera.id,
-            "site_id": camera.site_id,
-            "site_name": camera.site.name if camera.site else None,
+            "device_id": camera.device_id,
+            "device_name": camera.device.name if camera.device else None,
             "name": camera.name,
             "rtsp_url": camera.rtsp_url,
             "main_stream_url": camera.main_stream_url,

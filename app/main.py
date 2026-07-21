@@ -13,7 +13,7 @@ import logging
 
 from app.core.config import settings
 from app.database import check_db_health, SessionLocal
-from app.api.v1 import auth, sites, cameras, pcs, screens, views, users, categories, sureview, snapshots, configs, stream, invitations, audit_logs, settings as settings_router
+from app.api.v1 import auth, sites, devices, cameras, pcs, screens, views, users, categories, sureview, snapshots, configs, stream, invitations, audit_logs, settings as settings_router
 from app.api.v1 import alert_addresses, alerts as alerts_router, webhook_consumers, service_accounts
 
 
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 # OpenAPI tag metadata — drives the section ORDER + headers in Swagger UI.
 #
-# All 21 sections are listed here in display order: existing TrueLive groups
+# All 22 sections are listed here in display order: existing TrueLive groups
 # first (in router-registration order), then the four alerting / service-account
 # groups at the bottom. Tags without a `description` just get the bare name as
 # a section header — details for each endpoint live on the endpoint itself.
@@ -35,6 +35,7 @@ openapi_tags = [
     {"name": "Authentication"},
     {"name": "Invitations"},
     {"name": "Sites"},
+    {"name": "Devices"},
     {"name": "Cameras"},
     {"name": "PCs"},
     {"name": "Screens"},
@@ -215,6 +216,12 @@ app.include_router(
     sites.router,
     prefix=f"{settings.API_V1_PREFIX}/sites",
     tags=["Sites"]
+)
+
+app.include_router(
+    devices.router,
+    prefix=f"{settings.API_V1_PREFIX}/devices",
+    tags=["Devices"]
 )
 
 app.include_router(

@@ -10,7 +10,7 @@ from typing import List, Dict, Any, Tuple, Optional
 from sqlalchemy.orm import Session
 
 from app.models.camera import Camera
-from app.models.site import Site
+from app.models.device import Device
 from app.models.site_camera_layout import SiteCamerasLayout
 from app.models.category import SiteCategoryMapping
 from app.schemas.stream_config import ScreenConfigInput
@@ -75,8 +75,8 @@ def get_cameras_for_config(
                         break
         return cameras
     else:
-        # Fetch available cameras ordered by site name, camera name
-        query = db.query(Camera).join(Site).order_by(Site.name, Camera.name)
+        # Fetch available cameras ordered by device name, camera name
+        query = db.query(Camera).join(Device).order_by(Device.name, Camera.name)
 
         # Exclude cameras if specified
         if exclude_set:
@@ -88,7 +88,7 @@ def get_cameras_for_config(
 
 def get_location_uris_for_camera(camera: Camera, db: Session) -> List[Dict[str, str]]:
     """
-    Get LocationUris array for a camera (all cameras from its site).
+    Get LocationUris array for a camera (all cameras from its device).
 
     Args:
         camera: Camera object
@@ -99,23 +99,23 @@ def get_location_uris_for_camera(camera: Camera, db: Session) -> List[Dict[str, 
     """
     location_uris = []
 
-    if not camera.site_id:
+    if not camera.device_id:
         return location_uris
 
-    # Get all site_cameras_layout entries for this site
-    site_layouts = db.query(SiteCamerasLayout).filter(
-        SiteCamerasLayout.site_id == camera.site_id
+    # Get all site_cameras_layout entries for this device
+    device_layouts = db.query(SiteCamerasLayout).filter(
+        SiteCamerasLayout.device_id == camera.device_id
     ).all()
 
     # Get cameras from layouts
-    for layout in site_layouts:
-        site_camera = db.query(Camera).filter(Camera.id == layout.camera_id).first()
-        if site_camera and site_camera.rtsp_url:
+    for layout in device_layouts:
+        device_camera = db.query(Camera).filter(Camera.id == layout.camera_id).first()
+        if device_camera and device_camera.rtsp_url:
             # Process URL to encode passwords
-            processed_url = encode_rtsp_password(site_camera.rtsp_url)
+            processed_url = encode_rtsp_password(device_camera.rtsp_url)
             location_uris.append({
                 "url": processed_url,
-                "osd_text": site_camera.name if site_camera.name else ""
+                "osd_text": device_camera.name if device_camera.name else ""
             })
 
     return location_uris
@@ -123,7 +123,7 @@ def get_location_uris_for_camera(camera: Camera, db: Session) -> List[Dict[str, 
 
 def get_osd_color_for_camera(camera: Camera, db: Session) -> str:
     """
-    Get OSD color for a camera from its site category.
+    Get OSD color for a camera from its device category.
 
     Args:
         camera: Camera object
@@ -134,12 +134,12 @@ def get_osd_color_for_camera(camera: Camera, db: Session) -> str:
     """
     default_color = "0xFFFFFFFF"  # White
 
-    if not camera.site_id:
+    if not camera.device_id:
         return default_color
 
-    # Get site category mapping
+    # Get device category mapping
     mapping = db.query(SiteCategoryMapping).filter(
-        SiteCategoryMapping.site_id == camera.site_id
+        SiteCategoryMapping.device_id == camera.device_id
     ).first()
 
     if mapping and mapping.category and mapping.category.color is not None:
@@ -174,34 +174,38 @@ def create_camera_object(
     Returns:
         Camera object dict with all required fields including metadata
     """
-    # Get site for camera
-    site = db.query(Site).filter(Site.id == camera.site_id).first()
-    site_name = site.name if site else "Unknown Site"
-    site_id = camera.site_id if camera.site_id else ""
+    # Get device for camera
+    device = db.query(Device).filter(Device.id == camera.device_id).first()
+    device_name = device.name if device else "Unknown Site"
+    device_id = camera.device_id if camera.device_id else ""
 
     # Process RTSP URL to encode passwords
     processed_url = encode_rtsp_password(camera.rtsp_url) if camera.rtsp_url else ""
 
-    # Get OSD color from site category
+    # Get OSD color from device category
     osd_color = get_osd_color_for_camera(camera, db)
 
-    # Get LocationUris for this camera's site
+    # Get LocationUris for this camera's device
     location_uris = get_location_uris_for_camera(camera, db)
 
+    # FROZEN wire format: "id"/"site_id"/"site_name"/"osd_text" carry the Device
+    # id and name. PC clients in the field consume these keys — never rename them
+    # and never re-point them at the new parent Site. The "Unknown Site" fallback
+    # string above is likewise part of the frozen output.
     return {
         "LocationUris": location_uris,
-        "id": f"{site_id}_{camera.id}",
+        "id": f"{device_id}_{camera.id}",
         "camera_id": camera.id,
         "camera_name": camera.name if camera.name else "",
-        "site_id": site_id,
-        "site_name": site_name,
+        "site_id": device_id,
+        "site_name": device_name,
         "view_n": view_n,
         "view_id": view_id,
         "view_name": f"View {view_n + 1}",  # Generic view name for generated configs
         "pos_x": pos_x,
         "pos_y": pos_y,
         "osd_color": osd_color,
-        "osd_text": f"{camera.name} ({site_name})",
+        "osd_text": f"{camera.name} ({device_name})",
         "url": processed_url,
         "use_tcp": camera.use_tcp if hasattr(camera, 'use_tcp') and camera.use_tcp is not None else use_tcp
     }
@@ -225,6 +229,7 @@ def create_empty_camera_object(
     Returns:
         Empty camera object matching json_format.md spec with all fields
     """
+    # FROZEN wire format: "site_id"/"site_name" are Device-scoped keys.
     return {
         "LocationUris": [],
         "id": "",

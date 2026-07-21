@@ -1,10 +1,17 @@
 """
 SureView integration service.
 
-Syncs camera and site data from SureView API using Selenium for authentication.
+Syncs camera and device data from SureView API using Selenium for authentication.
+
+Naming caution: SureView's own API vocabulary is the inverse of ours. A SureView
+*server* (``serverID``) is one NVR/DVR and maps 1:1 to our :class:`Device`; a
+SureView *device* (``deviceID``) is a single camera and maps to our
+:class:`Camera`. Function names below that say "device" in the SureView sense
+(``get_devices_by_server_id``) are returning cameras.
 """
 import os
 import time
+import uuid
 import logging
 import requests
 from typing import Optional, List, Dict, Any
@@ -20,9 +27,58 @@ from webdriver_manager.chrome import ChromeDriverManager
 
 from app.core.config import settings
 from app.models.site import Site
+from app.models.device import Device
 from app.models.camera import Camera
 
 logger = logging.getLogger(__name__)
+
+# Location fields copied from SureView group data onto a *newly minted* parent
+# Site. Once a Device has a parent Site, sync must never rewrite these (AC-25):
+# operators consolidate several NVRs under one Site and hand-edit the address.
+_GROUP_TO_SITE_FIELDS = {
+    "customer_id": "referenceId",
+    "address": "address",
+    "telephone": "telephone",
+    "telephone2": "telephone2",
+    "telephone_police": "telephonePolice",
+    "telephone_fire": "telephoneFire",
+    "notes": "notes",
+    "lat_long": "latLong",
+}
+
+
+def create_parent_site(
+    db: Session,
+    name: str,
+    group_data: Optional[Dict[str, Any]]
+) -> Site:
+    """
+    Mint a fresh 1:1 parent Site for a brand-new Device.
+
+    Only ever called when a Device has no parent yet. Existing parents are left
+    completely untouched by sync (AC-25).
+
+    Args:
+        db: Database session
+        name: Site name (mirrors the Device name at creation time)
+        group_data: SureView group details, or None if unavailable
+
+    Returns:
+        The newly created (flushed) Site
+    """
+    site = Site(
+        id=f"SITE_{uuid.uuid4().hex[:8].upper()}",
+        name=name,
+    )
+
+    if group_data:
+        for site_attr, group_key in _GROUP_TO_SITE_FIELDS.items():
+            setattr(site, site_attr, group_data.get(group_key))
+
+    db.add(site)
+    db.flush()
+    logger.info(f"Created parent site {site.id} ('{name}') for new device")
+    return site
 
 
 def is_docker() -> bool:
@@ -298,10 +354,16 @@ def sync_sureview_devices(db: Session) -> Dict[str, int]:
 
     This function:
     1. Authenticates to SureView via Selenium
-    2. Fetches server list
-    3. Fetches devices for each server
-    4. Updates database with sites and cameras
+    2. Fetches server list (a SureView server == one of our Devices)
+    3. Fetches devices for each server (a SureView device == one of our Cameras)
+    4. Updates database with devices and cameras
     5. Removes stale entries not present in SureView
+
+    Parent Site handling (AC-20/21/25): a brand-new Device also gets a fresh 1:1
+    parent Site carrying the SureView location data. A Device that already has a
+    parent Site keeps it untouched — neither its name nor any of its 8 location
+    fields are rewritten, so operator-consolidated multi-NVR Sites survive the
+    10-minute beat.
 
     Args:
         db: Database session
@@ -309,17 +371,17 @@ def sync_sureview_devices(db: Session) -> Dict[str, int]:
     Returns:
         Summary dict with counts:
             {
-                "sites_updated": int,
+                "devices_updated": int,
                 "cameras_updated": int,
-                "sites_removed": int,
+                "devices_removed": int,
                 "cameras_removed": int,
                 "errors": int
             }
     """
     results = {
-        "sites_updated": 0,
+        "devices_updated": 0,
         "cameras_updated": 0,
-        "sites_removed": 0,
+        "devices_removed": 0,
         "cameras_removed": 0,
         "errors": 0
     }
@@ -344,8 +406,8 @@ def sync_sureview_devices(db: Session) -> Dict[str, int]:
 
         logger.info(f"=== SYNC SUMMARY: Fetched {len(servers)} servers from SureView ===")
 
-        # Track current sites and cameras from SureView
-        current_site_ids = set()
+        # Track current devices and cameras from SureView
+        current_device_ids = set()
         current_camera_ids = set()
         cameras_per_server = {}
 
@@ -353,72 +415,72 @@ def sync_sureview_devices(db: Session) -> Dict[str, int]:
         for idx, server in enumerate(servers, 1):
             logger.info(f"Processing server {idx}/{len(servers)}: {server.get('title', 'Unknown')} (ID: {server.get('serverID')})")
             try:
-                site_id = str(server["serverID"])
-                current_site_ids.add(site_id)
+                device_id = str(server["serverID"])
+                current_device_ids.add(device_id)
 
-                # Fetch group details for this server to get additional site information
+                # Fetch group details for this server to get additional location
+                # information (only ever used when minting a NEW parent Site).
                 group_data = None
                 if "groupID" in server and server["groupID"]:
                     group_data = get_group_details(cookies, server["groupID"])
 
-                # Update or create site
-                site = db.query(Site).filter(Site.id == site_id).first()
+                # Update or create device
+                device_record = db.query(Device).filter(
+                    Device.id == device_id
+                ).first()
 
-                if site:
-                    # Update existing
-                    site.name = server["title"]
-                    site.nvr_username = server["username"]
-                    site.nvr_password = server["password"]
-                    site.sureview_site = True
+                if device_record:
+                    # Update the Device's OWN fields only.
+                    device_record.name = server["title"]
+                    device_record.nvr_username = server["username"]
+                    device_record.nvr_password = server["password"]
+                    device_record.sureview_site = True
 
-                    # Update group details if available
-                    if group_data:
-                        site.customer_id = group_data.get("referenceId")
-                        site.address = group_data.get("address")
-                        site.telephone = group_data.get("telephone")
-                        site.telephone2 = group_data.get("telephone2")
-                        site.telephone_police = group_data.get("telephonePolice")
-                        site.telephone_fire = group_data.get("telephoneFire")
-                        site.notes = group_data.get("notes")
-                        site.lat_long = group_data.get("latLong")
+                    # AC-25: an already-parented Device keeps its parent Site
+                    # exactly as the operator left it — name and all 8 location
+                    # fields are NOT rewritten from group_data. Only heal the
+                    # pathological case of a Device with no parent at all.
+                    if not device_record.site_id:
+                        logger.warning(
+                            f"Device {device_id} has no parent site; "
+                            f"minting one"
+                        )
+                        parent_site = create_parent_site(
+                            db, server["title"], group_data
+                        )
+                        device_record.site_id = parent_site.id
                 else:
-                    # Create new
-                    site = Site(
-                        id=site_id,
+                    # Brand-new Device: mint its 1:1 parent Site as well.
+                    parent_site = create_parent_site(
+                        db, server["title"], group_data
+                    )
+                    device_record = Device(
+                        id=device_id,
                         name=server["title"],
+                        site_id=parent_site.id,
                         nvr_username=server["username"],
                         nvr_password=server["password"],
                         sureview_site=True,
                         new=True
                     )
-
-                    # Add group details if available
-                    if group_data:
-                        site.customer_id = group_data.get("referenceId")
-                        site.address = group_data.get("address")
-                        site.telephone = group_data.get("telephone")
-                        site.telephone2 = group_data.get("telephone2")
-                        site.telephone_police = group_data.get("telephonePolice")
-                        site.telephone_fire = group_data.get("telephoneFire")
-                        site.notes = group_data.get("notes")
-                        site.lat_long = group_data.get("latLong")
-
-                    db.add(site)
+                    db.add(device_record)
 
                 # Flush to database to avoid bulk insert conflicts
                 db.flush()
 
-                results["sites_updated"] += 1
+                results["devices_updated"] += 1
 
-                # Step 4: Get devices for this server
-                devices = get_devices_by_server_id(cookies, server["serverID"]) or []
-                device_count = len(devices)
-                cameras_per_server[site_id] = device_count
+                # Step 4: Get SureView devices (== our cameras) for this server
+                sureview_devices = get_devices_by_server_id(
+                    cookies, server["serverID"]
+                ) or []
+                device_count = len(sureview_devices)
+                cameras_per_server[device_id] = device_count
 
                 if device_count == 0:
-                    logger.warning(f"Server {site_id} ({server.get('title')}) has 0 devices")
+                    logger.warning(f"Server {device_id} ({server.get('title')}) has 0 devices")
 
-                for device in devices:
+                for device in sureview_devices:
                     try:
                         camera_id = str(device["deviceID"])
                         current_camera_ids.add(camera_id)
@@ -442,7 +504,7 @@ def sync_sureview_devices(db: Session) -> Dict[str, int]:
                             # Create new
                             camera = Camera(
                                 id=camera_id,
-                                site_id=site_id,
+                                device_id=device_id,
                                 name=device["title"],
                                 rtsp_url=rtsp_url,
                                 sureview_camera=True,
@@ -467,13 +529,15 @@ def sync_sureview_devices(db: Session) -> Dict[str, int]:
         logger.info("=" * 80)
         logger.info(f"=== SYNC STATISTICS ===")
         logger.info(f"Total servers processed: {len(servers)}")
-        logger.info(f"Total sites updated: {results['sites_updated']}")
+        logger.info(f"Total devices updated: {results['devices_updated']}")
         logger.info(f"Total cameras from SureView API: {len(current_camera_ids)}")
         logger.info(f"Total cameras processed: {results['cameras_updated']}")
         logger.info(f"Errors encountered: {results['errors']}")
 
         # Log servers with no cameras (potential issues)
-        empty_servers = [site_id for site_id, count in cameras_per_server.items() if count == 0]
+        empty_servers = [
+            dev_id for dev_id, count in cameras_per_server.items() if count == 0
+        ]
         if empty_servers:
             logger.warning(f"Servers with 0 cameras: {len(empty_servers)} servers")
             logger.warning(f"Empty server IDs: {empty_servers[:10]}{'...' if len(empty_servers) > 10 else ''}")
@@ -482,15 +546,15 @@ def sync_sureview_devices(db: Session) -> Dict[str, int]:
         if cameras_per_server:
             sorted_servers = sorted(cameras_per_server.items(), key=lambda x: x[1], reverse=True)
             logger.info("Top 10 servers by camera count:")
-            for site_id, count in sorted_servers[:10]:
-                logger.info(f"  - Server {site_id}: {count} cameras")
+            for dev_id, count in sorted_servers[:10]:
+                logger.info(f"  - Server {dev_id}: {count} cameras")
 
         logger.info("=" * 80)
 
         # Commit all updates
         db.commit()
 
-        # Step 5: Remove stale sites and cameras (bulk delete for performance)
+        # Step 5: Remove stale devices and cameras (bulk delete for performance)
         # CRITICAL: Only perform deletion if sync was successful and fetched data
         # This prevents deleting cameras when API partially fails or returns incomplete data
         logger.info("=" * 80)
@@ -513,23 +577,61 @@ def sync_sureview_devices(db: Session) -> Dict[str, int]:
                 "This may indicate API issues or authentication failure."
             )
         else:
-            # Get all SureView site IDs
-            existing_sureview_site_ids = {
-                site.id for site in db.query(Site.id).filter(Site.sureview_site == True).all()
+            # Get all SureView device IDs
+            existing_sureview_device_ids = {
+                device.id for device in db.query(Device.id).filter(
+                    Device.sureview_site == True
+                ).all()
             }
 
-            logger.info(f"Existing SureView sites in DB: {len(existing_sureview_site_ids)}")
-            logger.info(f"Current sites from API: {len(current_site_ids)}")
+            logger.info(f"Existing SureView devices in DB: {len(existing_sureview_device_ids)}")
+            logger.info(f"Current devices from API: {len(current_device_ids)}")
 
-            # Find stale sites
-            stale_site_ids = existing_sureview_site_ids - current_site_ids
+            # Find stale devices
+            stale_device_ids = existing_sureview_device_ids - current_device_ids
 
-            if stale_site_ids:
-                logger.info(f"Removing {len(stale_site_ids)} stale sites: {list(stale_site_ids)[:5]}{'...' if len(stale_site_ids) > 5 else ''}")
-                db.query(Site).filter(Site.id.in_(stale_site_ids)).delete(synchronize_session=False)
-                results["sites_removed"] = len(stale_site_ids)
+            if stale_device_ids:
+                logger.info(
+                    f"Removing {len(stale_device_ids)} stale devices: "
+                    f"{list(stale_device_ids)[:5]}"
+                    f"{'...' if len(stale_device_ids) > 5 else ''}"
+                )
+
+                # Capture the parent sites BEFORE deleting the devices so we can
+                # tell which ones are left childless.
+                candidate_parent_site_ids = {
+                    row.site_id for row in db.query(Device.site_id).filter(
+                        Device.id.in_(stale_device_ids)
+                    ).all() if row.site_id
+                }
+
+                db.query(Device).filter(
+                    Device.id.in_(stale_device_ids)
+                ).delete(synchronize_session=False)
+                results["devices_removed"] = len(stale_device_ids)
+                db.flush()
+
+                # A parent Site is removed only when the stale device was its
+                # LAST device — shared/consolidated sites are preserved.
+                orphaned_site_ids = {
+                    parent_id for parent_id in candidate_parent_site_ids
+                    if db.query(func.count(Device.id)).filter(
+                        Device.site_id == parent_id
+                    ).scalar() == 0
+                }
+
+                if orphaned_site_ids:
+                    logger.info(
+                        f"Removing {len(orphaned_site_ids)} parent sites left "
+                        f"with no devices"
+                    )
+                    db.query(Site).filter(
+                        Site.id.in_(orphaned_site_ids)
+                    ).delete(synchronize_session=False)
+                else:
+                    logger.info("No parent sites left childless")
             else:
-                logger.info("No stale sites to remove")
+                logger.info("No stale devices to remove")
 
             # Get all SureView camera IDs
             existing_sureview_camera_ids = {
@@ -571,18 +673,20 @@ def sync_sureview_devices(db: Session) -> Dict[str, int]:
         # Final summary with complete database state
         logger.info("=" * 80)
         logger.info("=== SYNC COMPLETED ===")
-        logger.info(f"Sites updated: {results['sites_updated']}")
-        logger.info(f"Sites removed: {results['sites_removed']}")
+        logger.info(f"Devices updated: {results['devices_updated']}")
+        logger.info(f"Devices removed: {results['devices_removed']}")
         logger.info(f"Cameras updated: {results['cameras_updated']}")
         logger.info(f"Cameras removed: {results['cameras_removed']}")
         logger.info(f"Errors: {results['errors']}")
 
         # Query final database state
-        final_site_count = db.query(func.count(Site.id)).filter(Site.sureview_site == True).scalar()
+        final_device_count = db.query(func.count(Device.id)).filter(
+            Device.sureview_site == True
+        ).scalar()
         final_camera_count = db.query(func.count(Camera.id)).filter(Camera.sureview_camera == True).scalar()
 
         logger.info(f"Final database state:")
-        logger.info(f"  - SureView sites in DB: {final_site_count}")
+        logger.info(f"  - SureView devices in DB: {final_device_count}")
         logger.info(f"  - SureView cameras in DB: {final_camera_count}")
         logger.info("=" * 80)
 

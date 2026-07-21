@@ -1,31 +1,36 @@
 """
-SQLAlchemy models for site camera layout configuration and layout.
+SQLAlchemy models for device camera layout configuration and layout.
+
+Class and table names are frozen (`SiteCamerasLayoutConfig` /
+`site_cameras_layout_config`, `SiteCamerasLayout` / `site_cameras_layout`);
+only the `site_id`/`site_name` columns became `device_id`/`device_name` in
+migration 008.
 """
 
 from sqlalchemy import (
     Column, String, Integer, ForeignKey, ForeignKeyConstraint, CheckConstraint, Index, UniqueConstraint
 )
-from sqlalchemy.orm import relationship, foreign
+from sqlalchemy.orm import relationship
 from app.models.base import BaseModel
 
 
 class SiteCamerasLayoutConfig(BaseModel):
     """
-    Configuration for site camera layout grid (rows x columns).
-    Defines the grid dimensions for displaying cameras for a specific site.
+    Configuration for device camera layout grid (rows x columns).
+    Defines the grid dimensions for displaying cameras for a specific device.
     """
     __tablename__ = "site_cameras_layout_config"
 
-    site_id = Column(
+    device_id = Column(
         String(255),
-        ForeignKey('sites.id', ondelete='CASCADE'),
+        ForeignKey('devices.id', ondelete='CASCADE'),
         primary_key=True,
-        comment="Unique identifier for the site (references sites.id)"
+        comment="Unique identifier for the device (references devices.id)"
     )
-    site_name = Column(
+    device_name = Column(
         String(255),
         nullable=False,
-        comment="Name of the site"
+        comment="Name of the device"
     )
     n_rows = Column(
         Integer,
@@ -51,32 +56,38 @@ class SiteCamerasLayoutConfig(BaseModel):
     )
 
     # Relationships
-    site = relationship(
-        "Site",
+    device = relationship(
+        "Device",
         back_populates="layout_config",
         lazy="select"
     )
 
+    # Read-only convenience join: site_cameras_layout.device_id has no FK to
+    # this table (both tables key off devices.id), so this relationship must
+    # never write the column. Device.layout_slots / SiteCamerasLayout.device
+    # is the single writable path.
     layout_slots = relationship(
         "SiteCamerasLayout",
         back_populates="config",
-        primaryjoin="SiteCamerasLayoutConfig.site_id == foreign(SiteCamerasLayout.site_id)",
-        cascade="all, delete-orphan",
+        primaryjoin=(
+            "SiteCamerasLayoutConfig.device_id == foreign(SiteCamerasLayout.device_id)"
+        ),
+        viewonly=True,
         lazy="select"
     )
 
     def __repr__(self):
         return (
             f"<SiteCamerasLayoutConfig("
-            f"site_id='{self.site_id}', "
-            f"site_name='{self.site_name}', "
+            f"device_id='{self.device_id}', "
+            f"device_name='{self.device_name}', "
             f"grid={self.n_rows}x{self.n_cols})>"
         )
 
 
 class SiteCamerasLayout(BaseModel):
     """
-    Individual camera slot assignments in a site's layout grid.
+    Individual camera slot assignments in a device's layout grid.
     Each record represents one camera in a specific grid position.
     """
     __tablename__ = "site_cameras_layout"
@@ -87,15 +98,15 @@ class SiteCamerasLayout(BaseModel):
         autoincrement=True,
         comment="Auto-incrementing primary key"
     )
-    site_id = Column(
+    device_id = Column(
         String(255),
         nullable=False,
-        comment="Unique identifier for the site (references sites.id)"
+        comment="Unique identifier for the device (references devices.id)"
     )
-    site_name = Column(
+    device_name = Column(
         String(255),
         nullable=False,
-        comment="Name of the site"
+        comment="Name of the device"
     )
     slot_row = Column(
         Integer,
@@ -117,9 +128,9 @@ class SiteCamerasLayout(BaseModel):
     __table_args__ = (
         # Foreign key constraints
         ForeignKeyConstraint(
-            ['site_id'],
-            ['sites.id'],
-            name='fk_site_cameras_layout_site',
+            ['device_id'],
+            ['devices.id'],
+            name='fk_site_cameras_layout_device',
             ondelete='CASCADE'
         ),
         ForeignKeyConstraint(
@@ -128,10 +139,10 @@ class SiteCamerasLayout(BaseModel):
             name='fk_site_cameras_layout_camera',
             ondelete='CASCADE'
         ),
-        # Unique constraint: one camera per grid position per site
+        # Unique constraint: one camera per grid position per device
         UniqueConstraint(
-            'site_id', 'slot_row', 'slot_col',
-            name='uq_site_cameras_layout_slot'
+            'device_id', 'slot_row', 'slot_col',
+            name='uq_site_cameras_layout_device_slot'
         ),
         # Check constraints for valid positions
         CheckConstraint(
@@ -143,14 +154,13 @@ class SiteCamerasLayout(BaseModel):
             name='check_slot_col_positive'
         ),
         # Indexes for efficient lookups
-        Index('idx_site_cameras_layout_site', 'site_id'),
+        Index('idx_site_cameras_layout_device', 'device_id'),
         Index('idx_site_cameras_layout_camera', 'camera_id'),
     )
 
     # Relationships
-    # Note: Assumes 'Site' and 'Camera' models exist
-    site = relationship(
-        "Site",
+    device = relationship(
+        "Device",
         back_populates="layout_slots",
         lazy="select"
     )
@@ -161,11 +171,16 @@ class SiteCamerasLayout(BaseModel):
         lazy="select"
     )
 
+    # Read-only counterpart of SiteCamerasLayoutConfig.layout_slots — see the
+    # note there. viewonly keeps device_id single-writer.
     config = relationship(
         "SiteCamerasLayoutConfig",
         back_populates="layout_slots",
-        foreign_keys=[site_id],
-        primaryjoin="SiteCamerasLayout.site_id == SiteCamerasLayoutConfig.site_id",
+        foreign_keys=[device_id],
+        primaryjoin=(
+            "SiteCamerasLayout.device_id == SiteCamerasLayoutConfig.device_id"
+        ),
+        viewonly=True,
         lazy="select"
     )
 
@@ -173,7 +188,7 @@ class SiteCamerasLayout(BaseModel):
         return (
             f"<SiteCamerasLayout("
             f"id={self.id}, "
-            f"site_id='{self.site_id}', "
+            f"device_id='{self.device_id}', "
             f"slot=({self.slot_row},{self.slot_col}), "
             f"camera_id='{self.camera_id}')>"
         )

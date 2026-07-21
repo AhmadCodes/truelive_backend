@@ -1,13 +1,13 @@
 """
 Configuration loader service.
 
-Loads camera and site configurations from database in formats needed by other services.
+Loads camera and device configurations from database in formats needed by other services.
 """
 import logging
 from typing import Dict, Any
 from sqlalchemy.orm import Session
 
-from app.models.site import Site
+from app.models.device import Device
 from app.models.camera import Camera
 from app.models.pc import PC
 from app.models.screen import Screen
@@ -19,9 +19,12 @@ logger = logging.getLogger(__name__)
 
 def load_camera_config(db: Session) -> Dict[str, Any]:
     """
-    Load all sites and cameras from database.
+    Load all devices and cameras from database.
 
-    Used for populating site/camera dropdowns and getting camera information.
+    Used for populating device/camera dropdowns and getting camera information.
+
+    Note: the top-level "sites" key and the "site_id" map keys are legacy
+    names that carry Device ids — kept as-is for consumer compatibility.
 
     Args:
         db: Database session
@@ -31,7 +34,7 @@ def load_camera_config(db: Session) -> Dict[str, Any]:
             {
                 "sites": {
                     "site_id": {
-                        "name": "Site Name",
+                        "name": "Device Name",
                         "nvr_username": "username",
                         "nvr_password": "password",
                         "cameras": {
@@ -47,30 +50,31 @@ def load_camera_config(db: Session) -> Dict[str, Any]:
     config = {"sites": {}}
 
     try:
-        # Get all sites
-        sites = db.query(Site).all()
+        # Get all devices
+        devices = db.query(Device).all()
 
-        for site in sites:
-            site_config = {
-                "name": site.name,
-                "nvr_username": site.nvr_username,
-                "nvr_password": site.nvr_password,
+        for device in devices:
+            device_config = {
+                "name": device.name,
+                "nvr_username": device.nvr_username,
+                "nvr_password": device.nvr_password,
                 "cameras": {}
             }
 
-            # Get all cameras for this site
-            cameras = db.query(Camera).filter(Camera.site_id == site.id).all()
+            # Get all cameras for this device
+            cameras = db.query(Camera).filter(Camera.device_id == device.id).all()
 
             for camera in cameras:
-                site_config["cameras"][camera.id] = {
+                device_config["cameras"][camera.id] = {
                     "name": camera.name,
                     "rtsp_url": camera.rtsp_url,
                     "main_stream_url": camera.main_stream_url
                 }
 
-            config["sites"][site.id] = site_config
+            # Legacy "sites" key: carries Device ids.
+            config["sites"][device.id] = device_config
 
-        logger.info(f"Loaded camera config: {len(config['sites'])} sites")
+        logger.info(f"Loaded camera config: {len(config['sites'])} devices")
         return config
 
     except Exception as e:
@@ -83,6 +87,11 @@ def load_pc_config(pc_id: str, db: Session) -> Dict[str, Any]:
     Load complete PC configuration including all screens, views, and camera mappings.
 
     This is the configuration structure that feeds into generate_config().
+
+    WIRE FORMAT IS FROZEN: the "site_id"/"site_name" slot keys below carry the
+    **Device** id/name (the NVR/DVR), not the new parent Site. Renaming them or
+    re-pointing them at the parent would change the JSON delivered to live PC
+    clients.
 
     Args:
         pc_id: PC identifier
@@ -187,22 +196,29 @@ def load_pc_config(pc_id: str, db: Session) -> Dict[str, Any]:
                     ).first()
 
                     if camera:
-                        # Get site from camera's site_id (mapping.site_id may be NULL)
-                        site = db.query(Site).filter(
-                            Site.id == camera.site_id
+                        # Get device from camera's device_id
+                        # (mapping.device_id may be NULL)
+                        device = db.query(Device).filter(
+                            Device.id == camera.device_id
                         ).first()
 
-                        if site:
-                            # Cascade: camera override wins, else inherit site default.
+                        if device:
+                            # Cascade: camera override wins, else inherit device default.
                             effective_use_tcp = (
-                                camera.use_tcp if camera.use_tcp is not None else site.use_tcp
+                                camera.use_tcp
+                                if camera.use_tcp is not None
+                                else device.use_tcp
                             )
+                            # FROZEN wire format: "site_id"/"site_name" are emitted
+                            # into the intermediate structure consumed by
+                            # generate_config() and carry the Device id/name.
+                            # Do NOT rename or re-point at the parent Site.
                             view_mappings[slot_key] = {
                                 "slot_row": mapping.slot_row,
                                 "slot_col": mapping.slot_col,
-                                "site_id": site.id,
+                                "site_id": device.id,
                                 "camera_id": camera.id,
-                                "site_name": site.name,
+                                "site_name": device.name,
                                 "camera_name": camera.name,
                                 "rtsp_url": camera.rtsp_url,
                                 "use_tcp": effective_use_tcp,

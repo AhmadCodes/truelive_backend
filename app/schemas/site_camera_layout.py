@@ -1,5 +1,8 @@
 """
-Pydantic schemas for site camera layout management.
+Pydantic schemas for device camera layout management.
+
+Note: despite the historical ``Site*`` class names, camera layouts attach to a
+**Device** (NVR/DVR) as of migration 008.
 """
 
 from pydantic import BaseModel, Field, validator
@@ -16,9 +19,9 @@ class SiteCameraLayoutSlot(BaseModel):
 
 
 class SiteCameraLayoutConfigResponse(BaseModel):
-    """Response schema for site camera layout configuration."""
-    site_id: str = Field(..., description="Site ID")
-    site_name: str = Field(..., description="Site name")
+    """Response schema for device camera layout configuration."""
+    device_id: str = Field(..., description="Device ID")
+    device_name: str = Field(..., description="Device name")
     n_rows: int = Field(..., ge=1, le=4, description="Number of rows in grid")
     n_cols: int = Field(..., ge=1, le=4, description="Number of columns in grid")
     total_slots: int = Field(..., description="Total grid positions (rows × cols)")
@@ -33,8 +36,8 @@ class SiteCameraLayoutConfigResponse(BaseModel):
 
 class AutoPopulateResponse(BaseModel):
     """Response for auto-populate endpoints."""
-    site_id: str
-    site_name: str
+    device_id: str
+    device_name: str
     camera_count: int
     grid_size: str  # e.g., "2×2", "3×4"
     cameras_populated: int
@@ -43,9 +46,9 @@ class AutoPopulateResponse(BaseModel):
 
 class BulkAutoPopulateResponse(BaseModel):
     """Response for bulk auto-populate endpoint."""
-    total_sites: int
-    sites_processed: int
-    sites_skipped: int
+    total_devices: int
+    devices_processed: int
+    devices_skipped: int
     total_cameras_populated: int
     results: List[AutoPopulateResponse]
     errors: List[dict] = Field(default_factory=list)
@@ -61,7 +64,7 @@ class CameraSlotInput(BaseModel):
 
 
 class SaveLayoutRequest(BaseModel):
-    """Request schema for saving/updating site camera layout."""
+    """Request schema for saving/updating device camera layout."""
     n_rows: int = Field(..., ge=1, le=4, description="Number of rows in grid (1-4)")
     n_cols: int = Field(..., ge=1, le=4, description="Number of columns in grid (1-4)")
     camera_slots: List[CameraSlotInput] = Field(
@@ -101,8 +104,8 @@ class SaveLayoutRequest(BaseModel):
 
 class SaveLayoutResponse(BaseModel):
     """Response schema for save layout operation."""
-    site_id: str
-    site_name: str
+    device_id: str
+    device_name: str
     n_rows: int
     n_cols: int
     total_slots: int

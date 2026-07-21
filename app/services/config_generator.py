@@ -8,7 +8,6 @@ from typing import Dict, Any, Optional, List
 from sqlalchemy.orm import Session
 
 from app.utils.url_processor import try_encode_rtsp_password
-from app.models.site import Site
 from app.models.category import SiteCategory
 from app.models.camera import Camera
 from app.models.screen import Screen
@@ -22,8 +21,15 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
     """
     Generate device configuration from database structure.
 
-    Transforms the site configuration (from database) into the JSON format
+    Transforms the PC configuration (from database) into the JSON format
     expected by PC applications.
+
+    WIRE FORMAT IS FROZEN. The ``site_id`` / ``site_name`` / ``osd_text`` keys
+    below (both in the input mapping structure produced by
+    ``config_loader.load_pc_config`` and in the emitted source entries) keep
+    meaning the **Device** (the NVR/DVR — what used to be called a Site before
+    migration 008). They must never be renamed or re-pointed at the new parent
+    Site: PC clients in the field consume them as-is.
 
     Args:
         site_config: Configuration dict with structure:
@@ -205,8 +211,10 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
                         view_name = view_obj.name if view_obj else view_key
 
                         if slot_data and slot_data.get('camera_id'):
-                            # Get site category color
-                            osd_color = _get_site_color(
+                            # NOTE: 'site_id' here is a FROZEN wire-format key that
+                            # carries the Device id (see module docstring).
+                            # Get device category color
+                            osd_color = _get_device_color(
                                 slot_data.get('site_id', ''), db
                             )
 
@@ -215,7 +223,9 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
                                 slot_data.get('site_id', ''), db
                             )
 
-                            # Create source entry with all new fields
+                            # Create source entry with all new fields.
+                            # FROZEN wire format: "site_id"/"site_name"/"osd_text"
+                            # carry the Device id/name — do NOT rename or re-point.
                             try:
                                 source_entry = {
                                     "LocationUris": location_uris,
@@ -263,26 +273,26 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
     return config
 
 
-def _get_site_color(site_id: str, db: Session) -> str:
+def _get_device_color(device_id: str, db: Session) -> str:
     """
-    Get OSD color for a site from its category.
+    Get OSD color for a device from its category.
 
     Args:
-        site_id: Site identifier
+        device_id: Device identifier (NVR/DVR)
         db: Database session
 
     Returns:
         Hex color string (e.g., "0xFFFFFFFF")
     """
     try:
-        if not site_id:
+        if not device_id:
             return "0xFFFFFFFF"  # Default white
 
-        # Query site categories through the mapping table
+        # Query device categories through the mapping table
         from app.models.category import SiteCategoryMapping
 
         mapping = db.query(SiteCategoryMapping).filter(
-            SiteCategoryMapping.site_id == site_id
+            SiteCategoryMapping.device_id == device_id
         ).first()
 
         if mapping:
@@ -297,16 +307,16 @@ def _get_site_color(site_id: str, db: Session) -> str:
         return "0xFFFFFFFF"  # Default white
 
     except Exception as e:
-        logger.error(f"Error getting site color for site {site_id}: {e}")
+        logger.error(f"Error getting device color for device {device_id}: {e}")
         return "0xFFFFFFFF"  # Default white
 
 
-def _get_location_uris(site_id: str, db: Session) -> List[Dict[str, str]]:
+def _get_location_uris(device_id: str, db: Session) -> List[Dict[str, str]]:
     """
-    Get all camera URLs for a site from site_cameras_layout table.
+    Get all camera URLs for a device from the site_cameras_layout table.
 
     Args:
-        site_id: Site identifier
+        device_id: Device identifier (NVR/DVR)
         db: Database session
 
     Returns:
@@ -315,24 +325,27 @@ def _get_location_uris(site_id: str, db: Session) -> List[Dict[str, str]]:
     location_uris = []
 
     try:
-        if not site_id:
-            logger.warning("_get_location_uris called with empty site_id")
+        if not device_id:
+            logger.warning("_get_location_uris called with empty device_id")
             return location_uris
 
-        logger.debug(f"Getting LocationUris for site_id: {site_id}")
+        logger.debug(f"Getting LocationUris for device_id: {device_id}")
 
-        # Get all site_cameras_layout entries for this site
-        site_layouts = db.query(SiteCamerasLayout).filter(
-            SiteCamerasLayout.site_id == site_id
+        # Get all site_cameras_layout entries for this device
+        device_layouts = db.query(SiteCamerasLayout).filter(
+            SiteCamerasLayout.device_id == device_id
         ).all()
 
-        logger.debug(f"Found {len(site_layouts)} site_cameras_layout entries for site {site_id}")
+        logger.debug(
+            f"Found {len(device_layouts)} site_cameras_layout entries "
+            f"for device {device_id}"
+        )
 
         # Extract camera URLs and names
-        for site_layout in site_layouts:
+        for device_layout in device_layouts:
             try:
                 camera = db.query(Camera).filter(
-                    Camera.id == site_layout.camera_id
+                    Camera.id == device_layout.camera_id
                 ).first()
 
                 if camera and camera.rtsp_url:
@@ -342,18 +355,24 @@ def _get_location_uris(site_id: str, db: Session) -> List[Dict[str, str]]:
                         "url": encoded_url,
                         "osd_text": camera.name if camera.name else ""
                     })
-                    logger.debug(f"Added camera {camera.id} URL to LocationUris for site {site_id}")
+                    logger.debug(
+                        f"Added camera {camera.id} URL to LocationUris "
+                        f"for device {device_id}"
+                    )
                 else:
-                    logger.warning(f"Camera {site_layout.camera_id} not found or has no RTSP URL for site {site_id}")
+                    logger.warning(
+                        f"Camera {device_layout.camera_id} not found or has no "
+                        f"RTSP URL for device {device_id}"
+                    )
 
             except Exception as e:
                 logger.error(f"Error getting camera for LocationUris: {e}")
                 continue
 
-        logger.info(f"Total LocationUris for site {site_id}: {len(location_uris)}")
+        logger.info(f"Total LocationUris for device {device_id}: {len(location_uris)}")
 
     except Exception as e:
-        logger.error(f"Error getting LocationUris for site {site_id}: {e}")
+        logger.error(f"Error getting LocationUris for device {device_id}: {e}")
 
     return location_uris
 
@@ -378,6 +397,8 @@ def _create_empty_source(
     Returns:
         Empty source dict with all fields including position metadata
     """
+    # FROZEN wire format: "site_id"/"site_name" are Device-scoped keys that PC
+    # clients depend on. Keep the names and the empty-string defaults as-is.
     return {
         "LocationUris": [],
         "id": "",

@@ -13,7 +13,7 @@ from app.models.screen import Screen
 from app.models.view import View
 from app.models.screen_mapping import ScreenMapping
 from app.models.camera import Camera
-from app.models.site import Site
+from app.models.device import Device
 from app.schemas.screen import (
     ScreenCreate,
     ScreenUpdate,
@@ -292,14 +292,14 @@ async def get_screen_layout(
             mapping_info = CameraMappingInfo(
                 slot_row=mapping.slot_row,
                 slot_col=mapping.slot_col,
-                site_id=mapping.site_id,
+                device_id=mapping.device_id,
                 camera_id=mapping.camera_id,
                 playing_state=mapping.playing_state
             )
 
-            # Add site and camera names
-            if mapping.site:
-                mapping_info.site_name = mapping.site.name
+            # Add device and camera names
+            if mapping.device:
+                mapping_info.device_name = mapping.device.name
             if mapping.camera:
                 mapping_info.camera_name = mapping.camera.name
 
@@ -603,14 +603,14 @@ async def get_view_with_mappings(
         mapping_info = CameraMappingInfo(
             slot_row=mapping.slot_row,
             slot_col=mapping.slot_col,
-            site_id=mapping.site_id,
+            device_id=mapping.device_id,
             camera_id=mapping.camera_id,
             playing_state=mapping.playing_state
         )
 
-        # Add site and camera names
-        if mapping.site:
-            mapping_info.site_name = mapping.site.name
+        # Add device and camera names
+        if mapping.device:
+            mapping_info.device_name = mapping.device.name
         if mapping.camera:
             mapping_info.camera_name = mapping.camera.name
 
@@ -736,7 +736,7 @@ async def create_screen_mapping(
         Created mapping
 
     Raises:
-        HTTPException: If view not found, slot conflict, or camera/site not found
+        HTTPException: If view not found, slot conflict, or camera/device not found
     """
     # Verify view exists
     view = db.query(View).filter(View.id == view_id).first()
@@ -772,7 +772,7 @@ async def create_screen_mapping(
             detail=f"Slot ({mapping_data.slot_row}, {mapping_data.slot_col}) already has a mapping"
         )
 
-    # Verify camera and site if provided
+    # Verify camera and device if provided
     if mapping_data.camera_id:
         camera = db.query(Camera).filter(Camera.id == mapping_data.camera_id).first()
         if not camera:
@@ -781,12 +781,12 @@ async def create_screen_mapping(
                 detail=f"Camera with ID '{mapping_data.camera_id}' not found"
             )
 
-    if mapping_data.site_id:
-        site = db.query(Site).filter(Site.id == mapping_data.site_id).first()
-        if not site:
+    if mapping_data.device_id:
+        device = db.query(Device).filter(Device.id == mapping_data.device_id).first()
+        if not device:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Site with ID '{mapping_data.site_id}' not found"
+                detail=f"Device with ID '{mapping_data.device_id}' not found"
             )
 
     # Create mapping
@@ -796,7 +796,7 @@ async def create_screen_mapping(
         view_id=view_id,
         slot_row=mapping_data.slot_row,
         slot_col=mapping_data.slot_col,
-        site_id=mapping_data.site_id,
+        device_id=mapping_data.device_id,
         camera_id=mapping_data.camera_id,
         playing_state=mapping_data.playing_state
     )
@@ -889,13 +889,13 @@ async def update_screen_mapping(
                 detail=f"Camera with ID '{update_data['camera_id']}' not found"
             )
 
-    # Verify site if updating
-    if 'site_id' in update_data and update_data['site_id']:
-        site = db.query(Site).filter(Site.id == update_data['site_id']).first()
-        if not site:
+    # Verify device if updating
+    if 'device_id' in update_data and update_data['device_id']:
+        device = db.query(Device).filter(Device.id == update_data['device_id']).first()
+        if not device:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Site with ID '{update_data['site_id']}' not found"
+                detail=f"Device with ID '{update_data['device_id']}' not found"
             )
 
     for field, value in update_data.items():
@@ -1001,24 +1001,24 @@ async def get_camera_at_slot(
         return CameraMappingInfo(
             slot_row=row,
             slot_col=col,
-            site_id=None,
-            site_name=None,
+            device_id=None,
+            device_name=None,
             camera_id=None,
             camera_name=None,
             playing_state=False
         )
 
-    # Return mapping info with site and camera names
+    # Return mapping info with device and camera names
     mapping_info = CameraMappingInfo(
         slot_row=mapping.slot_row,
         slot_col=mapping.slot_col,
-        site_id=mapping.site_id,
+        device_id=mapping.device_id,
         camera_id=mapping.camera_id,
         playing_state=mapping.playing_state
     )
 
-    if mapping.site:
-        mapping_info.site_name = mapping.site.name
+    if mapping.device:
+        mapping_info.device_name = mapping.device.name
     if mapping.camera:
         mapping_info.camera_name = mapping.camera.name
 
@@ -1114,14 +1114,14 @@ async def get_all_views_for_pc(
                 mapping_info = CameraMappingInfo(
                     slot_row=mapping.slot_row,
                     slot_col=mapping.slot_col,
-                    site_id=mapping.site_id,
+                    device_id=mapping.device_id,
                     camera_id=mapping.camera_id,
                     playing_state=mapping.playing_state
                 )
 
-                # Add site and camera names
-                if mapping.site:
-                    mapping_info.site_name = mapping.site.name
+                # Add device and camera names
+                if mapping.device:
+                    mapping_info.device_name = mapping.device.name
                 if mapping.camera:
                     mapping_info.camera_name = mapping.camera.name
 
@@ -1199,7 +1199,7 @@ async def assign_camera_to_slot(
     row: int,
     col: int,
     camera_id: str = Query(..., description="Camera ID to assign"),
-    site_id: str = Query(None, description="Site ID (optional)"),
+    device_id: str = Query(None, description="Device ID (optional)"),
     playing_state: bool = Query(False, description="Playing state"),
     current_user: AdminUser = None,
     db: DBSession = None
@@ -1214,7 +1214,7 @@ async def assign_camera_to_slot(
         row: Slot row (1-indexed)
         col: Slot column (1-indexed)
         camera_id: Camera ID to assign
-        site_id: Optional site ID
+        device_id: Optional device ID
         playing_state: Playing state
         current_user: Current authenticated admin or super admin
         db: Database session
@@ -1254,13 +1254,13 @@ async def assign_camera_to_slot(
             detail=f"Camera with ID '{camera_id}' not found"
         )
 
-    # Verify site if provided
-    if site_id:
-        site = db.query(Site).filter(Site.id == site_id).first()
-        if not site:
+    # Verify device if provided
+    if device_id:
+        device = db.query(Device).filter(Device.id == device_id).first()
+        if not device:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Site with ID '{site_id}' not found"
+                detail=f"Device with ID '{device_id}' not found"
             )
 
     # Check if mapping already exists for this slot
@@ -1273,7 +1273,7 @@ async def assign_camera_to_slot(
     if existing_mapping:
         # Update existing mapping
         existing_mapping.camera_id = camera_id
-        existing_mapping.site_id = site_id
+        existing_mapping.device_id = device_id
         existing_mapping.playing_state = playing_state
         db.commit()
         db.refresh(existing_mapping)
@@ -1287,7 +1287,7 @@ async def assign_camera_to_slot(
             view_id=view_id,
             slot_row=row,
             slot_col=col,
-            site_id=site_id,
+            device_id=device_id,
             camera_id=camera_id,
             playing_state=playing_state
         )
