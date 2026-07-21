@@ -346,9 +346,20 @@ def _get_location_uris(site_id: str, db: Session) -> List[Dict[str, str]]:
 
         logger.debug(f"Getting LocationUris for site_id: {site_id}")
 
-        # Get all site_cameras_layout entries for this site
+        # Get all site_cameras_layout entries for this site.
+        #
+        # ORDER BY is required, not cosmetic: without it Postgres returns heap
+        # order, which is stable only until something rewrites the rows. Any
+        # UPDATE (such as a migration re-pointing these rows) silently reshuffles
+        # the LocationUris sequence an operator sees. Grid position is the
+        # meaningful order for a camera wall, and because auto-populate inserts
+        # slots ordered by device name then camera name, it also reproduces the
+        # historical ordering for auto-populated layouts.
         site_layouts = db.query(SiteCamerasLayout).filter(
             SiteCamerasLayout.site_id == site_id
+        ).order_by(
+            SiteCamerasLayout.slot_row,
+            SiteCamerasLayout.slot_col,
         ).all()
 
         logger.debug(

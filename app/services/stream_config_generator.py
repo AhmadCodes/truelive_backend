@@ -118,8 +118,12 @@ def get_location_uris_for_camera(camera: Camera, db: Session) -> List[Dict[str, 
         return location_uris
 
     # Get all site_cameras_layout entries for the camera's parent site
+    # Deterministic grid order — see the note in config_generator._get_location_uris.
     site_layouts = db.query(SiteCamerasLayout).filter(
         SiteCamerasLayout.site_id == site_id
+    ).order_by(
+        SiteCamerasLayout.slot_row,
+        SiteCamerasLayout.slot_col,
     ).all()
 
     # Get cameras from layouts
