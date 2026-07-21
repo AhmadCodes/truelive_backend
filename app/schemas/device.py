@@ -51,7 +51,7 @@ class DeviceUpdate(BaseModel):
 
 
 class CategoryAssignment(BaseModel):
-    """Schema for assigning a category to a device."""
+    """Schema for assigning a category to a site."""
     category_id: uuid.UUID
 
 

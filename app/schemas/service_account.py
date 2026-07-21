@@ -53,18 +53,19 @@ Alerting:
 Inventory (read + manage are independent; `:manage` also satisfies any
 `:read` requirement, so granting just `:manage` covers both):
 
-- `sites:read`       — GET on /sites and /sites/{id}. A **Site** is the parent
-                       place that owns one or more Devices; it holds the
-                       address and contact details only.
-- `sites:manage`     — POST/PUT/PATCH/DELETE on /sites. Deleting a Site
-                       cascades to its Devices and everything beneath them.
-- `devices:read`     — GET on /devices, /devices/{id}, and
-                       /devices/{id}/camera-layout. A **Device** is a single
-                       NVR/DVR recorder belonging to one Site (this is what
-                       /sites used to mean before the Site→Device split).
-- `devices:manage`   — POST/PUT/PATCH/DELETE on /devices and its sub-resources
-                       (category, auto-populate-cameras, camera-layout),
-                       including reparenting a Device to another Site.
+- `sites:read`       — GET on /sites, /sites/{id} and /sites/{id}/camera-layout.
+                       A **Site** is the parent place that owns one or more
+                       Devices; it holds the address and contact details, plus
+                       the category assignments and the camera layout grid.
+- `sites:manage`     — POST/PUT/PATCH/DELETE on /sites and its sub-resources
+                       (category, auto-populate-cameras, camera-layout).
+                       Deleting a Site cascades to its Devices and everything
+                       beneath them.
+- `devices:read`     — GET on /devices and /devices/{id}. A **Device** is a
+                       single NVR/DVR recorder belonging to one Site (this is
+                       what /sites used to mean before the Site→Device split).
+- `devices:manage`   — POST/PUT/PATCH/DELETE on /devices, including reparenting
+                       a Device to another Site.
 - `cameras:read`     — GET on /cameras, /cameras/count, /cameras/{id}, and
                        /cameras/device/{id}.
 - `cameras:manage`   — POST/PUT/PATCH/DELETE on /cameras (including the

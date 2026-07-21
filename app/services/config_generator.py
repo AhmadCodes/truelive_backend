@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.utils.url_processor import try_encode_rtsp_password
 from app.models.category import SiteCategory
 from app.models.camera import Camera
+from app.models.device import Device
 from app.models.screen import Screen
 from app.models.view import View
 from app.models.site_camera_layout import SiteCamerasLayout
@@ -105,6 +106,18 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
 
     pcs = site_config.get("pcs", {})
     mappings = site_config.get("mappings", {}).get("screen_to_cameras", {})
+
+    # The slot "site_id" key carries a **Device** id (frozen wire format), but
+    # categories and camera layouts hang off the parent Site. Resolve the whole
+    # device → parent-site mapping once rather than per slot.
+    try:
+        device_to_site = {
+            device_id: parent_site_id
+            for device_id, parent_site_id in db.query(Device.id, Device.site_id).all()
+        }
+    except Exception as e:
+        logger.error(f"Error loading device → site mapping: {e}")
+        device_to_site = {}
 
     for pc_id, pc_data in pcs.items():
         screens = pc_data.get("screens", {})
@@ -212,16 +225,18 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
 
                         if slot_data and slot_data.get('camera_id'):
                             # NOTE: 'site_id' here is a FROZEN wire-format key that
-                            # carries the Device id (see module docstring).
-                            # Get device category color
-                            osd_color = _get_device_color(
-                                slot_data.get('site_id', ''), db
+                            # carries the Device id (see module docstring). The
+                            # colour and the layout are looked up from that
+                            # device's parent Site.
+                            parent_site_id = device_to_site.get(
+                                slot_data.get('site_id', ''), ''
                             )
 
+                            # Get site category color
+                            osd_color = _get_site_color(parent_site_id, db)
+
                             # Get LocationUris from site_cameras_layout
-                            location_uris = _get_location_uris(
-                                slot_data.get('site_id', ''), db
-                            )
+                            location_uris = _get_location_uris(parent_site_id, db)
 
                             # Create source entry with all new fields.
                             # FROZEN wire format: "site_id"/"site_name"/"osd_text"
@@ -273,26 +288,26 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
     return config
 
 
-def _get_device_color(device_id: str, db: Session) -> str:
+def _get_site_color(site_id: str, db: Session) -> str:
     """
-    Get OSD color for a device from its category.
+    Get OSD color for a site from its category.
 
     Args:
-        device_id: Device identifier (NVR/DVR)
+        site_id: Site identifier (the physical place)
         db: Database session
 
     Returns:
         Hex color string (e.g., "0xFFFFFFFF")
     """
     try:
-        if not device_id:
+        if not site_id:
             return "0xFFFFFFFF"  # Default white
 
-        # Query device categories through the mapping table
+        # Query site categories through the mapping table
         from app.models.category import SiteCategoryMapping
 
         mapping = db.query(SiteCategoryMapping).filter(
-            SiteCategoryMapping.device_id == device_id
+            SiteCategoryMapping.site_id == site_id
         ).first()
 
         if mapping:
@@ -307,16 +322,16 @@ def _get_device_color(device_id: str, db: Session) -> str:
         return "0xFFFFFFFF"  # Default white
 
     except Exception as e:
-        logger.error(f"Error getting device color for device {device_id}: {e}")
+        logger.error(f"Error getting site color for site {site_id}: {e}")
         return "0xFFFFFFFF"  # Default white
 
 
-def _get_location_uris(device_id: str, db: Session) -> List[Dict[str, str]]:
+def _get_location_uris(site_id: str, db: Session) -> List[Dict[str, str]]:
     """
-    Get all camera URLs for a device from the site_cameras_layout table.
+    Get all camera URLs for a site from the site_cameras_layout table.
 
     Args:
-        device_id: Device identifier (NVR/DVR)
+        site_id: Site identifier (the physical place)
         db: Database session
 
     Returns:
@@ -325,27 +340,27 @@ def _get_location_uris(device_id: str, db: Session) -> List[Dict[str, str]]:
     location_uris = []
 
     try:
-        if not device_id:
-            logger.warning("_get_location_uris called with empty device_id")
+        if not site_id:
+            logger.warning("_get_location_uris called with empty site_id")
             return location_uris
 
-        logger.debug(f"Getting LocationUris for device_id: {device_id}")
+        logger.debug(f"Getting LocationUris for site_id: {site_id}")
 
-        # Get all site_cameras_layout entries for this device
-        device_layouts = db.query(SiteCamerasLayout).filter(
-            SiteCamerasLayout.device_id == device_id
+        # Get all site_cameras_layout entries for this site
+        site_layouts = db.query(SiteCamerasLayout).filter(
+            SiteCamerasLayout.site_id == site_id
         ).all()
 
         logger.debug(
-            f"Found {len(device_layouts)} site_cameras_layout entries "
-            f"for device {device_id}"
+            f"Found {len(site_layouts)} site_cameras_layout entries "
+            f"for site {site_id}"
         )
 
         # Extract camera URLs and names
-        for device_layout in device_layouts:
+        for site_layout in site_layouts:
             try:
                 camera = db.query(Camera).filter(
-                    Camera.id == device_layout.camera_id
+                    Camera.id == site_layout.camera_id
                 ).first()
 
                 if camera and camera.rtsp_url:
@@ -357,22 +372,22 @@ def _get_location_uris(device_id: str, db: Session) -> List[Dict[str, str]]:
                     })
                     logger.debug(
                         f"Added camera {camera.id} URL to LocationUris "
-                        f"for device {device_id}"
+                        f"for site {site_id}"
                     )
                 else:
                     logger.warning(
-                        f"Camera {device_layout.camera_id} not found or has no "
-                        f"RTSP URL for device {device_id}"
+                        f"Camera {site_layout.camera_id} not found or has no "
+                        f"RTSP URL for site {site_id}"
                     )
 
             except Exception as e:
                 logger.error(f"Error getting camera for LocationUris: {e}")
                 continue
 
-        logger.info(f"Total LocationUris for device {device_id}: {len(location_uris)}")
+        logger.info(f"Total LocationUris for site {site_id}: {len(location_uris)}")
 
     except Exception as e:
-        logger.error(f"Error getting LocationUris for device {device_id}: {e}")
+        logger.error(f"Error getting LocationUris for site {site_id}: {e}")
 
     return location_uris
 

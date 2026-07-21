@@ -60,21 +60,21 @@ class SiteCategory(BaseModel):
 
 class SiteCategoryMapping(BaseModel):
     """
-    Many-to-many mapping between devices and categories.
+    Many-to-many mapping between sites and categories.
 
     Attributes:
-        device_id: Reference to device
+        site_id: Reference to site
         category_id: Reference to category
         assigned_at: Timestamp when the mapping was created
     """
     __tablename__ = "site_category_mappings"
 
-    device_id = Column(
+    site_id = Column(
         String(255),
-        ForeignKey("devices.id", ondelete="CASCADE"),
+        ForeignKey("sites.id", ondelete="CASCADE"),
         nullable=False,
         primary_key=True,
-        comment="Device identifier"
+        comment="Site identifier"
     )
     category_id = Column(
         UUID(as_uuid=True),
@@ -91,8 +91,8 @@ class SiteCategoryMapping(BaseModel):
     )
 
     # Relationships
-    device = relationship(
-        "Device",
+    site = relationship(
+        "Site",
         back_populates="category_mappings"
     )
     category = relationship(
@@ -102,13 +102,13 @@ class SiteCategoryMapping(BaseModel):
 
     # Table constraints
     __table_args__ = (
-        PrimaryKeyConstraint("device_id", "category_id"),
+        PrimaryKeyConstraint("site_id", "category_id"),
         Index("idx_mappings_category", "category_id"),
-        Index("idx_mappings_device", "device_id"),
+        Index("idx_mappings_site", "site_id"),
     )
 
     def __repr__(self):
         return (
-            f"<SiteCategoryMapping(device_id='{self.device_id}', "
+            f"<SiteCategoryMapping(site_id='{self.site_id}', "
             f"category_id={self.category_id}, assigned_at={self.assigned_at})>"
         )
