@@ -24,29 +24,41 @@ def upgrade() -> None:
     """Create system_settings table and populate with defaults from ENV."""
 
     # Create system_settings table
+    # NOTE on naming: indexes use the `ix_<table>_<column>` form, not `idx_*`.
+    # app/models/system_setting.py declares them via `index=True` on the columns,
+    # which is SQLAlchemy's `ix_` convention, and production carries exactly those
+    # two names. The `idx_*` names this revision used previously existed in no
+    # database and in no model, so every autogenerate run reported them as drift.
+    #
+    # `is_encrypted` / `data_type` deliberately carry no server_default: the model
+    # supplies both Python-side and production has no database default.
+    #
+    # `key` gets its uniqueness from the unique index below rather than a column
+    # level `unique=True`, which would additionally emit a `system_settings_key_key`
+    # UNIQUE constraint that neither the model nor production has.
     op.create_table(
         'system_settings',
         sa.Column('id', sa.String(255), nullable=False, comment='UUID primary key'),
-        sa.Column('key', sa.String(255), nullable=False, unique=True, comment='Unique setting key'),
-        sa.Column('value', sa.Text(), nullable=True, comment='Setting value (may be encrypted)'),
-        sa.Column('category', sa.String(50), nullable=False, comment='Setting category'),
-        sa.Column('description', sa.Text(), nullable=True, comment='Setting description'),
-        sa.Column('is_encrypted', sa.Boolean(), nullable=False, server_default='false',
-                  comment='Whether value is encrypted'),
-        sa.Column('data_type', sa.String(20), nullable=False, server_default='string',
-                  comment='Data type: string, integer, boolean'),
-        sa.Column('updated_by', UUID(as_uuid=True), nullable=True, comment='User who last updated'),
+        sa.Column('key', sa.String(255), nullable=False, comment="Unique setting key (e.g., 'smtp.host')"),
+        sa.Column('value', sa.Text(), nullable=True, comment='Setting value (stored as string, may be encrypted)'),
+        sa.Column('category', sa.String(50), nullable=False, comment='Setting category (sureview, smtp, tasks, snapshots, etc.)'),
+        sa.Column('description', sa.Text(), nullable=True, comment='Human-readable description of what this setting does'),
+        sa.Column('is_encrypted', sa.Boolean(), nullable=False,
+                  comment='Whether the value is encrypted (for passwords)'),
+        sa.Column('data_type', sa.String(20), nullable=False,
+                  comment='Data type: string, integer, boolean, json'),
+        sa.Column('updated_by', UUID(as_uuid=True), nullable=True, comment='User ID who last updated this setting'),
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'),
-                  nullable=False),
+                  nullable=False, comment='Timestamp when the record was created'),
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'),
-                  nullable=False),
+                  nullable=False, comment='Timestamp when the record was last updated'),
         sa.PrimaryKeyConstraint('id'),
         sa.ForeignKeyConstraint(['updated_by'], ['users.user_id'], ondelete='SET NULL')
     )
 
     # Create indexes
-    op.create_index('idx_system_settings_key', 'system_settings', ['key'], unique=True)
-    op.create_index('idx_system_settings_category', 'system_settings', ['category'])
+    op.create_index('ix_system_settings_key', 'system_settings', ['key'], unique=True)
+    op.create_index('ix_system_settings_category', 'system_settings', ['category'])
 
     # Define table for data insertion
     system_settings = table('system_settings',
@@ -343,6 +355,6 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Remove system_settings table."""
-    op.drop_index('idx_system_settings_category', table_name='system_settings')
-    op.drop_index('idx_system_settings_key', table_name='system_settings')
+    op.drop_index('ix_system_settings_category', table_name='system_settings')
+    op.drop_index('ix_system_settings_key', table_name='system_settings')
     op.drop_table('system_settings')

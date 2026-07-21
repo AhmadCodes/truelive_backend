@@ -33,10 +33,15 @@ def upgrade() -> None:
     # Create sync_jobs table
     op.create_table(
         'sync_jobs',
-        sa.Column('id', postgresql.UUID(as_uuid=True), nullable=False, server_default=sa.text('gen_random_uuid()'), comment='Unique identifier for the sync job (UUID)'),
+        # NOTE: `id` and `progress` deliberately carry no server_default. The ORM
+        # model (app/models/sync_job.py) supplies both Python-side
+        # (`default=uuid_lib.uuid4` / `default=0`), and production has no database
+        # default on either column. Adding one here would make every fresh database
+        # drift from production and show up forever in the autogenerate baseline.
+        sa.Column('id', postgresql.UUID(as_uuid=True), nullable=False, comment='Unique identifier for the sync job (UUID)'),
         sa.Column('status', postgresql.ENUM('pending', 'in_progress', 'completed', 'failed', name='syncjobstatus', create_type=False),
                   nullable=False, comment='Current status of the sync job'),
-        sa.Column('progress', sa.Integer(), nullable=False, server_default='0',
+        sa.Column('progress', sa.Integer(), nullable=False,
                   comment='Progress percentage (0-100)'),
         sa.Column('progress_message', sa.String(500), nullable=True,
                   comment='Current step or progress description'),
@@ -49,25 +54,21 @@ def upgrade() -> None:
         sa.Column('error_message', sa.Text(), nullable=True,
                   comment='Error message if sync failed'),
         sa.Column('triggered_by', postgresql.UUID(as_uuid=True), nullable=True,
-                  comment='User who triggered the sync'),
+                  comment='User who triggered the sync (NULL for system-triggered)'),
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'),
-                  nullable=False, comment='When sync job was created'),
+                  nullable=False, comment='Timestamp when the record was created'),
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'),
-                  nullable=False, comment='When sync job was last updated'),
+                  nullable=False, comment='Timestamp when the record was last updated'),
         sa.PrimaryKeyConstraint('id'),
         sa.ForeignKeyConstraint(['triggered_by'], ['users.user_id'], ondelete='SET NULL')
     )
 
-    # Create indexes for better query performance
-    op.create_index('idx_sync_jobs_status', 'sync_jobs', ['status'])
-    op.create_index('idx_sync_jobs_triggered_by', 'sync_jobs', ['triggered_by'])
-    op.create_index('idx_sync_jobs_created_at', 'sync_jobs', ['created_at'], postgresql_using='btree')
+    # NOTE: no secondary indexes. The ORM model declares none and production has
+    # none beyond the primary key; creating them here would drift every fresh
+    # database from production.
 
 
 def downgrade() -> None:
     """Remove sync_jobs table."""
-    op.drop_index('idx_sync_jobs_created_at', table_name='sync_jobs')
-    op.drop_index('idx_sync_jobs_triggered_by', table_name='sync_jobs')
-    op.drop_index('idx_sync_jobs_status', table_name='sync_jobs')
     op.drop_table('sync_jobs')
     op.execute('DROP TYPE syncjobstatus')

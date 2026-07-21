@@ -23,7 +23,8 @@ def upgrade() -> None:
     For existing users, set full_name to username as default.
     """
     # Add full_name column as nullable first
-    op.add_column('users', sa.Column('full_name', sa.String(255), nullable=True))
+    op.add_column('users', sa.Column('full_name', sa.String(255), nullable=True,
+                                     comment="User's full name"))
 
     # Update existing users: set full_name = username
     op.execute("UPDATE users SET full_name = username WHERE full_name IS NULL")
