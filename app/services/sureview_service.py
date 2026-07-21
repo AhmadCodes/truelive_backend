@@ -383,6 +383,9 @@ def sync_sureview_devices(db: Session) -> Dict[str, int]:
         "cameras_updated": 0,
         "devices_removed": 0,
         "cameras_removed": 0,
+        # Parent Sites left with no devices after a prune. Sync never deletes
+        # a Site; these are surfaced for manual review.
+        "sites_left_childless": 0,
         "errors": 0
     }
 
@@ -597,8 +600,8 @@ def sync_sureview_devices(db: Session) -> Dict[str, int]:
                     f"{'...' if len(stale_device_ids) > 5 else ''}"
                 )
 
-                # Capture the parent sites BEFORE deleting the devices so we can
-                # tell which ones are left childless.
+                # Capture the parent sites BEFORE deleting the devices so we
+                # can report which ones are left childless.
                 candidate_parent_site_ids = {
                     row.site_id for row in db.query(Device.site_id).filter(
                         Device.id.in_(stale_device_ids)
@@ -611,25 +614,38 @@ def sync_sureview_devices(db: Session) -> Dict[str, int]:
                 results["devices_removed"] = len(stale_device_ids)
                 db.flush()
 
-                # A parent Site is removed only when the stale device was its
-                # LAST device — shared/consolidated sites are preserved.
-                orphaned_site_ids = {
+                # Sync NEVER deletes a Site.
+                #
+                # A Site is a place. It carries the address, phone numbers and
+                # notes an operator typed in, and it may have been curated to
+                # hold several NVRs. SureView knows nothing about any of that,
+                # so a server disappearing from its inventory — whether that is
+                # a genuine decommission or a partial API response — must not
+                # destroy the record of the location.
+                #
+                # This mirrors the rule applied on the update path, where an
+                # already-parented Site is never rewritten from group_data.
+                # Protecting a Site's fields from being overwritten while
+                # allowing the same sync to delete it outright would be
+                # incoherent.
+                #
+                # Childless Sites are reported for a human to review and remove
+                # through DELETE /api/v1/sites/{id}.
+                childless_site_ids = {
                     parent_id for parent_id in candidate_parent_site_ids
                     if db.query(func.count(Device.id)).filter(
                         Device.site_id == parent_id
                     ).scalar() == 0
                 }
 
-                if orphaned_site_ids:
+                results["sites_left_childless"] = len(childless_site_ids)
+                if childless_site_ids:
                     logger.info(
-                        f"Removing {len(orphaned_site_ids)} parent sites left "
-                        f"with no devices"
+                        f"{len(childless_site_ids)} parent site(s) now have no "
+                        f"devices and were RETAINED for manual review: "
+                        f"{sorted(childless_site_ids)[:5]}"
+                        f"{'...' if len(childless_site_ids) > 5 else ''}"
                     )
-                    db.query(Site).filter(
-                        Site.id.in_(orphaned_site_ids)
-                    ).delete(synchronize_session=False)
-                else:
-                    logger.info("No parent sites left childless")
             else:
                 logger.info("No stale devices to remove")
 
