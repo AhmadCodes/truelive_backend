@@ -55,13 +55,6 @@ celery_app.conf.beat_schedule = {
             'expires': 300  # Task expires after 5 minutes if not picked up
         }
     },
-    'sync-sureview-devices': {
-        'task': 'app.tasks.sureview_tasks.sync_devices',
-        'schedule': settings.BACKGROUND_TASK_INTERVAL,  # 10 minutes
-        'options': {
-            'expires': 300  # Task expires after 5 minutes if not picked up
-        }
-    },
     'alerting-rollover-partitions': {
         'task': 'app.tasks.rollover_alerting_partitions',
         'schedule': crontab(hour=1, minute=30),  # Daily at 01:30 UTC
@@ -89,7 +82,7 @@ def debug_task(self):
 # Import tasks to register them with Celery
 # This must be at the end to avoid circular imports
 try:
-    from app.tasks import snapshot_tasks, sureview_tasks
+    from app.tasks import snapshot_tasks
 except ImportError as e:
     logger.warning(f"Could not import task modules: {e}")
 

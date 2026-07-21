@@ -79,48 +79,6 @@ DEFAULT_SETTINGS = [
         "data_type": "boolean"
     },
 
-    # SureView Settings
-    {
-        "key": "sureview.api_url",
-        "value": "",
-        "category": "sureview",
-        "description": "SureView API base URL",
-        "is_encrypted": False,
-        "data_type": "string"
-    },
-    {
-        "key": "sureview.username",
-        "value": "",
-        "category": "sureview",
-        "description": "SureView API username",
-        "is_encrypted": False,
-        "data_type": "string"
-    },
-    {
-        "key": "sureview.password",
-        "value": "",
-        "category": "sureview",
-        "description": "SureView API password",
-        "is_encrypted": True,
-        "data_type": "string"
-    },
-    {
-        "key": "sureview.sync_enabled",
-        "value": "true",
-        "category": "sureview",
-        "description": "Enable automatic sync",
-        "is_encrypted": False,
-        "data_type": "boolean"
-    },
-    {
-        "key": "sureview.sync_interval",
-        "value": "300",
-        "category": "sureview",
-        "description": "Sync interval in seconds",
-        "is_encrypted": False,
-        "data_type": "integer"
-    },
-
     # Tasks Settings
     {
         "key": "tasks.cleanup_enabled",

@@ -151,7 +151,7 @@ class SystemSettingsService:
 
         Args:
             db: Database session
-            category: Category name (e.g., 'smtp', 'sureview')
+            category: Category name (e.g., 'smtp', 'tasks')
             mask_sensitive: Whether to mask encrypted values
 
         Returns:
@@ -293,25 +293,6 @@ class SystemSettingsService:
                 return False, f"Missing required setting: {key}"
 
         return True, "SMTP settings are valid"
-
-    def validate_sureview_settings(self, db: Session) -> tuple[bool, str]:
-        """
-        Validate that required SureView settings are configured.
-
-        Args:
-            db: Database session
-
-        Returns:
-            Tuple of (is_valid, error_message)
-        """
-        required_keys = ['sureview.username', 'sureview.password', 'sureview.api_url']
-
-        for key in required_keys:
-            value = self.get_setting(db, key)
-            if not value:
-                return False, f"Missing required setting: {key}"
-
-        return True, "SureView settings are valid"
 
 
 # Create global service instance

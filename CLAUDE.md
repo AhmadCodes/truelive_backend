@@ -62,8 +62,8 @@ app/
 ├── api/deps.py     # Dependency injection (CurrentUser, AdminUser, SuperAdminUser, DBSession)
 ├── models/         # SQLAlchemy ORM models (13 tables)
 ├── schemas/        # Pydantic request/response validation
-├── services/       # Business logic (config_generator, websocket_server, sureview_service, etc.)
-├── tasks/          # Celery background tasks (screenshot capture, SureView sync)
+├── services/       # Business logic (config_generator, websocket_server, etc.)
+├── tasks/          # Celery background tasks (screenshot capture)
 ├── core/           # Configuration (config.py) and security (JWT, password hashing)
 └── utils/          # Utilities (url_processor for RTSP URL encoding)
 ```
@@ -105,7 +105,6 @@ WebSocket Server (`app/services/websocket_server.py`):
 
 Celery tasks run every 10 minutes (`BACKGROUND_TASK_INTERVAL=600`):
 - **Screenshot capture**: OpenCV-based RTSP frame capture
-- **SureView sync**: Selenium-based scraping for device discovery
 
 ## Environment Variables
 
@@ -117,7 +116,6 @@ Celery tasks run every 10 minutes (`BACKGROUND_TASK_INTERVAL=600`):
 **Optional:**
 - `REDIS_URL`, `CELERY_BROKER_URL` - For background tasks
 - `WEBSOCKET_URL` - WebSocket server endpoint
-- `SUREVIEW_USERNAME`, `SUREVIEW_PASSWORD`, `SUREVIEW_API_URL` - SureView integration
 
 Generate keys: `python -c "import secrets; print(secrets.token_urlsafe(32))"`
 
@@ -186,24 +184,9 @@ All models inherit from `BaseModel` with UUID `id` and timestamps. Use `to_dict(
 Fixtures in `tests/conftest.py`:
 - `engine`, `db_session` - In-memory SQLite
 - `sample_site`, `sample_camera`, `sample_pc`, etc. - Pre-populated test data
-- `mock_cv2`, `mock_selenium`, `mock_socketio_client` - External dependency mocks
+- `mock_cv2`, `mock_socketio_client` - External dependency mocks
 
 Organization: `tests/unit/`, `tests/integration/`, `tests/test_api/`, `tests/test_models/`
-
-## SureView Integration
-
-Endpoints at `/api/v1/sureview/`:
-- `POST /get_sites` - Get sites by customer_id
-- `POST /get_all_sites` - Get all sites grouped by customer
-- `POST /get_cameras` - Get cameras for a site
-- `POST /sync` - Trigger synchronization (AdminUser)
-
-Sync process (`app/services/sureview_service.py`):
-1. Selenium login to SureView
-2. `GET /api/servers/GetServerList` → all servers
-3. `GET /api/groups/{groupID}` → site details (referenceId → customer_id)
-4. `GET /api/devices/GetByServerId` → cameras
-5. Create/update Site and Camera records, remove stale entries
 
 ## API Documentation
 

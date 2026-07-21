@@ -16,14 +16,8 @@ RUN apt-get update && apt-get install -y \
     libpq-dev \
     curl \
     wget \
-    chromium \
-    chromium-driver \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
-
-# Set Chrome environment variables for Selenium
-ENV CHROME_BIN=/usr/bin/chromium \
-    CHROMEDRIVER_PATH=/usr/bin/chromedriver
 
 # Set working directory
 WORKDIR /app

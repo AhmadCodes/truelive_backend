@@ -142,22 +142,3 @@ class SMTPTestResponse(BaseModel):
                 }
             }
         }
-
-
-class SureViewTestResponse(BaseModel):
-    """Response schema for SureView connection test."""
-    success: bool = Field(..., description="Whether test was successful")
-    message: str = Field(..., description="Result message")
-    details: Optional[Dict[str, Any]] = Field(None, description="Additional details or error info")
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "success": True,
-                "message": "Successfully authenticated to SureView API",
-                "details": {
-                    "api_url": "https://us.sureviewops.com",
-                    "servers_found": 57
-                }
-            }
-        }

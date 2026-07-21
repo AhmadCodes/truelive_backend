@@ -20,7 +20,6 @@ from app.schemas.system_setting import (
     SystemSettingsByCategoryResponse,
     SMTPTestRequest,
     SMTPTestResponse,
-    SureViewTestResponse
 )
 from app.services.system_settings_service import system_settings_service
 
@@ -71,7 +70,7 @@ async def get_settings_by_category(
     Get all settings in a specific category.
 
     Args:
-        category: Category name (sureview, smtp, tasks, snapshots, etc.)
+        category: Category name (smtp, tasks, snapshots, etc.)
         db: Database session
         current_user: Current authenticated super admin user
 
@@ -328,94 +327,5 @@ async def test_smtp_connection(
         return SMTPTestResponse(
             success=False,
             message="SMTP test failed",
-            details={"error": str(e)}
-        )
-
-
-@router.post("/test/sureview", response_model=SureViewTestResponse)
-async def test_sureview_connection(
-    db: DBSession,
-    current_user: SuperAdminUser
-):
-    """
-    Test SureView API connection with current settings.
-
-    Attempts to authenticate and fetch server list.
-
-    Args:
-        db: Database session
-        current_user: Current authenticated super admin user
-
-    Returns:
-        Test result with success status and details
-    """
-    try:
-        # Validate settings exist
-        is_valid, error_msg = system_settings_service.validate_sureview_settings(db)
-        if not is_valid:
-            return SureViewTestResponse(
-                success=False,
-                message=error_msg,
-                details=None
-            )
-
-        # Get SureView settings
-        username = system_settings_service.get_setting(db, 'sureview.username')
-        password = system_settings_service.get_setting(db, 'sureview.password')
-        api_url = system_settings_service.get_setting(db, 'sureview.api_url')
-        login_url = system_settings_service.get_setting(db, 'sureview.login_url')
-
-        # Test connection using SureView service
-        from app.services.sureview_service import automate_login, get_server_list
-
-        # Override settings temporarily for test
-        import os
-        old_username = os.getenv('SUREVIEW_USERNAME')
-        old_password = os.getenv('SUREVIEW_PASSWORD')
-        old_api_url = os.getenv('SUREVIEW_API_URL')
-
-        os.environ['SUREVIEW_USERNAME'] = username
-        os.environ['SUREVIEW_PASSWORD'] = password
-        os.environ['SUREVIEW_API_URL'] = api_url
-        if login_url:
-            os.environ['SUREVIEW_LOGIN_URL'] = login_url
-
-        try:
-            # Attempt login
-            cookies = automate_login()
-            if not cookies:
-                return SureViewTestResponse(
-                    success=False,
-                    message="Failed to authenticate to SureView",
-                    details={"api_url": api_url}
-                )
-
-            # Try to fetch servers
-            servers = get_server_list(cookies)
-            server_count = len(servers) if servers else 0
-
-            return SureViewTestResponse(
-                success=True,
-                message="Successfully authenticated to SureView API",
-                details={
-                    "api_url": api_url,
-                    "servers_found": server_count
-                }
-            )
-
-        finally:
-            # Restore original settings
-            if old_username:
-                os.environ['SUREVIEW_USERNAME'] = old_username
-            if old_password:
-                os.environ['SUREVIEW_PASSWORD'] = old_password
-            if old_api_url:
-                os.environ['SUREVIEW_API_URL'] = old_api_url
-
-    except Exception as e:
-        logger.error(f"SureView test failed: {e}")
-        return SureViewTestResponse(
-            success=False,
-            message="SureView connection test failed",
             details={"error": str(e)}
         )

@@ -12,7 +12,7 @@ from app.models.base import BaseModel
 class Camera(BaseModel):
     """
     Camera model representing individual cameras associated with devices.
-    Each camera has RTSP streaming URLs and can be marked as SureView camera or new.
+    Each camera has RTSP streaming URLs and can be marked as new.
     """
     __tablename__ = "cameras"
 
@@ -43,12 +43,6 @@ class Camera(BaseModel):
         Text,
         nullable=True,
         comment="Main stream URL for camera (optional)"
-    )
-    sureview_camera = Column(
-        Boolean,
-        nullable=False,
-        server_default='false',
-        comment="Flag indicating if this is a SureView integrated camera"
     )
     new = Column(
         Boolean,
@@ -111,6 +105,5 @@ class Camera(BaseModel):
             f"id='{self.id}', "
             f"device_id='{self.device_id}', "
             f"name='{self.name}', "
-            f"sureview={self.sureview_camera}, "
             f"new={self.new})>"
         )

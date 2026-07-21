@@ -24,7 +24,7 @@ class Site(BaseModel):
     Attributes:
         id: Primary key (custom string ID, e.g. ``SITE_<hex>``)
         name: Site name
-        customer_id: Customer ID from SureView (referenceId)
+        customer_id: External customer reference ID
         address: Physical address of the site
         telephone: Primary contact telephone
         telephone2: Secondary contact telephone
@@ -52,7 +52,7 @@ class Site(BaseModel):
         String(50),
         nullable=True,
         index=True,
-        comment="Customer ID from SureView (referenceId)"
+        comment="External customer reference ID"
     )
     address = Column(
         String(500),
