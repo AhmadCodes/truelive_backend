@@ -174,7 +174,7 @@ def distribute_cameras_and_create_mappings(
     camera_index = 0
     mappings_created = 0
 
-    # Get all cameras with their site_ids in one query
+    # Get all cameras with their device_ids in one query
     cameras = db.query(Camera).filter(Camera.id.in_(camera_ids)).all()
     camera_dict = {cam.id: cam for cam in cameras}
 
@@ -210,7 +210,7 @@ def distribute_cameras_and_create_mappings(
                         view_id=view.id,
                         slot_row=row,
                         slot_col=col,
-                        site_id=camera.site_id,
+                        device_id=camera.device_id,
                         camera_id=camera.id,
                         playing_state=False
                     )

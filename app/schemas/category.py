@@ -1,5 +1,8 @@
 """
 Pydantic schemas for Site Category and Category Mapping operations.
+
+Note: despite the historical ``Site*`` class names, category mappings attach to
+a **Device** (NVR/DVR) as of migration 008.
 """
 
 from pydantic import BaseModel, Field, field_validator
@@ -65,9 +68,9 @@ class CategoryDetailResponse(CategoryResponse):
 
 
 class CategoryWithSiteCount(CategoryResponse):
-    """Category response with count of sites using this category."""
+    """Category response with count of devices using this category."""
 
-    site_count: int = 0
+    device_count: int = 0
 
     class Config:
         from_attributes = True
@@ -76,30 +79,30 @@ class CategoryWithSiteCount(CategoryResponse):
 # Category Mapping Schemas
 
 class AssignCategoryRequest(BaseModel):
-    """Request schema for assigning a category to a site."""
+    """Request schema for assigning a category to a device."""
 
-    site_id: str = Field(..., min_length=1, max_length=255, description="Site ID to assign category to")
+    device_id: str = Field(..., min_length=1, max_length=255, description="Device ID to assign category to")
     category_id: uuid.UUID = Field(..., description="Category ID to assign")
 
 
 class UnassignCategoryRequest(BaseModel):
-    """Request schema for unassigning a category from a site."""
+    """Request schema for unassigning a category from a device."""
 
-    site_id: str = Field(..., min_length=1, max_length=255, description="Site ID to unassign category from")
+    device_id: str = Field(..., min_length=1, max_length=255, description="Device ID to unassign category from")
     category_id: uuid.UUID = Field(..., description="Category ID to unassign")
 
 
 class BulkAssignRequest(BaseModel):
-    """Request schema for bulk assigning categories to a site."""
+    """Request schema for bulk assigning categories to a device."""
 
-    site_id: str = Field(..., min_length=1, max_length=255, description="Site ID")
+    device_id: str = Field(..., min_length=1, max_length=255, description="Device ID")
     category_ids: List[uuid.UUID] = Field(..., description="List of category IDs to assign")
 
 
 class CategoryMappingResponse(BaseModel):
     """Response schema for category mapping."""
 
-    site_id: str
+    device_id: str
     category_id: uuid.UUID
     assigned_at: datetime
 
@@ -108,9 +111,9 @@ class CategoryMappingResponse(BaseModel):
 
 
 class CategoryMappingDetailResponse(CategoryMappingResponse):
-    """Detailed mapping response with site and category info."""
+    """Detailed mapping response with device and category info."""
 
-    site_name: Optional[str] = None
+    device_name: Optional[str] = None
     category_name: Optional[str] = None
     category_color: Optional[int] = None
 
@@ -118,24 +121,24 @@ class CategoryMappingDetailResponse(CategoryMappingResponse):
         from_attributes = True
 
 
-class SiteWithCategories(BaseModel):
-    """Site response with its assigned categories."""
+class DeviceWithCategories(BaseModel):
+    """Device response with its assigned categories."""
 
-    site_id: str
-    site_name: str
+    device_id: str
+    device_name: str
     categories: List[CategoryResponse]
 
     class Config:
         from_attributes = True
 
 
-class CategoryWithSites(BaseModel):
-    """Category response with sites using this category."""
+class CategoryWithDevices(BaseModel):
+    """Category response with devices using this category."""
 
     id: uuid.UUID
     name: str
     color: int
-    sites: List[dict]  # Simple dict with site_id and name
+    devices: List[dict]  # Simple dict with device_id and name
 
     class Config:
         from_attributes = True

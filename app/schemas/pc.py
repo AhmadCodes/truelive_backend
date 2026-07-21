@@ -226,7 +226,7 @@ class ImportConfigResponse(BaseModel):
     views_created: int = Field(..., description="Number of views created")
     mappings_created: int = Field(..., description="Number of screen mappings created")
     cameras_skipped: int = Field(0, description="Number of cameras skipped (not found in database)")
-    sites_skipped: int = Field(0, description="Number of sites skipped (not found in database)")
+    devices_skipped: int = Field(0, description="Number of devices skipped (not found in database)")
     message: str = Field(..., description="Status message")
 
 

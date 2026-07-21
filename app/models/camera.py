@@ -11,7 +11,7 @@ from app.models.base import BaseModel
 
 class Camera(BaseModel):
     """
-    Camera model representing individual cameras associated with sites.
+    Camera model representing individual cameras associated with devices.
     Each camera has RTSP streaming URLs and can be marked as SureView camera or new.
     """
     __tablename__ = "cameras"
@@ -21,12 +21,12 @@ class Camera(BaseModel):
         primary_key=True,
         comment="Unique identifier for the camera"
     )
-    site_id = Column(
+    device_id = Column(
         String(255),
-        ForeignKey('sites.id', ondelete='CASCADE'),
+        ForeignKey('devices.id', ondelete='CASCADE'),
         nullable=False,
         index=True,
-        comment="Site this camera belongs to (references sites.id)"
+        comment="Device this camera belongs to (references devices.id)"
     )
     name = Column(
         String(255),
@@ -60,20 +60,20 @@ class Camera(BaseModel):
         Boolean,
         nullable=True,
         default=None,
-        comment="Per-camera RTSP TCP override: NULL inherits site.use_tcp, true/false overrides"
+        comment="Per-camera RTSP TCP override: NULL inherits device.use_tcp, true/false overrides"
     )
 
     # Table arguments for indexes
     __table_args__ = (
-        Index('idx_cameras_site_id', 'site_id'),
+        Index('idx_cameras_device_id', 'device_id'),
         Index('idx_cameras_name', 'name'),
         Index('idx_cameras_created_at', 'created_at', postgresql_using='btree', postgresql_ops={'created_at': 'DESC'}),
     )
 
     # Relationships
-    # Note: Assumes 'Site' model exists with 'id' as primary key
-    site = relationship(
-        "Site",
+    # Note: Assumes 'Device' model exists with 'id' as primary key
+    device = relationship(
+        "Device",
         back_populates="cameras",
         lazy="select"
     )
@@ -109,7 +109,7 @@ class Camera(BaseModel):
         return (
             f"<Camera("
             f"id='{self.id}', "
-            f"site_id='{self.site_id}', "
+            f"device_id='{self.device_id}', "
             f"name='{self.name}', "
             f"sureview={self.sureview_camera}, "
             f"new={self.new})>"

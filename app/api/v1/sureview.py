@@ -9,6 +9,7 @@ import logging
 
 from app.api.deps import DBSession, CurrentUser, AdminUser
 from app.models.site import Site
+from app.models.device import Device
 from app.models.camera import Camera
 from app.models.sync_job import SyncJob, SyncJobStatus
 from app.schemas.sureview import (
@@ -46,33 +47,38 @@ async def get_sites(
     Returns:
         Sites matching the filters with full details
     """
-    # Build base query
-    query = db.query(Site).filter(Site.customer_id == request.customer_id)
+    # A SureView "site" is one recorder, which is a Device here. The customer
+    # and location details live on the Device's parent Site.
+    query = db.query(Device).join(Device.site).filter(
+        Site.customer_id == request.customer_id
+    )
 
     # Apply site_ids filter if provided
     if request.site_ids:
-        query = query.filter(Site.id.in_(request.site_ids))
+        query = query.filter(Device.id.in_(request.site_ids))
 
-    sites = query.all()
+    devices = query.all()
 
     # Build response
     site_details = []
-    for site in sites:
-        # Count cameras for this site
+    for device in devices:
+        # Count cameras for this device
         camera_count = db.query(func.count(Camera.id)).filter(
-            Camera.site_id == site.id
+            Camera.device_id == device.id
         ).scalar() or 0
 
+        location = device.site
+
         site_detail = SiteDetail(
-            address=site.address,
-            telephone=site.telephone,
-            telephone2=site.telephone2,
-            telephonePolice=site.telephone_police,
-            telephoneFire=site.telephone_fire,
-            notes=site.notes,
-            latLong=site.lat_long,
-            site_id=site.id,
-            name=site.name,
+            address=location.address,
+            telephone=location.telephone,
+            telephone2=location.telephone2,
+            telephonePolice=location.telephone_police,
+            telephoneFire=location.telephone_fire,
+            notes=location.notes,
+            latLong=location.lat_long,
+            site_id=device.id,
+            name=device.name,
             camera_count=camera_count
         )
         site_details.append(site_detail)
@@ -98,26 +104,28 @@ async def get_all_sites(
     Returns:
         List of customer groups with their sites
     """
-    # Get all sites with customer_id
-    sites = db.query(Site).filter(Site.customer_id.isnot(None)).all()
+    # Every recorder whose parent site carries a customer_id
+    devices = db.query(Device).join(Device.site).filter(
+        Site.customer_id.isnot(None)
+    ).all()
 
-    # Group sites by customer_id
+    # Group by customer_id
     customer_groups = {}
-    for site in sites:
-        customer_id = site.customer_id
+    for device in devices:
+        customer_id = device.site.customer_id
 
         if customer_id not in customer_groups:
             customer_groups[customer_id] = []
 
-        # Count cameras for this site
+        # Count cameras for this device
         camera_count = db.query(func.count(Camera.id)).filter(
-            Camera.site_id == site.id
+            Camera.device_id == device.id
         ).scalar() or 0
 
         customer_site = CustomerSiteSummary(
             customer_id=customer_id,
-            site_id=site.id,
-            name=site.name,
+            site_id=device.id,
+            name=device.name,
             camera_count=camera_count
         )
         customer_groups[customer_id].append(customer_site)
@@ -155,16 +163,16 @@ async def get_cameras(
     Raises:
         HTTPException: If site not found
     """
-    # Verify site exists
-    site = db.query(Site).filter(Site.id == request.site_id).first()
-    if not site:
+    # Verify the recorder exists
+    device = db.query(Device).filter(Device.id == request.site_id).first()
+    if not device:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Site with id {request.site_id} not found"
         )
 
     # Get cameras for the site
-    cameras = db.query(Camera).filter(Camera.site_id == request.site_id).all()
+    cameras = db.query(Camera).filter(Camera.device_id == request.site_id).all()
 
     # Build response
     camera_details = []

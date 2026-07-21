@@ -14,7 +14,7 @@ import threading
 
 from app.models.camera import Camera
 from app.models.screenshot import Screenshot
-from app.models.site import Site
+from app.models.device import Device
 
 logger = logging.getLogger(__name__)
 
@@ -217,11 +217,11 @@ async def batch_update_screenshots(
 
         # Get all cameras that need to be checked
         all_cameras = []
-        sites = db.query(Site).all()
+        devices = db.query(Device).all()
 
-        for site in sites:
-            # Get cameras for this site
-            cameras = db.query(Camera).filter(Camera.site_id == site.id).all()
+        for device in devices:
+            # Get cameras for this device
+            cameras = db.query(Camera).filter(Camera.device_id == device.id).all()
             all_cameras.extend(cameras)
 
         results["checked"] = len(all_cameras)

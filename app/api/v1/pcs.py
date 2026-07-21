@@ -935,7 +935,7 @@ async def import_pc_config(
     The configuration is imported into the database but NOT deployed to the PC.
     Use the deploy endpoint to send the configuration to the PC after import.
 
-    Cameras and sites that don't exist in the database will be skipped.
+    Cameras and devices that don't exist in the database will be skipped.
 
     Args:
         pc_id: ID of the PC to import config for
@@ -977,7 +977,7 @@ async def import_pc_config(
         views_created=result.views_created,
         mappings_created=result.mappings_created,
         cameras_skipped=result.cameras_skipped,
-        sites_skipped=result.sites_skipped,
+        devices_skipped=result.devices_skipped,
         message=result.message
     )
 
@@ -996,7 +996,7 @@ async def copy_layout_from_another_pc(
     to the target PC. The target PC's existing layout is cleared before copying.
 
     New IDs are generated for the copied screens and views, but the camera
-    and site assignments are preserved.
+    and device assignments are preserved.
 
     Args:
         pc_id: ID of the target PC to copy layout TO

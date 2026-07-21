@@ -16,7 +16,7 @@ import io
 from app.api.deps import AdminUser, DBSession, CurrentUser
 from app.models.camera import Camera
 from app.models.snapshot import Snapshot
-from app.models.site import Site
+from app.models.device import Device
 from app.tasks.snapshot_tasks import update_single_snapshot, update_snapshots
 from app.services.snapshot_service import process_camera
 
@@ -67,22 +67,22 @@ async def trigger_capture_all_cameras(
     }
 
 
-@router.post("/capture/site/{site_id}")
-async def trigger_capture_site_cameras(
-    site_id: str,
+@router.post("/capture/device/{device_id}")
+async def trigger_capture_device_cameras(
+    device_id: str,
     current_user: AdminUser,
     db: DBSession
 ):
     """
-    Trigger snapshot capture for all cameras at a specific site.
+    Trigger snapshot capture for all cameras at a specific device.
 
-    This endpoint captures snapshots for all cameras belonging to the specified site.
+    This endpoint captures snapshots for all cameras belonging to the specified device.
     Cameras are processed in parallel for efficiency.
 
     Only admins and super admins can trigger snapshot captures.
 
     Args:
-        site_id: Site ID
+        device_id: Device ID
         current_user: Current authenticated admin or super admin
         db: Database session
 
@@ -90,25 +90,25 @@ async def trigger_capture_site_cameras(
         Summary of capture results
 
     Raises:
-        HTTPException: If site not found or has no cameras
+        HTTPException: If device not found or has no cameras
     """
-    logger.info(f"Triggering snapshot capture for site {site_id} by user {current_user.username}")
+    logger.info(f"Triggering snapshot capture for device {device_id} by user {current_user.username}")
 
-    # Verify site exists
-    site = db.query(Site).filter(Site.id == site_id).first()
-    if not site:
+    # Verify device exists
+    device = db.query(Device).filter(Device.id == device_id).first()
+    if not device:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Site with ID '{site_id}' not found"
+            detail=f"Device with ID '{device_id}' not found"
         )
 
-    # Get all cameras for this site
-    cameras = db.query(Camera).filter(Camera.site_id == site_id).all()
+    # Get all cameras for this device
+    cameras = db.query(Camera).filter(Camera.device_id == device_id).all()
 
     if not cameras:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No cameras found for site '{site.name}'"
+            detail=f"No cameras found for device '{device.name}'"
         )
 
     # Trigger capture for each camera (force update by using current time as cutoff)
@@ -137,9 +137,9 @@ async def trigger_capture_site_cameras(
 
     return {
         "success": True,
-        "message": f"Snapshot capture completed for site '{site.name}'",
-        "site_id": site_id,
-        "site_name": site.name,
+        "message": f"Snapshot capture completed for device '{device.name}'",
+        "device_id": device_id,
+        "device_name": device.name,
         "results": results
     }
 
@@ -337,38 +337,38 @@ async def get_camera_snapshot_info(
     }
 
 
-@router.get("/site/{site_id}")
-async def get_site_snapshots(
-    site_id: str,
+@router.get("/device/{device_id}")
+async def get_device_snapshots(
+    device_id: str,
     current_user: CurrentUser,
     db: DBSession
 ):
     """
-    Get snapshot metadata for all cameras at a site.
+    Get snapshot metadata for all cameras at a device.
 
     All authenticated users can view snapshots.
 
     Args:
-        site_id: Site ID
+        device_id: Device ID
         current_user: Current authenticated user
         db: Database session
 
     Returns:
-        List of snapshot metadata for all cameras at the site
+        List of snapshot metadata for all cameras at the device
 
     Raises:
-        HTTPException: If site not found
+        HTTPException: If device not found
     """
-    # Verify site exists
-    site = db.query(Site).filter(Site.id == site_id).first()
-    if not site:
+    # Verify device exists
+    device = db.query(Device).filter(Device.id == device_id).first()
+    if not device:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Site with ID '{site_id}' not found"
+            detail=f"Device with ID '{device_id}' not found"
         )
 
     # Get all cameras with their snapshots
-    cameras = db.query(Camera).filter(Camera.site_id == site_id).all()
+    cameras = db.query(Camera).filter(Camera.device_id == device_id).all()
 
     current_time = int(time.time())
     snapshots_data = []
@@ -399,8 +399,8 @@ async def get_site_snapshots(
             })
 
     return {
-        "site_id": site_id,
-        "site_name": site.name,
+        "device_id": device_id,
+        "device_name": device.name,
         "total_cameras": len(cameras),
         "cameras_with_snapshots": sum(1 for s in snapshots_data if s.get("has_snapshot")),
         "cameras_without_snapshots": sum(1 for s in snapshots_data if not s.get("has_snapshot")),
@@ -408,14 +408,14 @@ async def get_site_snapshots(
     }
 
 
-@router.get("/site/{site_id}/images")
-async def get_site_snapshots_images(
-    site_id: str,
+@router.get("/device/{device_id}/images")
+async def get_device_snapshots_images(
+    device_id: str,
     current_user: CurrentUser,
     db: DBSession
 ):
     """
-    Get all snapshot images for cameras at a site as base64-encoded JSON.
+    Get all snapshot images for cameras at a device as base64-encoded JSON.
 
     Returns all camera snapshots with their images encoded in base64.
     Useful for displaying multiple camera feeds in a web/mobile app.
@@ -423,7 +423,7 @@ async def get_site_snapshots_images(
     All authenticated users can view snapshots.
 
     Args:
-        site_id: Site ID
+        device_id: Device ID
         current_user: Current authenticated user
         db: Database session
 
@@ -431,18 +431,18 @@ async def get_site_snapshots_images(
         JSON with base64-encoded images for all cameras
 
     Raises:
-        HTTPException: If site not found
+        HTTPException: If device not found
     """
-    # Verify site exists
-    site = db.query(Site).filter(Site.id == site_id).first()
-    if not site:
+    # Verify device exists
+    device = db.query(Device).filter(Device.id == device_id).first()
+    if not device:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Site with ID '{site_id}' not found"
+            detail=f"Device with ID '{device_id}' not found"
         )
 
     # Get all cameras with their snapshots
-    cameras = db.query(Camera).filter(Camera.site_id == site_id).all()
+    cameras = db.query(Camera).filter(Camera.device_id == device_id).all()
 
     current_time = int(time.time())
     snapshots_data = []
@@ -479,8 +479,8 @@ async def get_site_snapshots_images(
             })
 
     return {
-        "site_id": site_id,
-        "site_name": site.name,
+        "device_id": device_id,
+        "device_name": device.name,
         "total_cameras": len(cameras),
         "cameras_with_snapshots": sum(1 for s in snapshots_data if s.get("has_snapshot")),
         "cameras_without_snapshots": sum(1 for s in snapshots_data if not s.get("has_snapshot")),
@@ -488,22 +488,22 @@ async def get_site_snapshots_images(
     }
 
 
-@router.get("/site/{site_id}/zip")
-async def get_site_snapshots_zip(
-    site_id: str,
+@router.get("/device/{device_id}/zip")
+async def get_device_snapshots_zip(
+    device_id: str,
     current_user: CurrentUser,
     db: DBSession
 ):
     """
-    Download all snapshot images for a site as a ZIP file.
+    Download all snapshot images for a device as a ZIP file.
 
-    Returns a ZIP file containing PNG images for all cameras at the site.
+    Returns a ZIP file containing PNG images for all cameras at the device.
     Each image is named with the camera ID and name.
 
     All authenticated users can download snapshots.
 
     Args:
-        site_id: Site ID
+        device_id: Device ID
         current_user: Current authenticated user
         db: Database session
 
@@ -511,23 +511,23 @@ async def get_site_snapshots_zip(
         ZIP file containing all snapshot images
 
     Raises:
-        HTTPException: If site not found or no snapshots available
+        HTTPException: If device not found or no snapshots available
     """
-    # Verify site exists
-    site = db.query(Site).filter(Site.id == site_id).first()
-    if not site:
+    # Verify device exists
+    device = db.query(Device).filter(Device.id == device_id).first()
+    if not device:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Site with ID '{site_id}' not found"
+            detail=f"Device with ID '{device_id}' not found"
         )
 
     # Get all cameras with their snapshots
-    cameras = db.query(Camera).filter(Camera.site_id == site_id).all()
+    cameras = db.query(Camera).filter(Camera.device_id == device_id).all()
 
     if not cameras:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No cameras found for site '{site.name}'"
+            detail=f"No cameras found for device '{device.name}'"
         )
 
     # Create ZIP file in memory
@@ -551,15 +551,15 @@ async def get_site_snapshots_zip(
     if snapshot_count == 0:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No snapshots available for site '{site.name}'"
+            detail=f"No snapshots available for device '{device.name}'"
         )
 
     # Prepare ZIP for download
     zip_buffer.seek(0)
 
-    # Create a safe site name for the ZIP filename
-    safe_site_name = "".join(c for c in site.name if c.isalnum() or c in (' ', '-', '_')).strip()
-    zip_filename = f"snapshots_{site_id}_{safe_site_name}.zip"
+    # Create a safe device name for the ZIP filename
+    safe_device_name = "".join(c for c in device.name if c.isalnum() or c in (' ', '-', '_')).strip()
+    zip_filename = f"snapshots_{device_id}_{safe_device_name}.zip"
 
     return StreamingResponse(
         io.BytesIO(zip_buffer.read()),

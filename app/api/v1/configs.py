@@ -52,7 +52,7 @@ async def generate_multi_stream_config(
 
     **Camera Selection:**
     - If `camera_ids` provided: Uses those specific cameras
-    - If not provided: Uses available cameras from database (ordered by site, name)
+    - If not provided: Uses available cameras from database (ordered by device, name)
     - `exclude_camera_ids`: Optionally exclude specific cameras from selection
     - If a camera appears in both lists, exclusion takes priority
     - If not enough cameras: Fills remaining slots with empty camera objects

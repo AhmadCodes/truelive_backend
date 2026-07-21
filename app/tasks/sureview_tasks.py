@@ -1,5 +1,13 @@
 """
 SureView device synchronization background tasks.
+
+Naming caution: "device" in this module's task names follows SureView's
+vocabulary, where a *server* is an NVR/DVR and a *device* is a camera. Since
+migration 008 our own ``Device`` model is the NVR/DVR, so ``sync_devices`` and
+``sync_devices_async`` actually sync SureView servers -> our Devices AND
+SureView devices -> our Cameras. The task names are NOT renamed: they are
+registered strings referenced by the beat schedule in
+``app/tasks/celery_app.py:58``.
 """
 import logging
 from datetime import datetime, timezone
@@ -19,8 +27,8 @@ def sync_devices():
     It:
     1. Authenticates to SureView via Selenium
     2. Fetches server list
-    3. Fetches devices for each server
-    4. Updates database with sites and cameras
+    3. Fetches devices (cameras) for each server
+    4. Updates database with Devices and Cameras
     5. Removes stale entries
 
     Creates a SyncJob record for tracking, with triggered_by='system'
@@ -96,9 +104,14 @@ def sync_devices():
 @celery_app.task(name='app.tasks.sureview_tasks.sync_single_server')
 def sync_single_server(server_id: int):
     """
-    Sync devices for a single SureView server.
+    Sync one SureView server (== one of our Devices) and its cameras.
 
     This can be called on-demand for immediate server sync.
+
+    Parent Site handling mirrors ``sync_sureview_devices`` (AC-25): a brand-new
+    Device gets a fresh 1:1 parent Site built from the SureView group data; a
+    Device that already has a parent Site keeps that Site's name and all 8
+    location fields completely untouched.
 
     Args:
         server_id: Server identifier
@@ -114,9 +127,10 @@ def sync_single_server(server_id: int):
             automate_login,
             get_server_list,
             get_devices_by_server_id,
-            get_group_details
+            get_group_details,
+            create_parent_site
         )
-        from app.models.site import Site
+        from app.models.device import Device
         from app.models.camera import Camera
 
         result = {
@@ -152,60 +166,54 @@ def sync_single_server(server_id: int):
             result["errors"] += 1
             return result
 
-        # Fetch group details for additional site information
+        # Fetch group details — only ever consumed when minting a NEW parent Site
         group_data = None
         if "groupID" in target_server and target_server["groupID"]:
             group_data = get_group_details(cookies, target_server["groupID"])
 
-        # Update or create site
-        site_id = str(target_server["serverID"])
-        site = db.query(Site).filter(Site.id == site_id).first()
+        # Update or create device
+        device_id = str(target_server["serverID"])
+        device_record = db.query(Device).filter(Device.id == device_id).first()
 
-        if site:
-            # Update existing
-            site.name = target_server["title"]
-            site.nvr_username = target_server["username"]
-            site.nvr_password = target_server["password"]
-            site.sureview_site = True
+        if device_record:
+            # Update the Device's OWN fields only. AC-25: an already-parented
+            # Device keeps its parent Site exactly as the operator left it —
+            # name and all 8 location fields are NOT rewritten from group_data.
+            device_record.name = target_server["title"]
+            device_record.nvr_username = target_server["username"]
+            device_record.nvr_password = target_server["password"]
+            device_record.sureview_site = True
 
-            # Update group details if available
-            if group_data:
-                site.customer_id = group_data.get("referenceId")
-                site.address = group_data.get("address")
-                site.telephone = group_data.get("telephone")
-                site.telephone2 = group_data.get("telephone2")
-                site.telephone_police = group_data.get("telephonePolice")
-                site.telephone_fire = group_data.get("telephoneFire")
-                site.notes = group_data.get("notes")
-                site.lat_long = group_data.get("latLong")
+            if not device_record.site_id:
+                logger.warning(
+                    f"Device {device_id} has no parent site; minting one"
+                )
+                parent_site = create_parent_site(
+                    db, target_server["title"], group_data
+                )
+                device_record.site_id = parent_site.id
         else:
-            # Create new
-            site = Site(
-                id=site_id,
+            # Brand-new Device: mint its 1:1 parent Site as well.
+            parent_site = create_parent_site(
+                db, target_server["title"], group_data
+            )
+            device_record = Device(
+                id=device_id,
                 name=target_server["title"],
+                site_id=parent_site.id,
                 nvr_username=target_server["username"],
                 nvr_password=target_server["password"],
                 sureview_site=True,
                 new=True
             )
+            db.add(device_record)
 
-            # Add group details if available
-            if group_data:
-                site.customer_id = group_data.get("referenceId")
-                site.address = group_data.get("address")
-                site.telephone = group_data.get("telephone")
-                site.telephone2 = group_data.get("telephone2")
-                site.telephone_police = group_data.get("telephonePolice")
-                site.telephone_fire = group_data.get("telephoneFire")
-                site.notes = group_data.get("notes")
-                site.lat_long = group_data.get("latLong")
+        db.flush()
 
-            db.add(site)
+        # Get SureView devices (== our cameras) for this server
+        sureview_devices = get_devices_by_server_id(cookies, server_id) or []
 
-        # Get devices for this server
-        devices = get_devices_by_server_id(cookies, server_id) or []
-
-        for device in devices:
+        for device in sureview_devices:
             try:
                 camera_id = str(device["deviceID"])
 
@@ -226,7 +234,7 @@ def sync_single_server(server_id: int):
                 else:
                     camera = Camera(
                         id=camera_id,
-                        site_id=site_id,
+                        device_id=device_id,
                         name=device["title"],
                         rtsp_url=rtsp_url,
                         sureview_camera=True,

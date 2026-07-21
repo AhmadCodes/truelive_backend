@@ -1,9 +1,14 @@
 """
-Site model for managing surveillance sites.
+Site model — the parent "place" that owns one or more Devices (NVR/DVRs).
+
+Note: the table name `sites` deliberately changes meaning as of migration 008.
+Before 008 it modelled a single NVR/DVR; that entity is now `app.models.device.Device`
+(table `devices`). This class models the physical location: address, contact
+telephones, notes and coordinates.
 """
 
 from sqlalchemy import (
-    Column, String, Boolean, Text, Index
+    Column, String, Text, Index
 )
 from sqlalchemy.orm import relationship
 from app.models.base import BaseModel
@@ -11,15 +16,22 @@ from app.models.base import BaseModel
 
 class Site(BaseModel):
     """
-    Site model representing a surveillance location.
+    Site model representing a physical surveillance location.
+
+    A Site owns many Devices (NVR/DVRs). All location data lives here and only
+    here — Devices carry no address or contact information.
 
     Attributes:
-        id: Primary key (custom string ID)
+        id: Primary key (custom string ID, e.g. ``SITE_<hex>``)
         name: Site name
-        nvr_username: Username for NVR access
-        nvr_password: Encrypted password for NVR access
-        sureview_site: Whether this is a SureView-managed site
-        new: Whether this is a newly added site
+        customer_id: Customer ID from SureView (referenceId)
+        address: Physical address of the site
+        telephone: Primary contact telephone
+        telephone2: Secondary contact telephone
+        telephone_police: Police contact telephone
+        telephone_fire: Fire department contact telephone
+        notes: Site notes and instructions
+        lat_long: Latitude and longitude coordinates
     """
     __tablename__ = "sites"
 
@@ -34,38 +46,8 @@ class Site(BaseModel):
         index=True,
         comment="Site name"
     )
-    nvr_username = Column(
-        String(255),
-        nullable=False,
-        comment="Username for NVR access"
-    )
-    nvr_password = Column(
-        Text,
-        nullable=False,
-        comment="Encrypted password for NVR access"
-    )
-    sureview_site = Column(
-        Boolean,
-        default=False,
-        nullable=False,
-        index=True,
-        comment="Whether this is a SureView-managed site"
-    )
-    new = Column(
-        Boolean,
-        default=True,
-        nullable=False,
-        comment="Whether this is a newly added site"
-    )
-    use_tcp = Column(
-        Boolean,
-        default=False,
-        nullable=False,
-        server_default='false',
-        comment="Site-wide default for RTSP TCP transport (overridable per camera)"
-    )
 
-    # SureView additional fields
+    # Location / contact details (moved up from the former sites table in 008)
     customer_id = Column(
         String(50),
         nullable=True,
@@ -109,29 +91,8 @@ class Site(BaseModel):
     )
 
     # Relationships
-    cameras = relationship(
-        "Camera",
-        back_populates="site",
-        cascade="all, delete-orphan"
-    )
-    category_mappings = relationship(
-        "SiteCategoryMapping",
-        back_populates="site",
-        cascade="all, delete-orphan"
-    )
-    screen_mappings = relationship(
-        "ScreenMapping",
-        back_populates="site",
-        foreign_keys="ScreenMapping.site_id"
-    )
-    layout_config = relationship(
-        "SiteCamerasLayoutConfig",
-        back_populates="site",
-        uselist=False,  # One-to-one relationship
-        cascade="all, delete-orphan"
-    )
-    layout_slots = relationship(
-        "SiteCamerasLayout",
+    devices = relationship(
+        "Device",
         back_populates="site",
         cascade="all, delete-orphan"
     )
@@ -139,7 +100,6 @@ class Site(BaseModel):
     # Table constraints
     __table_args__ = (
         Index("idx_sites_name", "name"),
-        Index("idx_sites_sureview", "sureview_site"),
         Index("idx_sites_customer_id", "customer_id"),
         Index("idx_sites_created_at", "created_at", postgresql_ops={"created_at": "DESC"}),
     )
@@ -147,5 +107,5 @@ class Site(BaseModel):
     def __repr__(self):
         return (
             f"<Site(id='{self.id}', name='{self.name}', "
-            f"sureview_site={self.sureview_site}, new={self.new})>"
+            f"customer_id='{self.customer_id}')>"
         )

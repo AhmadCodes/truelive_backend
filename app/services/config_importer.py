@@ -17,7 +17,7 @@ from app.models.screen import Screen
 from app.models.view import View
 from app.models.screen_mapping import ScreenMapping
 from app.models.camera import Camera
-from app.models.site import Site
+from app.models.device import Device
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ class ImportResult:
     views_created: int = 0
     mappings_created: int = 0
     cameras_skipped: int = 0
-    sites_skipped: int = 0
+    devices_skipped: int = 0
     message: str = ""
     errors: list = field(default_factory=list)
 
@@ -66,13 +66,13 @@ def import_config_for_pc(db: Session, pc_id: str, config: dict) -> ImportResult:
         result.message = "Config 'screens' array is empty"
         return result
 
-    # Get existing cameras and sites for validation
+    # Get existing cameras and devices for validation
     existing_cameras = {c.id for c in db.query(Camera.id).all()}
-    existing_sites = {s.id for s in db.query(Site.id).all()}
+    existing_devices = {d.id for d in db.query(Device.id).all()}
 
     # Track skipped items
     skipped_camera_ids = set()
-    skipped_site_ids = set()
+    skipped_device_ids = set()
 
     try:
         # Clear existing configuration for this PC
@@ -86,9 +86,9 @@ def import_config_for_pc(db: Session, pc_id: str, config: dict) -> ImportResult:
                 screen_config=screen_config,
                 screen_idx=screen_idx,
                 existing_cameras=existing_cameras,
-                existing_sites=existing_sites,
+                existing_devices=existing_devices,
                 skipped_camera_ids=skipped_camera_ids,
-                skipped_site_ids=skipped_site_ids
+                skipped_device_ids=skipped_device_ids
             )
 
             result.screens_created += screen_result['screens_created']
@@ -96,7 +96,7 @@ def import_config_for_pc(db: Session, pc_id: str, config: dict) -> ImportResult:
             result.mappings_created += screen_result['mappings_created']
 
         result.cameras_skipped = len(skipped_camera_ids)
-        result.sites_skipped = len(skipped_site_ids)
+        result.devices_skipped = len(skipped_device_ids)
 
         db.commit()
 
@@ -110,8 +110,8 @@ def import_config_for_pc(db: Session, pc_id: str, config: dict) -> ImportResult:
 
         if skipped_camera_ids:
             result.message += f" (skipped {len(skipped_camera_ids)} missing cameras)"
-        if skipped_site_ids:
-            result.message += f" (skipped {len(skipped_site_ids)} missing sites)"
+        if skipped_device_ids:
+            result.message += f" (skipped {len(skipped_device_ids)} missing devices)"
 
         logger.info(f"Config import for PC {pc_id}: {result.message}")
 
@@ -149,9 +149,9 @@ def _import_screen(
     screen_config: dict,
     screen_idx: int,
     existing_cameras: set,
-    existing_sites: set,
+    existing_devices: set,
     skipped_camera_ids: set,
-    skipped_site_ids: set
+    skipped_device_ids: set
 ) -> dict:
     """Import a single screen configuration."""
     result = {
@@ -228,14 +228,16 @@ def _import_screen(
         for camera_info in tile:
             view_n = camera_info.get('view_n', 0)
             camera_id = camera_info.get('camera_id')
-            site_id = camera_info.get('site_id')
+            # 'site_id' is a FROZEN wire-format key in the device JSON being
+            # imported; it carries the Device id, hence the device_id variable.
+            device_id = camera_info.get('site_id')
 
             # Skip if camera_id is empty or missing
             if not camera_id or camera_id.strip() == '':
                 continue
 
-            # Skip if site_id is empty or missing
-            if not site_id or site_id.strip() == '':
+            # Skip if device id is empty or missing
+            if not device_id or device_id.strip() == '':
                 continue
 
             # Skip if camera doesn't exist in database
@@ -243,9 +245,9 @@ def _import_screen(
                 skipped_camera_ids.add(camera_id)
                 continue
 
-            # Skip if site doesn't exist in database
-            if site_id not in existing_sites:
-                skipped_site_ids.add(site_id)
+            # Skip if device doesn't exist in database
+            if device_id not in existing_devices:
+                skipped_device_ids.add(device_id)
                 continue
 
             # Get the view for this camera
@@ -262,7 +264,7 @@ def _import_screen(
                 view_id=view.id,
                 slot_row=slot_row,
                 slot_col=slot_col,
-                site_id=site_id,
+                device_id=device_id,
                 camera_id=camera_id,
                 playing_state=False
             )
@@ -421,7 +423,7 @@ def copy_layout_from_pc(db: Session, target_pc_id: str, source_pc_id: str) -> Co
                 view_id=new_view_id,
                 slot_row=source_mapping.slot_row,
                 slot_col=source_mapping.slot_col,
-                site_id=source_mapping.site_id,
+                device_id=source_mapping.device_id,
                 camera_id=source_mapping.camera_id,
                 playing_state=False
             )

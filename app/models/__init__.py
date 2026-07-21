@@ -6,6 +6,7 @@ from app.models.base import BaseModel, TimestampMixin
 from app.models.user import User, InvitationToken, AuditLog
 from app.models.category import SiteCategory, SiteCategoryMapping
 from app.models.site import Site
+from app.models.device import Device
 from app.models.camera import Camera
 from app.models.snapshot import Snapshot
 from app.models.site_camera_layout import SiteCamerasLayoutConfig, SiteCamerasLayout
@@ -36,8 +37,9 @@ __all__ = [
     "SiteCategory",
     "SiteCategoryMapping",
 
-    # Site models
+    # Site / Device models
     "Site",
+    "Device",
     "Camera",
     "Snapshot",
     "SiteCamerasLayoutConfig",

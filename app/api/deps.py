@@ -269,7 +269,7 @@ def require_scope(*required_scopes: str):
 # account with one of the listed scopes. The bearer token's prefix determines
 # which path runs: `tlsa_*` → service account, anything else → JWT.
 #
-# Used by sites + cameras endpoints (and any future resource that should be
+# Used by sites, devices + cameras endpoints (and any future resource that should be
 # reachable by both humans and machine integrations).
 # ============================================================================ #
 

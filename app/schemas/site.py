@@ -1,18 +1,21 @@
 """
-Pydantic schemas for site management endpoints.
+Pydantic schemas for Site management endpoints.
+
+As of migration 008 a **Site** is the parent "place" that owns one or more
+Devices (NVR/DVRs). It carries only the location/contact data; NVR credentials
+and flags live on the Device — see ``app/schemas/device.py``.
 """
 
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
-import uuid
+
+from app.schemas.device import DeviceResponse
 
 
 class SiteBase(BaseModel):
-    """Base site schema."""
+    """Base site schema (the physical location)."""
     name: str = Field(..., min_length=1, max_length=255)
-    nvr_username: str = Field(..., min_length=1, max_length=255)
-    nvr_password: str = Field(..., min_length=1)
     customer_id: Optional[str] = Field(None, max_length=50)
     address: Optional[str] = Field(None, max_length=500)
     telephone: Optional[str] = Field(None, max_length=255)
@@ -21,7 +24,6 @@ class SiteBase(BaseModel):
     telephone_fire: Optional[str] = Field(None, max_length=100)
     notes: Optional[str] = None
     lat_long: Optional[str] = Field(None, max_length=100)
-    use_tcp: bool = Field(False, description="Site-wide default for RTSP TCP transport (overridable per camera)")
 
 
 class SiteCreate(SiteBase):
@@ -30,10 +32,8 @@ class SiteCreate(SiteBase):
 
 
 class SiteUpdate(BaseModel):
-    """Schema for updating site details."""
+    """Schema for updating site details. All fields are optional."""
     name: Optional[str] = Field(None, min_length=1, max_length=255)
-    nvr_username: Optional[str] = Field(None, min_length=1, max_length=255)
-    nvr_password: Optional[str] = Field(None, min_length=1)
     customer_id: Optional[str] = Field(None, max_length=50)
     address: Optional[str] = Field(None, max_length=500)
     telephone: Optional[str] = Field(None, max_length=255)
@@ -42,33 +42,12 @@ class SiteUpdate(BaseModel):
     telephone_fire: Optional[str] = Field(None, max_length=100)
     notes: Optional[str] = None
     lat_long: Optional[str] = Field(None, max_length=100)
-    use_tcp: Optional[bool] = Field(None, description="Site-wide default for RTSP TCP transport")
-
-
-class CategoryAssignment(BaseModel):
-    """Schema for assigning category to site."""
-    category_id: uuid.UUID
-
-
-class SiteCategoryResponse(BaseModel):
-    """Site category response schema."""
-    id: uuid.UUID
-    name: str
-    color: int
-    color_hex: str
-
-    class Config:
-        from_attributes = True
 
 
 class SiteResponse(BaseModel):
     """Site response schema."""
     id: str
     name: str
-    nvr_username: Optional[str] = None  # Allow empty strings from database
-    nvr_password: Optional[str] = None  # Allow empty strings from database
-    sureview_site: bool = False
-    new: bool = True
     customer_id: Optional[str] = None
     address: Optional[str] = None
     telephone: Optional[str] = None
@@ -77,7 +56,6 @@ class SiteResponse(BaseModel):
     telephone_fire: Optional[str] = None
     notes: Optional[str] = None
     lat_long: Optional[str] = None
-    use_tcp: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -85,10 +63,18 @@ class SiteResponse(BaseModel):
         from_attributes = True
 
 
+class SiteSummaryResponse(SiteResponse):
+    """Lightweight site response used in list views — no nested devices."""
+    device_count: Optional[int] = 0
+
+    class Config:
+        from_attributes = True
+
+
 class SiteDetailResponse(SiteResponse):
-    """Detailed site response with relationships."""
-    camera_count: Optional[int] = 0
-    categories: List[SiteCategoryResponse] = []
+    """Detailed site response with its devices."""
+    device_count: Optional[int] = 0
+    devices: List[DeviceResponse] = []
 
     class Config:
         from_attributes = True
@@ -96,7 +82,7 @@ class SiteDetailResponse(SiteResponse):
 
 class SiteListResponse(BaseModel):
     """Paginated site list response."""
-    sites: List[SiteDetailResponse]
+    sites: List[SiteSummaryResponse]
     total: int
     page: int
     per_page: int
