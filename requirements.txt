@@ -45,10 +45,6 @@ python-dotenv==1.0.0
 pytz==2023.3
 python-dateutil==2.8.2
 
-# Selenium for SureView
-selenium==4.17.2
-webdriver-manager==4.0.1
-
 # Development & Testing
 pytest==7.4.4
 pytest-asyncio==0.23.3

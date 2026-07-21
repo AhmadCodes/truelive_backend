@@ -13,7 +13,7 @@ import logging
 
 from app.core.config import settings
 from app.database import check_db_health, SessionLocal
-from app.api.v1 import auth, sites, devices, cameras, pcs, screens, views, users, categories, sureview, snapshots, configs, stream, invitations, audit_logs, settings as settings_router
+from app.api.v1 import auth, sites, devices, cameras, pcs, screens, views, users, categories, snapshots, configs, stream, invitations, audit_logs, settings as settings_router
 from app.api.v1 import alert_addresses, alerts as alerts_router, webhook_consumers, service_accounts
 
 
@@ -43,7 +43,6 @@ openapi_tags = [
     {"name": "Users"},
     {"name": "Audit Logs"},
     {"name": "Categories"},
-    {"name": "SureView"},
     {"name": "System Settings"},
     {"name": "Snapshots"},
     {"name": "Configurations"},
@@ -264,12 +263,6 @@ app.include_router(
     categories.router,
     prefix=f"{settings.API_V1_PREFIX}/categories",
     tags=["Categories"]
-)
-
-app.include_router(
-    sureview.router,
-    prefix=f"{settings.API_V1_PREFIX}/sureview",
-    tags=["SureView"]
 )
 
 app.include_router(

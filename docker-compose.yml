@@ -110,10 +110,6 @@ services:
       - CELERY_RESULT_BACKEND=redis://:YtrewqQwerty123123Ytrewq@redis:6379/1
       - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
       - JWT_SECRET=${JWT_SECRET:-your-jwt-secret-key}
-      - SUREVIEW_USERNAME=${SUREVIEW_USERNAME}
-      - SUREVIEW_PASSWORD=${SUREVIEW_PASSWORD}
-      - SUREVIEW_API_URL=${SUREVIEW_API_URL}
-      - SUREVIEW_LOGIN_URL=${SUREVIEW_LOGIN_URL}
     depends_on:
       postgres:
         condition: service_healthy

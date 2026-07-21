@@ -140,7 +140,6 @@ async def create_device(
         site_id=site.id,
         nvr_username=device_data.nvr_username,
         nvr_password=device_data.nvr_password,
-        sureview_site=False,
         new=True,
         use_tcp=device_data.use_tcp
     )

@@ -68,7 +68,6 @@ async def create_camera(
         name=camera_data.name,
         rtsp_url=camera_data.rtsp_url,
         main_stream_url=camera_data.main_stream_url,
-        sureview_camera=camera_data.sureview_camera,
         new=camera_data.new,
         use_tcp=camera_data.use_tcp
     )
@@ -98,7 +97,6 @@ async def create_camera(
         "name": new_camera.name,
         "rtsp_url": new_camera.rtsp_url,
         "main_stream_url": new_camera.main_stream_url,
-        "sureview_camera": new_camera.sureview_camera,
         "new": new_camera.new,
         "use_tcp": new_camera.use_tcp,
         "created_at": new_camera.created_at,
@@ -113,7 +111,6 @@ async def list_cameras(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(50, ge=1, le=1000, description="Number of records to return"),
     device_id: Optional[str] = Query(None, description="Filter by device ID"),
-    sureview_camera: Optional[bool] = Query(None, description="Filter by SureView camera flag"),
     new: Optional[bool] = Query(None, description="Filter by new camera flag"),
     search: Optional[str] = Query(None, description="Search by camera name or ID")
 ):
@@ -128,7 +125,6 @@ async def list_cameras(
         skip: Number of records to skip (pagination)
         limit: Number of records to return (pagination)
         device_id: Filter by device ID
-        sureview_camera: Filter by SureView camera flag
         new: Filter by new camera flag
         search: Search by camera name or ID
 
@@ -142,9 +138,6 @@ async def list_cameras(
     # Apply filters
     if device_id:
         query = query.filter(Camera.device_id == device_id)
-
-    if sureview_camera is not None:
-        query = query.filter(Camera.sureview_camera == sureview_camera)
 
     if new is not None:
         query = query.filter(Camera.new == new)
@@ -172,7 +165,6 @@ async def list_cameras(
             "name": camera.name,
             "rtsp_url": camera.rtsp_url,
             "main_stream_url": camera.main_stream_url,
-            "sureview_camera": camera.sureview_camera,
             "new": camera.new,
             "use_tcp": camera.use_tcp,
             "created_at": camera.created_at,
@@ -188,7 +180,6 @@ async def count_cameras(
     _auth: Annotated[object, Depends(user_or_scope("cameras:read", "cameras:manage"))],
     db: DBSession,
     device_id: Optional[str] = Query(None, description="Filter by device ID"),
-    sureview_camera: Optional[bool] = Query(None, description="Filter by SureView camera flag"),
     new: Optional[bool] = Query(None, description="Filter by new camera flag")
 ):
     """
@@ -198,7 +189,6 @@ async def count_cameras(
         current_user: Current authenticated user
         db: Database session
         device_id: Filter by device ID
-        sureview_camera: Filter by SureView camera flag
         new: Filter by new camera flag
 
     Returns:
@@ -208,9 +198,6 @@ async def count_cameras(
 
     if device_id:
         query = query.filter(Camera.device_id == device_id)
-
-    if sureview_camera is not None:
-        query = query.filter(Camera.sureview_camera == sureview_camera)
 
     if new is not None:
         query = query.filter(Camera.new == new)
@@ -260,7 +247,6 @@ async def get_camera(
         "name": camera.name,
         "rtsp_url": camera.rtsp_url,
         "main_stream_url": camera.main_stream_url,
-        "sureview_camera": camera.sureview_camera,
         "new": camera.new,
         "use_tcp": camera.use_tcp,
         "created_at": camera.created_at,
@@ -320,9 +306,6 @@ async def update_camera(
     if camera_data.main_stream_url is not None:
         camera.main_stream_url = camera_data.main_stream_url
 
-    if camera_data.sureview_camera is not None:
-        camera.sureview_camera = camera_data.sureview_camera
-
     if camera_data.new is not None:
         camera.new = camera_data.new
 
@@ -346,7 +329,6 @@ async def update_camera(
         "name": camera.name,
         "rtsp_url": camera.rtsp_url,
         "main_stream_url": camera.main_stream_url,
-        "sureview_camera": camera.sureview_camera,
         "new": camera.new,
         "use_tcp": camera.use_tcp,
         "created_at": camera.created_at,
@@ -512,7 +494,6 @@ async def get_cameras_by_device(
             "name": camera.name,
             "rtsp_url": camera.rtsp_url,
             "main_stream_url": camera.main_stream_url,
-            "sureview_camera": camera.sureview_camera,
             "new": camera.new,
             "use_tcp": camera.use_tcp,
             "created_at": camera.created_at,

@@ -74,7 +74,6 @@ class DeviceResponse(BaseModel):
     site_name: Optional[str] = None
     nvr_username: Optional[str] = None  # Allow empty strings from database
     nvr_password: Optional[str] = None  # Allow empty strings from database
-    sureview_site: bool = False
     new: bool = True
     use_tcp: bool = False
     created_at: datetime

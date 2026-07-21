@@ -449,8 +449,7 @@ async def get_devices_for_category(
             "device_id": device.id,
             "name": device.name,
             "site_id": device.site_id,
-            "customer_id": device.site.customer_id if device.site else None,
-            "sureview_site": device.sureview_site
+            "customer_id": device.site.customer_id if device.site else None
         }
         for device in devices
     ]

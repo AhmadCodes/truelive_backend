@@ -13,7 +13,6 @@ class CameraBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=255, description="Display name of the camera")
     rtsp_url: str = Field(..., description="RTSP URL for camera streaming")
     main_stream_url: Optional[str] = Field(None, description="Main stream URL for camera (optional)")
-    sureview_camera: bool = Field(False, description="Flag indicating if this is a SureView integrated camera")
     new: bool = Field(True, description="Flag indicating if this is a newly added camera")
     use_tcp: Optional[bool] = Field(None, description="Force RTSP over TCP; null to inherit from device")
 
@@ -31,7 +30,6 @@ class CameraUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255, description="Display name of the camera")
     rtsp_url: Optional[str] = Field(None, description="RTSP URL for camera streaming")
     main_stream_url: Optional[str] = Field(None, description="Main stream URL for camera")
-    sureview_camera: Optional[bool] = Field(None, description="Flag indicating if this is a SureView integrated camera")
     new: Optional[bool] = Field(None, description="Flag indicating if this is a newly added camera")
     use_tcp: Optional[bool] = Field(
         None,
@@ -49,7 +47,6 @@ class CameraResponse(BaseModel):
     name: str
     rtsp_url: str
     main_stream_url: Optional[str]
-    sureview_camera: bool
     new: bool
     use_tcp: Optional[bool] = None
 
@@ -73,7 +70,6 @@ class CameraSummary(BaseModel):
     id: str
     device_id: str
     name: str
-    sureview_camera: bool
     new: bool
     use_tcp: Optional[bool] = None
 

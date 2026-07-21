@@ -14,7 +14,6 @@ from app.models.pc import PC
 from app.models.screen import Screen
 from app.models.view import View
 from app.models.screen_mapping import ScreenMapping
-from app.models.sync_job import SyncJob, SyncJobStatus
 from app.models.system_setting import SystemSetting
 from app.models.alerting import (
     AlertAddress, RawMessage, Alert, AlertMedia,
@@ -52,8 +51,6 @@ __all__ = [
     "ScreenMapping",
 
     # System models
-    "SyncJob",
-    "SyncJobStatus",
     "SystemSetting",
 
     # Alerting models

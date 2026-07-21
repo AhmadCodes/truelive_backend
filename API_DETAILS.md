@@ -27,7 +27,6 @@ Authorization: Bearer <access_token>
 7. [Categories](#categories)
 8. [Configurations](#configurations)
 9. [Snapshots](#snapshots)
-10. [SureView Integration](#sureview-integration)
 
 ---
 
@@ -414,7 +413,6 @@ List all sites with optional filtering and pagination.
       "telephone_fire": "string",
       "notes": "string",
       "lat_long": "string",
-      "sureview_site": boolean,
       "new": boolean,
       "camera_count": integer,  // If include_cameras=true
       "categories": [],  // Array of category objects
@@ -453,7 +451,6 @@ Create a new site.
   "name": "string",
   "nvr_username": "string",
   "nvr_password": "string",
-  "sureview_site": false,
   "new": true,
   "use_tcp": boolean,
   "created_at": "datetime",
@@ -631,7 +628,6 @@ Create a new camera.
   "name": "string",
   "rtsp_url": "string",
   "main_stream_url": "string",  // Optional
-  "sureview_camera": boolean,  // Default: false
   "new": boolean,  // Default: true
   "use_tcp": boolean | null  // Default: null — null inherits site.use_tcp; true/false overrides
 }
@@ -646,7 +642,6 @@ Create a new camera.
   "name": "string",
   "rtsp_url": "string",
   "main_stream_url": "string",
-  "sureview_camera": boolean,
   "new": boolean,
   "use_tcp": boolean | null,  // null = inherit site.use_tcp
   "created_at": "datetime",
@@ -670,7 +665,6 @@ List all cameras with optional filtering.
 - `skip` (integer, default: 0) - Records to skip
 - `limit` (integer, default: 50, max: 500) - Records to return
 - `site_id` (string) - Filter by site ID
-- `sureview_camera` (boolean) - Filter by SureView flag
 - `new` (boolean) - Filter by new flag
 - `search` (string) - Search by camera name or ID
 
@@ -686,7 +680,6 @@ Get total count of cameras.
 
 **Query Parameters:**
 - `site_id` (string) - Filter by site ID
-- `sureview_camera` (boolean) - Filter by SureView flag
 - `new` (boolean) - Filter by new flag
 
 **Response:** `200 OK`
@@ -730,7 +723,6 @@ Update camera details.
   "name": "string",
   "rtsp_url": "string",
   "main_stream_url": "string",
-  "sureview_camera": boolean,
   "new": boolean,
   "use_tcp": boolean | null  // Omit: no change. true/false: override. null: clear override (inherit site)
 }
@@ -1744,8 +1736,7 @@ Get all sites assigned to a category.
     {
       "site_id": "string",
       "name": "string",
-      "customer_id": "string",
-      "sureview_site": boolean
+      "customer_id": "string"
     }
   ]
 }
@@ -2112,132 +2103,6 @@ Get overall snapshot statistics.
 
 ---
 
-## SureView Integration
-
-### POST /sureview/get_sites
-
-Get sites filtered by customer_id.
-
-**Authentication:** CurrentUser
-
-**Request Body:**
-```json
-{
-  "customer_id": "string",
-  "site_ids": ["string"]  // Optional
-}
-```
-
-**Response:** `200 OK`
-```json
-{
-  "customer_id": "string",
-  "sites": [
-    {
-      "address": "string",
-      "telephone": "string",
-      "telephone2": "string",
-      "telephonePolice": "string",
-      "telephoneFire": "string",
-      "notes": "string",
-      "latLong": "string",
-      "site_id": "string",
-      "name": "string",
-      "camera_count": integer
-    }
-  ]
-}
-```
-
----
-
-### POST /sureview/get_all_sites
-
-Get all sites grouped by customer_id.
-
-**Authentication:** CurrentUser
-
-**Response:** `200 OK`
-```json
-[
-  {
-    "customer_id": "string",
-    "customer_sites": [
-      {
-        "customer_id": "string",
-        "site_id": "string",
-        "name": "string",
-        "camera_count": integer
-      }
-    ]
-  }
-]
-```
-
----
-
-### POST /sureview/get_cameras
-
-Get all cameras for a specific site.
-
-**Authentication:** CurrentUser
-
-**Request Body:**
-```json
-{
-  "site_id": "string"
-}
-```
-
-**Response:** `200 OK`
-```json
-[
-  {
-    "camera_id": "string",
-    "camera_name": "string",
-    "rtsp_url": "string"
-  }
-]
-```
-
-**Errors:**
-- `404 Not Found` - Site not found
-
----
-
-### POST /sureview/sync
-
-Manually trigger SureView device synchronization.
-
-**Authentication:** AdminUser
-
-**Response:** `200 OK`
-```json
-{
-  "success": boolean,
-  "message": "SureView sync completed",
-  "result": {
-    "sites_updated": integer,
-    "cameras_updated": integer,
-    "sites_removed": integer,
-    "cameras_removed": integer,
-    "errors": integer
-  }
-}
-```
-
-**Sync Process:**
-1. Authenticates to SureView via Selenium
-2. Fetches all servers and their devices
-3. Updates or creates sites and cameras in database
-4. Fetches group details for additional site information
-5. Removes stale entries not present in SureView
-
-**Errors:**
-- `500 Internal Server Error` - Sync failed
-
----
-
 ## Error Responses
 
 All endpoints may return the following error responses:
@@ -2343,7 +2208,6 @@ Many list endpoints support filtering:
 - `category_id` - Filter by category
 - `role` - Filter by role
 - `is_active` - Filter by active status
-- `sureview_camera` - Filter SureView cameras
 - `new` - Filter new items
 - `search` - Full-text search (usually name, ID, or email)
 

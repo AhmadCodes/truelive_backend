@@ -44,7 +44,7 @@ class SystemSetting(BaseModel):
         String(50),
         nullable=False,
         index=True,
-        comment="Setting category (sureview, smtp, tasks, snapshots, etc.)"
+        comment="Setting category (smtp, tasks, snapshots, etc.)"
     )
 
     description = Column(

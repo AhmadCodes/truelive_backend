@@ -24,7 +24,6 @@ class Device(BaseModel):
         nvr_username: Username for NVR access
         nvr_password: Encrypted password for NVR access
         use_tcp: Device-wide default for RTSP TCP transport
-        sureview_site: Whether this is a SureView-managed device
         new: Whether this is a newly added device
     """
     __tablename__ = "devices"
@@ -56,13 +55,6 @@ class Device(BaseModel):
         Text,
         nullable=False,
         comment="Encrypted password for NVR access"
-    )
-    sureview_site = Column(
-        Boolean,
-        default=False,
-        nullable=False,
-        index=True,
-        comment="Whether this is a SureView-managed device"
     )
     new = Column(
         Boolean,
@@ -113,7 +105,6 @@ class Device(BaseModel):
     # Table constraints
     __table_args__ = (
         Index("idx_devices_name", "name"),
-        Index("idx_devices_sureview", "sureview_site"),
         Index("idx_devices_site_id", "site_id"),
         Index("idx_devices_created_at", "created_at", postgresql_ops={"created_at": "DESC"}),
     )
@@ -122,5 +113,5 @@ class Device(BaseModel):
         return (
             f"<Device(id='{self.id}', name='{self.name}', "
             f"site_id='{self.site_id}', "
-            f"sureview_site={self.sureview_site}, new={self.new})>"
+            f"new={self.new})>"
         )

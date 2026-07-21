@@ -76,7 +76,6 @@ def sample_site(db_session):
         name="Test Site",
         nvr_username="admin",
         nvr_password="password123",
-        sureview_site=False,
         new=False,
         use_tcp=False
     )
@@ -95,7 +94,6 @@ def sample_camera(db_session, sample_site):
         name="Front Door Camera",
         rtsp_url="rtsp://admin:password@192.168.1.100:554/stream",
         main_stream_url="rtsp://admin:password@192.168.1.100:554/main",
-        sureview_camera=False,
         new=False,
         use_tcp=False
     )
@@ -293,18 +291,6 @@ def mock_cv2():
 
 
 @pytest.fixture
-def mock_selenium():
-    """Mock Selenium WebDriver."""
-    with patch('selenium.webdriver.Chrome') as mock_driver:
-        mock_instance = MagicMock()
-        mock_instance.get_cookies.return_value = [
-            {"name": "session_id", "value": "test_session_123"}
-        ]
-        mock_driver.return_value = mock_instance
-        yield mock_driver
-
-
-@pytest.fixture
 def mock_socketio_client():
     """Mock Socket.IO client."""
     with patch('socketio.Client') as mock_client:
@@ -364,8 +350,6 @@ def mock_settings():
     settings.WEBSOCKET_URL = "http://localhost:8080"
     settings.WEBSOCKET_HOST = "0.0.0.0"
     settings.WEBSOCKET_PORT = 8080
-    settings.SUREVIEW_USERNAME = "test_user"
-    settings.SUREVIEW_PASSWORD = "test_pass"
     settings.SCREENSHOT_CAPTURE_TIMEOUT = 10
     settings.SCREENSHOT_MAX_WORKERS = 5
     settings.SCREENSHOT_MAX_AGE_HOURS = 24

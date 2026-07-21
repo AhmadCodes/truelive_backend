@@ -11,7 +11,7 @@ This is a production-ready FastAPI backend that replaces the Streamlit applicati
 - **Views & Layouts**: Custom camera grid layouts
 - **Users & Auth**: JWT-based authentication with RBAC
 - **Real-time Communication**: WebSocket for live configuration deployment
-- **Background Tasks**: Screenshot capture and SureView device synchronization
+- **Background Tasks**: Screenshot capture
 
 ## Technology Stack
 
@@ -63,13 +63,11 @@ backend/
 │   ├── services/                # Business logic (❌ To implement)
 │   │   ├── config_generator.py
 │   │   ├── screenshot_service.py
-│   │   ├── sureview_service.py
 │   │   └── websocket_service.py
 │   │
 │   ├── tasks/                   # Background tasks (❌ To implement)
 │   │   ├── celery_app.py
-│   │   ├── screenshot_tasks.py
-│   │   └── sureview_tasks.py
+│   │   └── screenshot_tasks.py
 │   │
 │   ├── utils/                   # Utilities (❌ To implement)
 │   │   └── url_processor.py
@@ -204,13 +202,11 @@ Once running, access:
 3. **Services**:
    - Configuration generator (DB → device JSON)
    - Screenshot capture service (OpenCV)
-   - SureView integration (Selenium)
    - WebSocket service
 
 4. **Background Tasks**:
    - Celery app configuration
    - Screenshot update task (every 10 min)
-   - SureView sync task (every 10 min)
 
 5. **Database Migrations**:
    - Create initial migration with all tables
@@ -316,7 +312,7 @@ celery_app.conf.update(
 )
 
 # Import tasks
-from app.tasks import screenshot_tasks, sureview_tasks
+from app.tasks import screenshot_tasks
 ```
 
 ### WebSocket Server
