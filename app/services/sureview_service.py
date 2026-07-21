@@ -67,7 +67,10 @@ def create_parent_site(
         The newly created (flushed) Site
     """
     site = Site(
-        id=f"SITE_{uuid.uuid4().hex[:8].upper()}",
+        # Must match the scheme used by POST /api/v1/sites and by migration
+        # 008's backfill ('SITE_' || upper(substr(md5(d.id), 1, 12))), so every
+        # parent Site id has the same shape regardless of how it was created.
+        id=f"SITE_{uuid.uuid4().hex[:12].upper()}",
         name=name,
     )
 
