@@ -6,17 +6,54 @@ for a PC based on provided camera list and layout specifications.
 """
 
 import logging
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple
 from sqlalchemy.orm import Session
 
 from app.models.pc import PC
 from app.models.screen import Screen
+from app.models.screen_layout import ScreenLayout
 from app.models.view import View
 from app.models.screen_mapping import ScreenMapping
 from app.models.camera import Camera
 from app.schemas.pc import ScreenConfigRequest
 
 logger = logging.getLogger(__name__)
+
+
+def get_or_create_layout_for_pc(pc: PC, db: Session) -> str:
+    """
+    Resolve the screen layout id for a PC, auto-creating and assigning a layout
+    if the PC has none.
+
+    A PC decoupled from its screens points at a ScreenLayout via
+    ``pc.screen_layout_id``. When that pointer is NULL, mint a layout named
+    after the PC (id ``lay_{pc.id}``, matching the migration seed convention),
+    assign it to the PC, and return its id.
+
+    Reused by config_importer.copy_layout_from_pc for target-layout resolution.
+
+    Args:
+        pc: PC object (already loaded from the session)
+        db: Database session
+
+    Returns:
+        The resolved (existing or newly created) screen layout id
+    """
+    if pc.screen_layout_id is not None:
+        return pc.screen_layout_id
+
+    layout_id = f"lay_{pc.id}"
+    layout = db.query(ScreenLayout).filter(ScreenLayout.id == layout_id).first()
+    if layout is None:
+        layout = ScreenLayout(id=layout_id, name=pc.name)
+        db.add(layout)
+        db.flush()
+        logger.info(f"Auto-created screen layout '{layout_id}' for PC {pc.id}")
+
+    pc.screen_layout_id = layout_id
+    db.flush()
+
+    return layout_id
 
 
 def validate_camera_ids(camera_ids: List[str], db: Session) -> List[str]:
@@ -44,17 +81,14 @@ def validate_camera_ids(camera_ids: List[str], db: Session) -> List[str]:
 
 
 def get_or_create_screen(
-    pc_id: str,
-    screen_config: ScreenConfigRequest,
-    screen_index: int,
-    db: Session
+    layout_id: str, screen_config: ScreenConfigRequest, screen_index: int, db: Session
 ) -> Tuple[Screen, bool]:
     """
     Get existing screen by name or create new one.
     If screen exists, delete all its views and mappings.
 
     Args:
-        pc_id: PC identifier
+        layout_id: Screen layout identifier
         screen_config: Screen configuration
         screen_index: Index for generating screen ID
         db: Database session
@@ -62,14 +96,17 @@ def get_or_create_screen(
     Returns:
         Tuple of (Screen object, is_new boolean)
     """
-    # Check if screen with same name exists for this PC
-    existing_screen = db.query(Screen).filter(
-        Screen.pc_id == pc_id,
-        Screen.name == screen_config.name
-    ).first()
+    # Check if screen with same name exists for this layout
+    existing_screen = (
+        db.query(Screen)
+        .filter(Screen.screen_layout_id == layout_id, Screen.name == screen_config.name)
+        .first()
+    )
 
     if existing_screen:
-        logger.info(f"Found existing screen '{screen_config.name}' for PC {pc_id}, updating...")
+        logger.info(
+            f"Found existing screen '{screen_config.name}' for layout {layout_id}, updating..."
+        )
 
         # Delete all views (which cascades to screen_mappings)
         db.query(View).filter(View.screen_id == existing_screen.id).delete()
@@ -83,19 +120,22 @@ def get_or_create_screen(
 
         return existing_screen, False
     else:
-        logger.info(f"Creating new screen '{screen_config.name}' for PC {pc_id}...")
+        logger.info(
+            f"Creating new screen '{screen_config.name}' for layout {layout_id}..."
+        )
 
-        # Generate screen ID
-        screen_id = f"{pc_id}_screen_{screen_index}"
+        # Generate screen ID. KEEP the trailing "_screen_{int}" suffix so the
+        # next-index split-parse in configure_pc_screens keeps working.
+        screen_id = f"{layout_id}_screen_{screen_index}"
 
         # Create new screen
         new_screen = Screen(
             id=screen_id,
-            pc_id=pc_id,
+            screen_layout_id=layout_id,
             name=screen_config.name,
             rows=min(screen_config.layout_rows, 4),
             columns=min(screen_config.layout_cols, 4),
-            switching_interval=screen_config.switch_interval
+            switching_interval=screen_config.switch_interval,
         )
 
         db.add(new_screen)
@@ -106,9 +146,7 @@ def get_or_create_screen(
 
 
 def create_views_for_screen(
-    screen: Screen,
-    screen_config: ScreenConfigRequest,
-    db: Session
+    screen: Screen, screen_config: ScreenConfigRequest, db: Session
 ) -> List[View]:
     """
     Create views for a screen.
@@ -132,7 +170,7 @@ def create_views_for_screen(
             name=f"{screen.name} - View {view_number}",
             layout_rows=screen_config.layout_rows,
             layout_columns=screen_config.layout_cols,
-            view_number=view_number
+            view_number=view_number,
         )
 
         db.add(view)
@@ -146,10 +184,7 @@ def create_views_for_screen(
 
 
 def distribute_cameras_and_create_mappings(
-    screens_views: List[Tuple[Screen, List[View]]],
-    camera_ids: List[str],
-    pc_id: str,
-    db: Session
+    screens_views: List[Tuple[Screen, List[View]]], camera_ids: List[str], db: Session
 ) -> int:
     """
     Distribute cameras across screens and views, creating screen mappings.
@@ -165,7 +200,6 @@ def distribute_cameras_and_create_mappings(
     Args:
         screens_views: List of (Screen, List[View]) tuples
         camera_ids: List of camera IDs to distribute
-        pc_id: PC identifier
         db: Database session
 
     Returns:
@@ -205,14 +239,12 @@ def distribute_cameras_and_create_mappings(
 
                     # Create screen mapping
                     mapping = ScreenMapping(
-                        pc_id=pc_id,
                         screen_id=screen.id,
                         view_id=view.id,
                         slot_row=row,
                         slot_col=col,
                         device_id=camera.device_id,
                         camera_id=camera.id,
-                        playing_state=False
                     )
 
                     db.add(mapping)
@@ -221,15 +253,15 @@ def distribute_cameras_and_create_mappings(
 
     db.commit()
 
-    logger.info(f"Created {mappings_created} camera mappings across all screens and views")
+    logger.info(
+        f"Created {mappings_created} camera mappings across all screens and views"
+    )
 
     return mappings_created
 
 
 def configure_pc_screens(
-    pc_id: str,
-    request: 'ConfigurePCScreensRequest',
-    db: Session
+    pc_id: str, request: "ConfigurePCScreensRequest", db: Session
 ) -> Dict[str, Any]:
     """
     Main orchestration function for configuring PC screens.
@@ -252,8 +284,14 @@ def configure_pc_screens(
 
     logger.info(f"Configuring screens for PC '{pc.name}' ({pc_id})")
 
-    # Get highest existing screen index for this PC to avoid ID conflicts
-    existing_screens = db.query(Screen).filter(Screen.pc_id == pc_id).all()
+    # Resolve the PC's screen layout, auto-creating and assigning one if the PC
+    # has no layout yet.
+    layout_id = get_or_create_layout_for_pc(pc, db)
+
+    # Get highest existing screen index for this layout to avoid ID conflicts
+    existing_screens = (
+        db.query(Screen).filter(Screen.screen_layout_id == layout_id).all()
+    )
     existing_indices = []
     for screen in existing_screens:
         # Extract index from ID like "PC001_screen_3"
@@ -275,7 +313,9 @@ def configure_pc_screens(
     # Process each screen configuration
     for screen_config in request.screens:
         # Get or create screen
-        screen, is_new = get_or_create_screen(pc_id, screen_config, next_screen_index, db)
+        screen, is_new = get_or_create_screen(
+            layout_id, screen_config, next_screen_index, db
+        )
 
         # Only increment index if we created a new screen
         if is_new:
@@ -295,10 +335,7 @@ def configure_pc_screens(
 
     # Distribute cameras and create mappings
     mappings_created = distribute_cameras_and_create_mappings(
-        screens_views,
-        request.camera_ids,
-        pc_id,
-        db
+        screens_views, request.camera_ids, db
     )
 
     # Calculate cameras used (may be less than total if we ran out of slots)
@@ -311,7 +348,7 @@ def configure_pc_screens(
         "views_created": views_created,
         "mappings_created": mappings_created,
         "cameras_used": cameras_used,
-        "message": f"PC screens configured successfully: {screens_created} created, {screens_updated} updated"
+        "message": f"PC screens configured successfully: {screens_created} created, {screens_updated} updated",
     }
 
     logger.info(f"Configuration complete: {result}")
