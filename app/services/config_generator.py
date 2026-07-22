@@ -11,6 +11,7 @@ from app.utils.url_processor import try_encode_rtsp_password
 from app.models.category import SiteCategory
 from app.models.camera import Camera
 from app.models.device import Device
+from app.models.site import Site
 from app.models.screen import Screen
 from app.models.view import View
 from app.models.site_camera_layout import SiteCamerasLayout
@@ -25,12 +26,14 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
     Transforms the PC configuration (from database) into the JSON format
     expected by PC applications.
 
-    WIRE FORMAT IS FROZEN. The ``site_id`` / ``site_name`` / ``osd_text`` keys
-    below (both in the input mapping structure produced by
-    ``config_loader.load_pc_config`` and in the emitted source entries) keep
-    meaning the **Device** (the NVR/DVR — what used to be called a Site before
-    migration 008). They must never be renamed or re-pointed at the new parent
-    Site: PC clients in the field consume them as-is.
+    WIRE FORMAT NOTE. The INPUT mapping's ``site_id`` / ``site_name`` (produced
+    by ``config_loader.load_pc_config``) still hold the **Device** id/name. The
+    EMITTED source entries now expose the **real parent Site** as
+    ``site_id`` / ``site_name`` and the Device as ``device_id`` / ``device_name``
+    beside them; ``id`` is ``"{site_id}_{device_id}_{camera_id}"`` and
+    ``osd_text`` is ``"{site_name} - {device_name} - {camera_name}"``. The top
+    level also carries this PC's ``pc_id`` / ``pc_name``. (The PC client consumes
+    this new shape — it was updated in lockstep with this change.)
 
     Args:
         site_config: Configuration dict with structure:
@@ -71,6 +74,8 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
     Returns:
         Device configuration dict:
             {
+                "pc_id": "PC123",
+                "pc_name": "PC Name",
                 "width": 640,
                 "height": 480,
                 "screens": [
@@ -82,8 +87,10 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
                         "source_groups": [
                             [
                                 {
-                                    "id": "site_id_camera_id",
-                                    "osd_text": "Camera Name (Site Name)",
+                                    "id": "site_id_device_id_camera_id",
+                                    "site_id": "SITE_...", "site_name": "Site Name",
+                                    "device_id": "...", "device_name": "Device Name",
+                                    "osd_text": "Site Name - Device Name - Camera Name",
                                     "url": "rtsp://encoded_url",
                                     "osd_color": "0xFFFFFFFF",
                                     "LocationUris": ["rtsp://...", "rtsp://..."],
@@ -97,19 +104,34 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
                 ]
             }
     """
-    # Initialize default configuration
-    config = {"width": 640, "height": 480, "screens": []}
-
     pcs = site_config.get("pcs", {})
     mappings = site_config.get("mappings", {}).get("screen_to_cameras", {})
 
-    # The slot "site_id" key carries a **Device** id (frozen wire format), but
-    # categories and camera layouts hang off the parent Site. Resolve the whole
-    # device → parent-site mapping once rather than per slot.
+    # Single-PC by contract: every caller passes load_pc_config(one pc), so
+    # `pcs` has exactly one entry and the top-level pc_id/pc_name below identify
+    # it. (If ever fed a multi-PC dict, the top level would label only the first
+    # PC while screens[] mixes all of them — not a current code path.)
+    first_pc_id = next(iter(pcs), "")
+    first_pc = pcs.get(first_pc_id, {})
+
+    # Initialize default configuration
+    config = {
+        "pc_id": first_pc_id,
+        "pc_name": first_pc.get("name", ""),
+        "width": 640,
+        "height": 480,
+        "screens": [],
+    }
+
+    # Resolve each Device to its parent Site (id + name) once. The slot data's
+    # "site_id"/"site_name" actually hold the **Device** id/name (loader naming);
+    # the wire config now exposes the real Site here and the Device separately.
     try:
         device_to_site = {
-            device_id: parent_site_id
-            for device_id, parent_site_id in db.query(Device.id, Device.site_id).all()
+            device_id: (site_id, site_name)
+            for device_id, site_id, site_name in db.query(Device.id, Site.id, Site.name)
+            .join(Site, Site.id == Device.site_id)
+            .all()
         }
     except Exception as e:
         logger.error(f"Error loading device → site mapping: {e}")
@@ -242,38 +264,41 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
                         view_name = view_obj.name if view_obj else view_key
 
                         if slot_data and slot_data.get("camera_id"):
-                            # NOTE: 'site_id' here is a FROZEN wire-format key that
-                            # carries the Device id (see module docstring). The
-                            # colour and the layout are looked up from that
-                            # device's parent Site.
-                            parent_site_id = device_to_site.get(
-                                slot_data.get("site_id", ""), ""
+                            # The loader's "site_id"/"site_name" actually hold the
+                            # DEVICE id/name. Resolve the real parent Site; expose
+                            # both Site and Device explicitly on the wire.
+                            device_id = slot_data.get("site_id", "")
+                            device_name = slot_data.get("site_name", "")
+                            camera_id = slot_data.get("camera_id", "")
+                            camera_name = slot_data.get("camera_name", "")
+                            parent_site_id, parent_site_name = device_to_site.get(
+                                device_id, ("", "")
                             )
 
-                            # Get site category color
+                            # osd_color + LocationUris are still parent-Site derived.
                             osd_color = _get_site_color(parent_site_id, db)
-
-                            # Get LocationUris from site_cameras_layout
                             location_uris = _get_location_uris(parent_site_id, db)
 
-                            # Create source entry with all new fields.
-                            # FROZEN wire format: "site_id"/"site_name"/"osd_text"
-                            # carry the Device id/name — do NOT rename or re-point.
+                            # Wire format: site_id/site_name = the real Site;
+                            # device_id/device_name sit beside them; id and osd_text
+                            # are composed site → device → camera.
                             try:
                                 source_entry = {
                                     "LocationUris": location_uris,
-                                    "id": f"{slot_data.get('site_id', '')}_{slot_data.get('camera_id', '')}",
-                                    "camera_id": slot_data.get("camera_id", ""),
-                                    "camera_name": slot_data.get("camera_name", ""),
-                                    "site_id": slot_data.get("site_id", ""),
-                                    "site_name": slot_data.get("site_name", ""),
+                                    "id": f"{parent_site_id}_{device_id}_{camera_id}",
+                                    "camera_id": camera_id,
+                                    "camera_name": camera_name,
+                                    "site_id": parent_site_id,
+                                    "site_name": parent_site_name,
+                                    "device_id": device_id,
+                                    "device_name": device_name,
                                     "view_n": view_n,  # Integer, not string
                                     "view_id": view_id,
                                     "view_name": view_name,
                                     "pos_x": row_num,
                                     "pos_y": col_num,
                                     "osd_color": osd_color,
-                                    "osd_text": f"{slot_data.get('camera_name', '')} ({slot_data.get('site_name', '')})",
+                                    "osd_text": f"{parent_site_name} - {device_name} - {camera_name}",
                                     "url": try_encode_rtsp_password(
                                         slot_data.get("rtsp_url", "")
                                     ),
@@ -456,8 +481,8 @@ def _create_empty_source(
     Returns:
         Empty source dict with all fields including position metadata
     """
-    # FROZEN wire format: "site_id"/"site_name" are Device-scoped keys that PC
-    # clients depend on. Keep the names and the empty-string defaults as-is.
+    # Empty slots carry the same key shape as filled ones (site_id/site_name =
+    # Site, device_id/device_name = Device) with blank values.
     return {
         "LocationUris": [],
         "id": "",
@@ -465,6 +490,8 @@ def _create_empty_source(
         "camera_name": "",
         "site_id": "",
         "site_name": "",
+        "device_id": "",
+        "device_name": "",
         "view_n": view_n,  # Integer
         "view_id": view_id,
         "view_name": view_name,
