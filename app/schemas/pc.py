@@ -77,6 +77,7 @@ class PCResponse(BaseModel):
     manager_id: Optional[str] = None
     screen_layout_id: Optional[str] = None
     last_connected: Optional[datetime] = None
+    last_seen: Optional[datetime] = None
     last_applied: Optional[datetime] = None
 
     class Config:
@@ -227,6 +228,10 @@ class PCConnectionStatus(BaseModel):
     )
     last_connected: Optional[datetime] = Field(
         None, description="Last connection timestamp from database"
+    )
+    last_seen: Optional[datetime] = Field(
+        None,
+        description="Last time the PC was seen alive on the websocket heartbeat",
     )
     last_applied: Optional[datetime] = Field(
         None, description="Last configuration applied timestamp"

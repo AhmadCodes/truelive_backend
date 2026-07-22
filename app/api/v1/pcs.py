@@ -232,6 +232,10 @@ async def get_all_pcs_connection_status(current_user: CurrentUser, db: DBSession
         if pc.last_connected:
             last_connected = datetime.fromtimestamp(pc.last_connected)
 
+        last_seen = None
+        if pc.last_seen:
+            last_seen = datetime.fromtimestamp(pc.last_seen)
+
         last_applied = None
         if pc.last_applied:
             last_applied = datetime.fromtimestamp(pc.last_applied)
@@ -241,6 +245,7 @@ async def get_all_pcs_connection_status(current_user: CurrentUser, db: DBSession
             pc_name=pc.name,
             is_connected=is_connected,
             last_connected=last_connected,
+            last_seen=last_seen,
             last_applied=last_applied,
             websocket_connected_at=ws_info.get("connected_at")
             if is_connected
@@ -985,6 +990,10 @@ async def get_pc_connection_status(
     if pc.last_connected:
         last_connected = datetime.fromtimestamp(pc.last_connected)
 
+    last_seen = None
+    if pc.last_seen:
+        last_seen = datetime.fromtimestamp(pc.last_seen)
+
     last_applied = None
     if pc.last_applied:
         last_applied = datetime.fromtimestamp(pc.last_applied)
@@ -994,6 +1003,7 @@ async def get_pc_connection_status(
         pc_name=pc.name,
         is_connected=is_connected,
         last_connected=last_connected,
+        last_seen=last_seen,
         last_applied=last_applied,
         websocket_connected_at=ws_info.get("connected_at") if is_connected else None,
     )
