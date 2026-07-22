@@ -9,6 +9,7 @@ This Socket.IO server handles:
 """
 import socketio
 import eventlet
+import os
 import logging
 from typing import Dict, Any
 import jwt
@@ -24,13 +25,14 @@ logger = logging.getLogger(__name__)
 
 # Create Socket.IO server
 sio = socketio.Server(
-    async_mode='eventlet',
-    cors_allowed_origins='*',
+    async_mode="eventlet",
+    cors_allowed_origins="*",
     logger=True,
     engineio_logger=True,
     ping_timeout=60,
-    ping_interval=25
+    ping_interval=25,
 )
+
 
 # Create WSGI app wrapper for combined HTTP and WebSocket handling
 class WSGIAppWithHTTP:
@@ -41,10 +43,10 @@ class WSGIAppWithHTTP:
 
     def __call__(self, environ, start_response):
         """Route requests to Socket.IO or HTTP handlers."""
-        path = environ.get('PATH_INFO', '')
+        path = environ.get("PATH_INFO", "")
 
         # HTTP endpoint to get connected PCs status
-        if path == '/api/connected-pcs' and environ.get('REQUEST_METHOD') == 'GET':
+        if path == "/api/connected-pcs" and environ.get("REQUEST_METHOD") == "GET":
             return self.get_connected_pcs(environ, start_response)
 
         # Default to Socket.IO
@@ -57,36 +59,42 @@ class WSGIAppWithHTTP:
 
             for pc_id, pc_sid in connected_pcs.items():
                 client_data = session_data.get(pc_sid, {})
-                clients.append({
-                    'pc_id': pc_id,
-                    'name': client_data.get('name', ''),
-                    'connected_at': client_data.get('connected_at'),
-                    'is_connected': True
-                })
+                clients.append(
+                    {
+                        "pc_id": pc_id,
+                        "name": client_data.get("name", ""),
+                        "connected_at": client_data.get("connected_at"),
+                        "is_connected": True,
+                    }
+                )
 
-            response_data = {
-                'connected_pcs': clients,
-                'total_connected': len(clients)
-            }
+            response_data = {"connected_pcs": clients, "total_connected": len(clients)}
 
-            response_body = json.dumps(response_data).encode('utf-8')
+            response_body = json.dumps(response_data).encode("utf-8")
 
-            start_response('200 OK', [
-                ('Content-Type', 'application/json'),
-                ('Content-Length', str(len(response_body))),
-                ('Access-Control-Allow-Origin', '*')
-            ])
+            start_response(
+                "200 OK",
+                [
+                    ("Content-Type", "application/json"),
+                    ("Content-Length", str(len(response_body))),
+                    ("Access-Control-Allow-Origin", "*"),
+                ],
+            )
 
             return [response_body]
 
         except Exception as e:
             logger.error(f"Error in get_connected_pcs endpoint: {e}")
-            error_response = json.dumps({'error': str(e)}).encode('utf-8')
-            start_response('500 Internal Server Error', [
-                ('Content-Type', 'application/json'),
-                ('Content-Length', str(len(error_response)))
-            ])
+            error_response = json.dumps({"error": str(e)}).encode("utf-8")
+            start_response(
+                "500 Internal Server Error",
+                [
+                    ("Content-Type", "application/json"),
+                    ("Content-Length", str(len(error_response))),
+                ],
+            )
             return [error_response]
+
 
 app = WSGIAppWithHTTP(socketio.WSGIApp(sio))
 
@@ -112,9 +120,7 @@ def validate_token(auth_token: str) -> Dict[str, Any]:
     """
     try:
         payload = jwt.decode(
-            auth_token,
-            settings.JWT_SECRET,
-            algorithms=[settings.ALGORITHM]
+            auth_token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM]
         )
         return payload
 
@@ -140,9 +146,9 @@ def connect(sid, environ):
 
     # Initialize session data
     session_data[sid] = {
-        'pc_id': None,
-        'name': None,
-        'connected_at': datetime.utcnow().isoformat()
+        "pc_id": None,
+        "name": None,
+        "connected_at": datetime.utcnow().isoformat(),
     }
 
 
@@ -159,7 +165,7 @@ def disconnect(sid):
     # Get PC ID before removing
     pc_id = None
     if sid in session_data:
-        pc_id = session_data[sid].get('pc_id')
+        pc_id = session_data[sid].get("pc_id")
         del session_data[sid]
 
     # Remove from connected PCs
@@ -189,48 +195,50 @@ def register(sid, data):
         data: Registration data dict
     """
     try:
-        pc_id = data.get('pc_id')
-        auth_token = data.get('auth_token')
-        name = data.get('name', '')
+        pc_id = data.get("pc_id")
+        auth_token = data.get("auth_token")
+        name = data.get("name", "")
 
         if not pc_id or not auth_token:
             logger.error(f"Registration failed for {sid}: missing pc_id or auth_token")
-            sio.emit('error', {
-                'message': 'Missing pc_id or auth_token'
-            }, room=sid)
+            sio.emit("error", {"message": "Missing pc_id or auth_token"}, room=sid)
             return
 
         # Validate JWT token
         try:
             payload = validate_token(auth_token)
-            token_pc_id = payload.get('pc_id')
+            token_pc_id = payload.get("pc_id")
 
             # Verify PC ID matches token
             if token_pc_id != pc_id:
-                logger.warning(
-                    f"PC ID mismatch: provided={pc_id}, token={token_pc_id}"
-                )
+                logger.warning(f"PC ID mismatch: provided={pc_id}, token={token_pc_id}")
                 # Use token's PC ID as authoritative
                 pc_id = token_pc_id
 
         except jwt.InvalidTokenError as e:
             logger.error(f"Token validation failed for {sid}: {e}")
-            sio.emit('error', {
-                'message': 'Invalid or expired authentication token'
-            }, room=sid)
+            sio.emit(
+                "error",
+                {"message": "Invalid or expired authentication token"},
+                room=sid,
+            )
             return
 
         # Register PC
         connected_pcs[pc_id] = sid
-        session_data[sid]['pc_id'] = pc_id
-        session_data[sid]['name'] = name
+        session_data[sid]["pc_id"] = pc_id
+        session_data[sid]["name"] = name
 
         # Update last_connected in database
         try:
             db = next(get_db())
             pc = db.query(PC).filter(PC.id == pc_id).first()
             if pc:
-                pc.last_connected = int(time.time())  # Unix timestamp
+                now_ts = int(time.time())  # Unix timestamp
+                pc.last_connected = now_ts
+                # Seed last_seen immediately so a freshly-connected PC isn't
+                # up to one sweep-interval stale.
+                pc.last_seen = now_ts
                 db.commit()
                 logger.info(f"Updated last_connected for PC {pc_id}")
             else:
@@ -243,19 +251,18 @@ def register(sid, data):
         logger.info(f"PC registered: {pc_id} (sid: {sid}, name: {name})")
 
         # Confirm registration to client
-        sio.emit('registered', {
-            'pc_id': pc_id,
-            'message': 'Successfully registered'
-        }, room=sid)
+        sio.emit(
+            "registered",
+            {"pc_id": pc_id, "message": "Successfully registered"},
+            room=sid,
+        )
 
         # Broadcast updated client list
         broadcast_client_list()
 
     except Exception as e:
         logger.error(f"Error during registration for {sid}: {e}")
-        sio.emit('error', {
-            'message': f'Registration failed: {str(e)}'
-        }, room=sid)
+        sio.emit("error", {"message": f"Registration failed: {str(e)}"}, room=sid)
 
 
 @sio.event
@@ -275,23 +282,21 @@ def message(sid, data):
         data: Message data dict
     """
     try:
-        message_type = data.get('type')
-        target_id = data.get('targetId')
-        content = data.get('content')
+        message_type = data.get("type")
+        target_id = data.get("targetId")
+        content = data.get("content")
 
         if not target_id:
             logger.error(f"Message from {sid} missing targetId")
-            sio.emit('error', {
-                'message': 'Missing targetId'
-            }, room=sid)
+            sio.emit("error", {"message": "Missing targetId"}, room=sid)
             return
 
         # Check if target PC is connected
         if target_id not in connected_pcs:
             logger.warning(f"Target PC {target_id} is not connected")
-            sio.emit('error', {
-                'message': f'Target PC {target_id} is not online'
-            }, room=sid)
+            sio.emit(
+                "error", {"message": f"Target PC {target_id} is not online"}, room=sid
+            )
             return
 
         target_sid = connected_pcs[target_id]
@@ -301,23 +306,24 @@ def message(sid, data):
         )
 
         # Forward message to target PC
-        sio.emit(message_type or 'message', {
-            'type': message_type,
-            'content': content,
-            'from': session_data.get(sid, {}).get('pc_id', 'unknown')
-        }, room=target_sid)
+        sio.emit(
+            message_type or "message",
+            {
+                "type": message_type,
+                "content": content,
+                "from": session_data.get(sid, {}).get("pc_id", "unknown"),
+            },
+            room=target_sid,
+        )
 
         # Send acknowledgment to sender
-        sio.emit('message_sent', {
-            'targetId': target_id,
-            'status': 'delivered'
-        }, room=sid)
+        sio.emit(
+            "message_sent", {"targetId": target_id, "status": "delivered"}, room=sid
+        )
 
     except Exception as e:
         logger.error(f"Error routing message from {sid}: {e}")
-        sio.emit('error', {
-            'message': f'Message routing failed: {str(e)}'
-        }, room=sid)
+        sio.emit("error", {"message": f"Message routing failed: {str(e)}"}, room=sid)
 
 
 @sio.event
@@ -333,21 +339,19 @@ def get_clients(sid):
 
         for pc_id, pc_sid in connected_pcs.items():
             client_data = session_data.get(pc_sid, {})
-            clients.append({
-                'pc_id': pc_id,
-                'name': client_data.get('name', ''),
-                'connected_at': client_data.get('connected_at')
-            })
+            clients.append(
+                {
+                    "pc_id": pc_id,
+                    "name": client_data.get("name", ""),
+                    "connected_at": client_data.get("connected_at"),
+                }
+            )
 
-        sio.emit('clients_list', {
-            'clients': clients
-        }, room=sid)
+        sio.emit("clients_list", {"clients": clients}, room=sid)
 
     except Exception as e:
         logger.error(f"Error getting client list for {sid}: {e}")
-        sio.emit('error', {
-            'message': f'Failed to get client list: {str(e)}'
-        }, room=sid)
+        sio.emit("error", {"message": f"Failed to get client list: {str(e)}"}, room=sid)
 
 
 def broadcast_client_list():
@@ -359,15 +363,15 @@ def broadcast_client_list():
 
         for pc_id, pc_sid in connected_pcs.items():
             client_data = session_data.get(pc_sid, {})
-            clients.append({
-                'pc_id': pc_id,
-                'name': client_data.get('name', ''),
-                'connected_at': client_data.get('connected_at')
-            })
+            clients.append(
+                {
+                    "pc_id": pc_id,
+                    "name": client_data.get("name", ""),
+                    "connected_at": client_data.get("connected_at"),
+                }
+            )
 
-        sio.emit('clients_update', {
-            'clients': clients
-        })
+        sio.emit("clients_update", {"clients": clients})
 
         logger.debug(f"Broadcasted client list: {len(clients)} clients")
 
@@ -375,7 +379,47 @@ def broadcast_client_list():
         logger.error(f"Error broadcasting client list: {e}")
 
 
-def run_server(host: str = '0.0.0.0', port: int = 8080):
+def _last_seen_sweep(interval_seconds: int):
+    """
+    Rolling 'last seen' presence sweep.
+
+    Every ``interval_seconds`` this stamps ``pcs.last_seen = now()`` for every PC
+    currently in ``connected_pcs``. That set is authoritative: Engine.IO's
+    ping/pong evicts a PC (fires ``disconnect``) within the pong timeout when it
+    stops responding, so anything still listed is currently alive. One batched
+    UPDATE per tick regardless of PC count.
+
+    Runs forever as an eventlet greenlet; a DB error in one tick is logged and
+    swallowed so the sweep (and the server) never dies.
+    """
+    logger.info(f"Starting last_seen presence sweep every {interval_seconds}s")
+    while True:
+        eventlet.sleep(interval_seconds)
+        pc_ids = list(connected_pcs.keys())
+        if not pc_ids:
+            continue
+        db = None
+        try:
+            db = next(get_db())
+            now_ts = int(time.time())
+            db.query(PC).filter(PC.id.in_(pc_ids)).update(
+                {PC.last_seen: now_ts}, synchronize_session=False
+            )
+            db.commit()
+            logger.debug(f"last_seen sweep updated {len(pc_ids)} PC(s)")
+        except Exception as sweep_error:
+            logger.error(f"last_seen sweep failed: {sweep_error}")
+            if db is not None:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+        finally:
+            if db is not None:
+                db.close()
+
+
+def run_server(host: str = "0.0.0.0", port: int = 8080):
     """
     Run the WebSocket server.
 
@@ -385,26 +429,22 @@ def run_server(host: str = '0.0.0.0', port: int = 8080):
     """
     logger.info(f"Starting WebSocket server on {host}:{port}")
 
+    sweep_interval = int(os.environ.get("WS_LAST_SEEN_SWEEP_SECONDS", "30"))
+    eventlet.spawn(_last_seen_sweep, sweep_interval)
+
     try:
-        eventlet.wsgi.server(
-            eventlet.listen((host, port)),
-            app,
-            log_output=True
-        )
+        eventlet.wsgi.server(eventlet.listen((host, port)), app, log_output=True)
     except Exception as e:
         logger.error(f"WebSocket server error: {e}")
         raise
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Configure logging
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
 
     # Run server
-    run_server(
-        host=settings.WEBSOCKET_HOST,
-        port=settings.WEBSOCKET_PORT
-    )
+    run_server(host=settings.WEBSOCKET_HOST, port=settings.WEBSOCKET_PORT)

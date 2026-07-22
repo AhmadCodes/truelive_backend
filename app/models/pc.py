@@ -89,6 +89,15 @@ class PC(BaseModel):
         BigInteger, nullable=True, comment="Unix timestamp of last connection"
     )
 
+    last_seen = Column(
+        BigInteger,
+        nullable=True,
+        comment=(
+            "Unix timestamp the PC was last seen alive on the websocket "
+            "(rolled by the heartbeat presence sweep)"
+        ),
+    )
+
     last_applied = Column(
         BigInteger,
         nullable=True,
@@ -105,6 +114,11 @@ class PC(BaseModel):
             "idx_pcs_last_connected",
             "last_connected",
             postgresql_ops={"last_connected": "DESC"},
+        ),
+        Index(
+            "idx_pcs_last_seen",
+            "last_seen",
+            postgresql_ops={"last_seen": "DESC"},
         ),
         Index("idx_pcs_name", "name"),
         Index("idx_pcs_screen_layout_id", "screen_layout_id"),
@@ -150,6 +164,7 @@ class PC(BaseModel):
             "auth_token": self.auth_token,
             "token_expiry": self.token_expiry,
             "last_connected": self.last_connected,
+            "last_seen": self.last_seen,
             "last_applied": self.last_applied,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
