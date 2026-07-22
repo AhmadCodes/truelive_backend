@@ -11,12 +11,19 @@ from sqlalchemy.orm import Session
 
 from app.models.camera import Camera
 from app.models.device import Device
+from app.models.site import Site
 from app.models.site_camera_layout import SiteCamerasLayout
 from app.models.category import SiteCategoryMapping
 from app.schemas.stream_config import ScreenConfigInput
 from app.utils.url_processor import encode_rtsp_password
 
 logger = logging.getLogger(__name__)
+
+# This endpoint has no per-PC context (it builds a config from a camera set),
+# so the top-level pc_id/pc_name are fixed placeholders. Change these literals
+# if a real identity is ever needed here.
+STREAM_CONFIG_PC_ID = "STREAMCFG"
+STREAM_CONFIG_PC_NAME = "Stream Config"
 
 
 def validate_camera_ids(camera_ids: List[str], db: Session) -> List[str]:
@@ -47,7 +54,7 @@ def get_cameras_for_config(
     camera_ids: Optional[List[str]],
     exclude_camera_ids: Optional[List[str]],
     count: int,
-    db: Session
+    db: Session,
 ) -> List[Camera]:
     """
     Fetch cameras for configuration.
@@ -119,12 +126,15 @@ def get_location_uris_for_camera(camera: Camera, db: Session) -> List[Dict[str, 
 
     # Get all site_cameras_layout entries for the camera's parent site
     # Deterministic grid order — see the note in config_generator._get_location_uris.
-    site_layouts = db.query(SiteCamerasLayout).filter(
-        SiteCamerasLayout.site_id == site_id
-    ).order_by(
-        SiteCamerasLayout.slot_row,
-        SiteCamerasLayout.slot_col,
-    ).all()
+    site_layouts = (
+        db.query(SiteCamerasLayout)
+        .filter(SiteCamerasLayout.site_id == site_id)
+        .order_by(
+            SiteCamerasLayout.slot_row,
+            SiteCamerasLayout.slot_col,
+        )
+        .all()
+    )
 
     # Get cameras from layouts
     for layout in site_layouts:
@@ -132,10 +142,12 @@ def get_location_uris_for_camera(camera: Camera, db: Session) -> List[Dict[str, 
         if layout_camera and layout_camera.rtsp_url:
             # Process URL to encode passwords
             processed_url = encode_rtsp_password(layout_camera.rtsp_url)
-            location_uris.append({
-                "url": processed_url,
-                "osd_text": layout_camera.name if layout_camera.name else ""
-            })
+            location_uris.append(
+                {
+                    "url": processed_url,
+                    "osd_text": layout_camera.name if layout_camera.name else "",
+                }
+            )
 
     return location_uris
 
@@ -158,9 +170,11 @@ def get_osd_color_for_camera(camera: Camera, db: Session) -> str:
         return default_color
 
     # Get site category mapping
-    mapping = db.query(SiteCategoryMapping).filter(
-        SiteCategoryMapping.site_id == site_id
-    ).first()
+    mapping = (
+        db.query(SiteCategoryMapping)
+        .filter(SiteCategoryMapping.site_id == site_id)
+        .first()
+    )
 
     if mapping and mapping.category and mapping.category.color is not None:
         # Convert BigInteger to hex string format
@@ -177,7 +191,7 @@ def create_camera_object(
     view_id: str = "",
     pos_x: int = 0,
     pos_y: int = 0,
-    use_tcp: bool = False
+    use_tcp: bool = False,
 ) -> Dict[str, Any]:
     """
     Create a camera object matching json_format.md specification with enhanced fields.
@@ -194,10 +208,14 @@ def create_camera_object(
     Returns:
         Camera object dict with all required fields including metadata
     """
-    # Get device for camera
+    # Get device for camera, then its parent Site.
     device = db.query(Device).filter(Device.id == camera.device_id).first()
-    device_name = device.name if device else "Unknown Site"
+    device_name = device.name if device else "Unknown Device"
     device_id = camera.device_id if camera.device_id else ""
+
+    site = db.query(Site).filter(Site.id == device.site_id).first() if device else None
+    site_id = site.id if site else ""
+    site_name = site.name if site else ""
 
     # Process RTSP URL to encode passwords
     processed_url = encode_rtsp_password(camera.rtsp_url) if camera.rtsp_url else ""
@@ -208,34 +226,33 @@ def create_camera_object(
     # Get LocationUris for this camera's device
     location_uris = get_location_uris_for_camera(camera, db)
 
-    # FROZEN wire format: "id"/"site_id"/"site_name"/"osd_text" carry the Device
-    # id and name. PC clients in the field consume these keys — never rename them
-    # and never re-point them at the new parent Site. The "Unknown Site" fallback
-    # string above is likewise part of the frozen output.
+    # Wire format: site_id/site_name = the real Site; device_id/device_name sit
+    # beside them; id and osd_text are composed site → device → camera.
     return {
         "LocationUris": location_uris,
-        "id": f"{device_id}_{camera.id}",
+        "id": f"{site_id}_{device_id}_{camera.id}",
         "camera_id": camera.id,
         "camera_name": camera.name if camera.name else "",
-        "site_id": device_id,
-        "site_name": device_name,
+        "site_id": site_id,
+        "site_name": site_name,
+        "device_id": device_id,
+        "device_name": device_name,
         "view_n": view_n,
         "view_id": view_id,
         "view_name": f"View {view_n + 1}",  # Generic view name for generated configs
         "pos_x": pos_x,
         "pos_y": pos_y,
         "osd_color": osd_color,
-        "osd_text": f"{camera.name} ({device_name})",
+        "osd_text": f"{site_name} - {device_name} - {camera.name}",
         "url": processed_url,
-        "use_tcp": camera.use_tcp if hasattr(camera, 'use_tcp') and camera.use_tcp is not None else use_tcp
+        "use_tcp": camera.use_tcp
+        if hasattr(camera, "use_tcp") and camera.use_tcp is not None
+        else use_tcp,
     }
 
 
 def create_empty_camera_object(
-    view_n: int = 0,
-    view_id: str = "",
-    pos_x: int = 0,
-    pos_y: int = 0
+    view_n: int = 0, view_id: str = "", pos_x: int = 0, pos_y: int = 0
 ) -> Dict[str, Any]:
     """
     Create an empty camera object for unused tiles.
@@ -249,7 +266,8 @@ def create_empty_camera_object(
     Returns:
         Empty camera object matching json_format.md spec with all fields
     """
-    # FROZEN wire format: "site_id"/"site_name" are Device-scoped keys.
+    # Empty tiles carry the same key shape as filled ones (site_id/site_name =
+    # Site, device_id/device_name = Device) with blank values.
     return {
         "LocationUris": [],
         "id": "",
@@ -257,6 +275,8 @@ def create_empty_camera_object(
         "camera_name": "",
         "site_id": "",
         "site_name": "",
+        "device_id": "",
+        "device_name": "",
         "view_n": view_n,
         "view_id": view_id,
         "view_name": f"View {view_n + 1}",
@@ -265,14 +285,12 @@ def create_empty_camera_object(
         "osd_color": "0xFFFFFFFF",
         "osd_text": "",
         "url": "",
-        "use_tcp": False
+        "use_tcp": False,
     }
 
 
 def distribute_cameras_to_screens(
-    cameras: List[Camera],
-    screens_config: List[ScreenConfigInput],
-    db: Session
+    cameras: List[Camera], screens_config: List[ScreenConfigInput], db: Session
 ) -> Tuple[List[Dict[str, Any]], int]:
     """
     Distribute cameras across screens, tiles, and views.
@@ -302,7 +320,7 @@ def distribute_cameras_to_screens(
 
             # Calculate grid position for this tile
             pos_x = tile_idx // screen_config.layout_cols  # Row
-            pos_y = tile_idx % screen_config.layout_cols   # Column
+            pos_y = tile_idx % screen_config.layout_cols  # Column
 
             # Add cameras for each view in this tile
             for view_idx in range(screen_config.num_views):
@@ -318,19 +336,18 @@ def distribute_cameras_to_screens(
                         view_n=view_idx,
                         view_id=view_id,
                         pos_x=pos_x,
-                        pos_y=pos_y
+                        pos_y=pos_y,
                     )
                     tile_cameras.append(camera_obj)
                     camera_index += 1
                     cameras_used += 1
                 else:
                     # Not enough cameras - use empty object with position metadata
-                    tile_cameras.append(create_empty_camera_object(
-                        view_n=view_idx,
-                        view_id=view_id,
-                        pos_x=pos_x,
-                        pos_y=pos_y
-                    ))
+                    tile_cameras.append(
+                        create_empty_camera_object(
+                            view_n=view_idx, view_id=view_id, pos_x=pos_x, pos_y=pos_y
+                        )
+                    )
 
             source_groups.append(tile_cameras)
 
@@ -340,7 +357,7 @@ def distribute_cameras_to_screens(
             "config": screen_config,
             "source_groups": source_groups,
             "name": screen_name,
-            "display_idx": screen_idx
+            "display_idx": screen_idx,
         }
         screens_data.append(screen_data)
 
@@ -348,10 +365,7 @@ def distribute_cameras_to_screens(
 
 
 def build_device_config(
-    screens_data: List[Dict[str, Any]],
-    width: int,
-    height: int,
-    switch_interval: int
+    screens_data: List[Dict[str, Any]], width: int, height: int, switch_interval: int
 ) -> Dict[str, Any]:
     """
     Build final device configuration JSON matching json_format.md.
@@ -375,14 +389,16 @@ def build_device_config(
             "display_idx": screen_data["display_idx"],
             "switchInterval": switch_interval,
             "title": screen_data["name"],
-            "source_groups": screen_data["source_groups"]
+            "source_groups": screen_data["source_groups"],
         }
         screens.append(screen_obj)
 
     return {
+        "pc_id": STREAM_CONFIG_PC_ID,
+        "pc_name": STREAM_CONFIG_PC_NAME,
         "width": width,
         "height": height,
-        "screens": screens
+        "screens": screens,
     }
 
 
@@ -393,7 +409,7 @@ def generate_stream_config(
     width: int,
     height: int,
     switch_interval: int,
-    db: Session
+    db: Session,
 ) -> Tuple[Dict[str, Any], Dict[str, int]]:
     """
     Generate complete stream configuration.
@@ -420,13 +436,19 @@ def generate_stream_config(
     )
 
     # Get cameras
-    cameras = get_cameras_for_config(camera_ids, exclude_camera_ids, total_camera_slots, db)
+    cameras = get_cameras_for_config(
+        camera_ids, exclude_camera_ids, total_camera_slots, db
+    )
     cameras_available = db.query(Camera).count()
 
-    logger.info(f"Fetched {len(cameras)} cameras ({cameras_available} available in database)")
+    logger.info(
+        f"Fetched {len(cameras)} cameras ({cameras_available} available in database)"
+    )
 
     # Distribute cameras to screens
-    screens_data, cameras_used = distribute_cameras_to_screens(cameras, screens_config, db)
+    screens_data, cameras_used = distribute_cameras_to_screens(
+        cameras, screens_config, db
+    )
 
     # Build device config
     config = build_device_config(screens_data, width, height, switch_interval)
@@ -438,7 +460,7 @@ def generate_stream_config(
         "total_camera_slots": total_camera_slots,
         "cameras_used": cameras_used,
         "cameras_available": cameras_available,
-        "empty_slots": total_camera_slots - cameras_used
+        "empty_slots": total_camera_slots - cameras_used,
     }
 
     logger.info(
