@@ -4,7 +4,7 @@ Configuration generator service.
 Transforms database structure to device JSON format for PC applications.
 """
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, List
 from sqlalchemy.orm import Session
 
 from app.utils.url_processor import try_encode_rtsp_password
@@ -98,11 +98,7 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
             }
     """
     # Initialize default configuration
-    config = {
-        "width": 640,
-        "height": 480,
-        "screens": []
-    }
+    config = {"width": 640, "height": 480, "screens": []}
 
     pcs = site_config.get("pcs", {})
     mappings = site_config.get("mappings", {}).get("screen_to_cameras", {})
@@ -120,6 +116,7 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
         device_to_site = {}
 
     for pc_id, pc_data in pcs.items():
+        layout_id = pc_data.get("screen_layout_id")
         screens = pc_data.get("screens", {})
 
         for screen_id, screen_data in screens.items():
@@ -128,7 +125,9 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
             # Get screen name/title from database
             try:
                 screen = db.query(Screen).filter(Screen.id == screen_id).first()
-                screen_title = screen.name if screen else f"Screen {len(config['screens']) + 1}"
+                screen_title = (
+                    screen.name if screen else f"Screen {len(config['screens']) + 1}"
+                )
             except Exception as e:
                 logger.error(f"Error getting screen title for screen {screen_id}: {e}")
                 screen_title = f"Screen {len(config['screens']) + 1}"
@@ -137,18 +136,20 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
             display_idx = len(config["screens"])
 
             screen_config = {
-                "id": f"pc{pc_id}_screen_{screen_id}",
+                "id": f"pc{pc_id}_layout{layout_id}_screen{screen_id}",
                 "display_idx": display_idx,
                 "switchInterval": screen_data.get("switching_interval", 10),
                 "title": screen_title,
-                "source_groups": []
+                "source_groups": [],
             }
 
             screen_views = mappings.get(pc_id, {}).get(screen_id, {})
             valid_views = {}
             view_metadata = {}  # Map view_key to View object metadata
 
-            logger.info(f"Processing screen {screen_id}, found {len(screen_views)} views in mappings")
+            logger.info(
+                f"Processing screen {screen_id}, found {len(screen_views)} views in mappings"
+            )
 
             # Query View objects from database for this screen to get metadata.
             # Key by view.id (UUID): the loader passes the same key, and unlike
@@ -156,17 +157,23 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
             try:
                 db_views = db.query(View).filter(View.screen_id == screen_id).all()
                 view_id_to_obj = {str(view.id): view for view in db_views}
-                logger.info(f"Found {len(db_views)} views in database for screen {screen_id}")
+                logger.info(
+                    f"Found {len(db_views)} views in database for screen {screen_id}"
+                )
             except Exception as e:
                 logger.error(f"Error querying views for screen {screen_id}: {e}")
                 view_id_to_obj = {}
 
             # Filter views that have at least one camera (omit entirely empty views)
             for view_key, view_data in screen_views.items():
-                logger.info(f"Found view '{view_key}', view_data type: {type(view_data)}, bool: {bool(view_data)}")
+                logger.info(
+                    f"Found view '{view_key}', view_data type: {type(view_data)}, bool: {bool(view_data)}"
+                )
                 if view_data:  # Check if view exists
                     has_camera = False
-                    logger.info(f"Checking view '{view_key}', has {len(view_data)} slots")
+                    logger.info(
+                        f"Checking view '{view_key}', has {len(view_data)} slots"
+                    )
 
                     # Check if any slot has actual camera data (not empty)
                     for slot_num in range(1, layout["rows"] * layout["columns"] + 1):
@@ -176,14 +183,20 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
 
                         slot_data = view_data.get(slot_key)
                         if slot_data:
-                            logger.info(f"Slot {slot_key} has data: {list(slot_data.keys())}")
-                            if slot_data.get('camera_id'):  # Has actual camera
-                                logger.info(f"Slot {slot_key} has camera_id: {slot_data.get('camera_id')}")
+                            logger.info(
+                                f"Slot {slot_key} has data: {list(slot_data.keys())}"
+                            )
+                            if slot_data.get("camera_id"):  # Has actual camera
+                                logger.info(
+                                    f"Slot {slot_key} has camera_id: {slot_data.get('camera_id')}"
+                                )
                                 has_camera = True
                                 break
 
                     if has_camera:
-                        logger.info(f"View '{view_key}' has cameras, adding to valid_views")
+                        logger.info(
+                            f"View '{view_key}' has cameras, adding to valid_views"
+                        )
                         valid_views[view_key] = view_data
 
                         # Store View object metadata if found in database
@@ -194,13 +207,18 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
                     else:
                         logger.info(f"View '{view_key}' has no cameras, omitting")
 
-            logger.info(f"Screen {screen_id} has {len(valid_views)} valid views after filtering")
+            logger.info(
+                f"Screen {screen_id} has {len(valid_views)} valid views after filtering"
+            )
 
             if valid_views:
                 # Sort views by created_at timestamp from database (fallback to name if not in DB)
                 def get_sort_key(view_key):
                     if view_key in view_metadata:
-                        return (0, view_metadata[view_key].created_at)  # Sort by timestamp
+                        return (
+                            0,
+                            view_metadata[view_key].created_at,
+                        )  # Sort by timestamp
                     else:
                         return (1, view_key)  # Fallback to name sorting
 
@@ -223,13 +241,13 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
                         view_id = str(view_obj.id) if view_obj else ""
                         view_name = view_obj.name if view_obj else view_key
 
-                        if slot_data and slot_data.get('camera_id'):
+                        if slot_data and slot_data.get("camera_id"):
                             # NOTE: 'site_id' here is a FROZEN wire-format key that
                             # carries the Device id (see module docstring). The
                             # colour and the layout are looked up from that
                             # device's parent Site.
                             parent_site_id = device_to_site.get(
-                                slot_data.get('site_id', ''), ''
+                                slot_data.get("site_id", ""), ""
                             )
 
                             # Get site category color
@@ -245,10 +263,10 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
                                 source_entry = {
                                     "LocationUris": location_uris,
                                     "id": f"{slot_data.get('site_id', '')}_{slot_data.get('camera_id', '')}",
-                                    "camera_id": slot_data.get('camera_id', ''),
-                                    "camera_name": slot_data.get('camera_name', ''),
-                                    "site_id": slot_data.get('site_id', ''),
-                                    "site_name": slot_data.get('site_name', ''),
+                                    "camera_id": slot_data.get("camera_id", ""),
+                                    "camera_name": slot_data.get("camera_name", ""),
+                                    "site_id": slot_data.get("site_id", ""),
+                                    "site_name": slot_data.get("site_name", ""),
                                     "view_n": view_n,  # Integer, not string
                                     "view_id": view_id,
                                     "view_name": view_name,
@@ -256,29 +274,35 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
                                     "pos_y": col_num,
                                     "osd_color": osd_color,
                                     "osd_text": f"{slot_data.get('camera_name', '')} ({slot_data.get('site_name', '')})",
-                                    "url": try_encode_rtsp_password(slot_data.get('rtsp_url', '')),
-                                    "use_tcp": slot_data.get("use_tcp", False)
+                                    "url": try_encode_rtsp_password(
+                                        slot_data.get("rtsp_url", "")
+                                    ),
+                                    "use_tcp": slot_data.get("use_tcp", False),
                                 }
                                 slot_sources.append(source_entry)
                             except Exception as e:
                                 logger.error(f"Error creating slot source entry: {e}")
                                 # On error, add empty with position info to maintain alignment
-                                slot_sources.append(_create_empty_source(
+                                slot_sources.append(
+                                    _create_empty_source(
+                                        view_n=view_n,
+                                        view_id=view_id,
+                                        view_name=view_name,
+                                        pos_x=row_num,
+                                        pos_y=col_num,
+                                    )
+                                )
+                        else:
+                            # View doesn't have camera for this slot - add empty with position info for alignment
+                            slot_sources.append(
+                                _create_empty_source(
                                     view_n=view_n,
                                     view_id=view_id,
                                     view_name=view_name,
                                     pos_x=row_num,
-                                    pos_y=col_num
-                                ))
-                        else:
-                            # View doesn't have camera for this slot - add empty with position info for alignment
-                            slot_sources.append(_create_empty_source(
-                                view_n=view_n,
-                                view_id=view_id,
-                                view_name=view_name,
-                                pos_x=row_num,
-                                pos_y=col_num
-                            ))
+                                    pos_y=col_num,
+                                )
+                            )
 
                     # Add slot to source_groups
                     screen_config["source_groups"].append(slot_sources)
@@ -306,14 +330,18 @@ def _get_site_color(site_id: str, db: Session) -> str:
         # Query site categories through the mapping table
         from app.models.category import SiteCategoryMapping
 
-        mapping = db.query(SiteCategoryMapping).filter(
-            SiteCategoryMapping.site_id == site_id
-        ).first()
+        mapping = (
+            db.query(SiteCategoryMapping)
+            .filter(SiteCategoryMapping.site_id == site_id)
+            .first()
+        )
 
         if mapping:
-            category = db.query(SiteCategory).filter(
-                SiteCategory.id == mapping.category_id
-            ).first()
+            category = (
+                db.query(SiteCategory)
+                .filter(SiteCategory.id == mapping.category_id)
+                .first()
+            )
 
             if category:
                 # Format as 0xAARRGGBB (ARGB: Alpha, Red, Green, Blue)
@@ -355,12 +383,15 @@ def _get_location_uris(site_id: str, db: Session) -> List[Dict[str, str]]:
         # meaningful order for a camera wall, and because auto-populate inserts
         # slots ordered by device name then camera name, it also reproduces the
         # historical ordering for auto-populated layouts.
-        site_layouts = db.query(SiteCamerasLayout).filter(
-            SiteCamerasLayout.site_id == site_id
-        ).order_by(
-            SiteCamerasLayout.slot_row,
-            SiteCamerasLayout.slot_col,
-        ).all()
+        site_layouts = (
+            db.query(SiteCamerasLayout)
+            .filter(SiteCamerasLayout.site_id == site_id)
+            .order_by(
+                SiteCamerasLayout.slot_row,
+                SiteCamerasLayout.slot_col,
+            )
+            .all()
+        )
 
         logger.debug(
             f"Found {len(site_layouts)} site_cameras_layout entries "
@@ -370,17 +401,19 @@ def _get_location_uris(site_id: str, db: Session) -> List[Dict[str, str]]:
         # Extract camera URLs and names
         for site_layout in site_layouts:
             try:
-                camera = db.query(Camera).filter(
-                    Camera.id == site_layout.camera_id
-                ).first()
+                camera = (
+                    db.query(Camera).filter(Camera.id == site_layout.camera_id).first()
+                )
 
                 if camera and camera.rtsp_url:
                     # URL-encode the password in RTSP URL
                     encoded_url = try_encode_rtsp_password(camera.rtsp_url)
-                    location_uris.append({
-                        "url": encoded_url,
-                        "osd_text": camera.name if camera.name else ""
-                    })
+                    location_uris.append(
+                        {
+                            "url": encoded_url,
+                            "osd_text": camera.name if camera.name else "",
+                        }
+                    )
                     logger.debug(
                         f"Added camera {camera.id} URL to LocationUris "
                         f"for site {site_id}"
@@ -408,7 +441,7 @@ def _create_empty_source(
     view_id: str = "",
     view_name: str = "",
     pos_x: int = 0,
-    pos_y: int = 0
+    pos_y: int = 0,
 ) -> Dict[str, Any]:
     """
     Create an empty source entry for unpopulated slots.
@@ -440,5 +473,5 @@ def _create_empty_source(
         "osd_color": "0xFFFFFFFF",
         "osd_text": "",
         "url": "",
-        "use_tcp": False
+        "use_tcp": False,
     }

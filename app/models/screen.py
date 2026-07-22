@@ -13,7 +13,7 @@ class Screen(BaseModel):
 
     Attributes:
         id: Unique identifier for the screen
-        pc_id: Reference to the PC this screen is connected to
+        screen_layout_id: Reference to the layout this screen belongs to
         name: Display name of the screen
         rows: Number of rows in the screen grid (1-4)
         columns: Number of columns in the screen grid (1-4)
@@ -24,88 +24,69 @@ class Screen(BaseModel):
 
     # Primary key
     id = Column(
-        String(100),
-        primary_key=True,
-        comment="Unique identifier for the screen"
+        String(100), primary_key=True, comment="Unique identifier for the screen"
     )
 
-    # Foreign key to PC
-    pc_id = Column(
-        String(50),
-        ForeignKey('pcs.id', ondelete='CASCADE'),
+    # Foreign key to ScreenLayout
+    screen_layout_id = Column(
+        String(100),
+        ForeignKey(
+            "screen_layouts.id", ondelete="CASCADE", name="fk_screens_screen_layout"
+        ),
         nullable=False,
-        comment="ID of the PC this screen is connected to"
+        comment="ID of the screen layout this screen belongs to",
     )
 
     # Basic information
-    name = Column(
-        String(100),
-        nullable=False,
-        comment="Display name of the screen"
-    )
+    name = Column(String(100), nullable=False, comment="Display name of the screen")
 
     # Grid configuration
     rows = Column(
-        Integer,
-        nullable=False,
-        comment="Number of rows in the screen grid (1-4)"
+        Integer, nullable=False, comment="Number of rows in the screen grid (1-4)"
     )
 
     columns = Column(
-        Integer,
-        nullable=False,
-        comment="Number of columns in the screen grid (1-4)"
+        Integer, nullable=False, comment="Number of columns in the screen grid (1-4)"
     )
 
     # Switching configuration
     switching_interval = Column(
         Integer,
         nullable=False,
-        comment="Interval in seconds for view switching (minimum 1)"
+        comment="Interval in seconds for view switching (minimum 1)",
     )
 
     # Constraints
     __table_args__ = (
-        CheckConstraint(
-            "rows BETWEEN 1 AND 4",
-            name='check_screen_rows'
-        ),
-        CheckConstraint(
-            "columns BETWEEN 1 AND 4",
-            name='check_screen_columns'
-        ),
-        CheckConstraint(
-            "switching_interval >= 1",
-            name='check_switching_interval'
-        ),
+        CheckConstraint("rows BETWEEN 1 AND 4", name="check_screen_rows"),
+        CheckConstraint("columns BETWEEN 1 AND 4", name="check_screen_columns"),
+        CheckConstraint("switching_interval >= 1", name="check_switching_interval"),
         # Indexes
-        Index('idx_screens_pc_id', 'pc_id'),
+        Index("idx_screens_layout_id", "screen_layout_id"),
     )
 
     # Relationships
-    pc = relationship(
-        "PC",
-        back_populates="screens",
-        doc="PC this screen is connected to"
+    screen_layout = relationship(
+        "ScreenLayout", back_populates="screens", doc="Layout this screen belongs to"
     )
 
     views = relationship(
         "View",
         back_populates="screen",
         cascade="all, delete-orphan",
-        doc="Views configured for this screen"
+        doc="Views configured for this screen",
     )
 
     screen_mappings = relationship(
         "ScreenMapping",
         back_populates="screen",
         cascade="all, delete-orphan",
-        doc="Screen mappings for this screen"
+        doc="Screen mappings for this screen",
     )
 
     def __repr__(self):
         """String representation of Screen."""
-        return f"<Screen(id='{self.id}', name='{self.name}', pc_id='{self.pc_id}')>"
+        return f"<Screen(id='{self.id}', name='{self.name}', screen_layout_id='{self.screen_layout_id}')>"
 
     def to_dict(self):
         """
@@ -115,14 +96,14 @@ class Screen(BaseModel):
             Dictionary representation of the screen
         """
         return {
-            'id': self.id,
-            'pc_id': self.pc_id,
-            'name': self.name,
-            'rows': self.rows,
-            'columns': self.columns,
-            'switching_interval': self.switching_interval,
-            'created_at': self.created_at,
-            'updated_at': self.updated_at,
+            "id": self.id,
+            "screen_layout_id": self.screen_layout_id,
+            "name": self.name,
+            "rows": self.rows,
+            "columns": self.columns,
+            "switching_interval": self.switching_interval,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
         }
 
     @property

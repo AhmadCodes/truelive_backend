@@ -11,18 +11,26 @@ class PCBase(BaseModel):
     """Base schema with common PC fields."""
 
     name: str = Field(..., min_length=1, max_length=255, description="PC name")
-    ip_address: Optional[str] = Field(None, max_length=50, description="IP address of the PC")
+    ip_address: Optional[str] = Field(
+        None, max_length=50, description="IP address of the PC"
+    )
     gpu_type: Optional[str] = Field(None, max_length=100, description="GPU type/model")
-    role: Literal['controller', 'manager'] = Field('controller', description="PC role (controller or manager)")
-    manager_id: Optional[str] = Field(None, max_length=50, description="Manager PC ID (for controller PCs)")
+    role: Literal["controller", "manager"] = Field(
+        "controller", description="PC role (controller or manager)"
+    )
+    manager_id: Optional[str] = Field(
+        None, max_length=50, description="Manager PC ID (for controller PCs)"
+    )
 
 
 class PCCreate(PCBase):
     """Schema for creating a new PC."""
 
-    id: str = Field(..., min_length=1, max_length=50, description="Unique PC identifier")
+    id: str = Field(
+        ..., min_length=1, max_length=50, description="Unique PC identifier"
+    )
 
-    @field_validator('manager_id')
+    @field_validator("manager_id")
     @classmethod
     def validate_manager_id(cls, v: Optional[str], info) -> Optional[str]:
         """Validate that manager_id is only set for controller PCs."""
@@ -31,20 +39,31 @@ class PCCreate(PCBase):
             v = None
 
         if v is not None:
-            role = info.data.get('role')
-            if role == 'manager':
-                raise ValueError('Manager PCs cannot have a manager_id')
+            role = info.data.get("role")
+            if role == "manager":
+                raise ValueError("Manager PCs cannot have a manager_id")
         return v
 
 
 class PCUpdate(BaseModel):
     """Schema for updating an existing PC. All fields are optional."""
 
-    name: Optional[str] = Field(None, min_length=1, max_length=255, description="PC name")
-    ip_address: Optional[str] = Field(None, max_length=50, description="IP address of the PC")
+    name: Optional[str] = Field(
+        None, min_length=1, max_length=255, description="PC name"
+    )
+    ip_address: Optional[str] = Field(
+        None, max_length=50, description="IP address of the PC"
+    )
     gpu_type: Optional[str] = Field(None, max_length=100, description="GPU type/model")
-    role: Optional[Literal['controller', 'manager']] = Field(None, description="PC role (controller or manager)")
-    manager_id: Optional[str] = Field(None, max_length=50, description="Manager PC ID (for controller PCs)")
+    role: Optional[Literal["controller", "manager"]] = Field(
+        None, description="PC role (controller or manager)"
+    )
+    manager_id: Optional[str] = Field(
+        None, max_length=50, description="Manager PC ID (for controller PCs)"
+    )
+    screen_layout_id: Optional[str] = Field(
+        None, max_length=100, description="Screen layout ID this PC is assigned to"
+    )
 
 
 class PCResponse(BaseModel):
@@ -56,6 +75,7 @@ class PCResponse(BaseModel):
     gpu_type: Optional[str] = None
     role: str
     manager_id: Optional[str] = None
+    screen_layout_id: Optional[str] = None
     last_connected: Optional[datetime] = None
     last_applied: Optional[datetime] = None
 
@@ -130,31 +150,40 @@ class PCWithScreens(PCWithScreenCount):
 
 # Screen Configuration Schemas
 
+
 class ScreenConfigRequest(BaseModel):
     """Configuration for a single screen in PC setup."""
 
-    layout_rows: int = Field(..., ge=1, le=10, description="Number of rows in view grid (1-10)")
-    layout_cols: int = Field(..., ge=1, le=10, description="Number of columns in view grid (1-10)")
-    num_views: int = Field(..., ge=1, description="Number of views per screen (rotation depth)")
+    layout_rows: int = Field(
+        ..., ge=1, le=10, description="Number of rows in view grid (1-10)"
+    )
+    layout_cols: int = Field(
+        ..., ge=1, le=10, description="Number of columns in view grid (1-10)"
+    )
+    num_views: int = Field(
+        ..., ge=1, description="Number of views per screen (rotation depth)"
+    )
     name: str = Field(..., min_length=1, max_length=100, description="Screen name")
-    switch_interval: int = Field(..., ge=1, description="Seconds between view rotations")
+    switch_interval: int = Field(
+        ..., ge=1, description="Seconds between view rotations"
+    )
 
 
 class ConfigurePCScreensRequest(BaseModel):
     """Request body for configuring PC screens and camera mappings."""
 
-    screens: List[ScreenConfigRequest] = Field(
-        ...,
-        description="Screen configurations"
-    )
+    screens: List[ScreenConfigRequest] = Field(..., description="Screen configurations")
     camera_ids: List[str] = Field(
-        ...,
-        description="List of camera IDs to distribute across screens and views"
+        ..., description="List of camera IDs to distribute across screens and views"
     )
-    width: Optional[int] = Field(None, description="Display width (optional, for future use)")
-    height: Optional[int] = Field(None, description="Display height (optional, for future use)")
+    width: Optional[int] = Field(
+        None, description="Display width (optional, for future use)"
+    )
+    height: Optional[int] = Field(
+        None, description="Display height (optional, for future use)"
+    )
 
-    @field_validator('camera_ids')
+    @field_validator("camera_ids")
     @classmethod
     def deduplicate_camera_ids(cls, v):
         """Remove duplicate camera IDs while preserving order."""
@@ -170,7 +199,9 @@ class ConfigurePCScreensResponse(BaseModel):
     screens_created: int = Field(..., description="Number of new screens created")
     screens_updated: int = Field(..., description="Number of existing screens updated")
     views_created: int = Field(..., description="Total number of views created")
-    mappings_created: int = Field(..., description="Total number of camera mappings created")
+    mappings_created: int = Field(
+        ..., description="Total number of camera mappings created"
+    )
     cameras_used: int = Field(..., description="Number of cameras actually mapped")
     message: str = Field(..., description="Status message")
 
@@ -191,10 +222,18 @@ class PCConnectionStatus(BaseModel):
 
     pc_id: str = Field(..., description="PC identifier")
     pc_name: str = Field(..., description="PC name")
-    is_connected: bool = Field(..., description="Whether PC is currently connected to WebSocket server")
-    last_connected: Optional[datetime] = Field(None, description="Last connection timestamp from database")
-    last_applied: Optional[datetime] = Field(None, description="Last configuration applied timestamp")
-    websocket_connected_at: Optional[str] = Field(None, description="Current WebSocket connection start time (ISO format)")
+    is_connected: bool = Field(
+        ..., description="Whether PC is currently connected to WebSocket server"
+    )
+    last_connected: Optional[datetime] = Field(
+        None, description="Last connection timestamp from database"
+    )
+    last_applied: Optional[datetime] = Field(
+        None, description="Last configuration applied timestamp"
+    )
+    websocket_connected_at: Optional[str] = Field(
+        None, description="Current WebSocket connection start time (ISO format)"
+    )
 
     class Config:
         from_attributes = True
@@ -206,15 +245,20 @@ class AllPCsConnectionStatus(BaseModel):
     total_pcs: int = Field(..., description="Total number of PCs in database")
     connected_count: int = Field(..., description="Number of currently connected PCs")
     disconnected_count: int = Field(..., description="Number of disconnected PCs")
-    pcs: List[PCConnectionStatus] = Field(..., description="List of PCs with their connection status")
+    pcs: List[PCConnectionStatus] = Field(
+        ..., description="List of PCs with their connection status"
+    )
 
 
 # Import Config Schemas
 
+
 class ImportConfigRequest(BaseModel):
     """Request body for importing PC configuration from device JSON."""
 
-    config: dict = Field(..., description="Device configuration JSON (same format as deploy config)")
+    config: dict = Field(
+        ..., description="Device configuration JSON (same format as deploy config)"
+    )
 
 
 class ImportConfigResponse(BaseModel):
@@ -225,8 +269,12 @@ class ImportConfigResponse(BaseModel):
     screens_created: int = Field(..., description="Number of screens created")
     views_created: int = Field(..., description="Number of views created")
     mappings_created: int = Field(..., description="Number of screen mappings created")
-    cameras_skipped: int = Field(0, description="Number of cameras skipped (not found in database)")
-    devices_skipped: int = Field(0, description="Number of devices skipped (not found in database)")
+    cameras_skipped: int = Field(
+        0, description="Number of cameras skipped (not found in database)"
+    )
+    devices_skipped: int = Field(
+        0, description="Number of devices skipped (not found in database)"
+    )
     message: str = Field(..., description="Status message")
 
 

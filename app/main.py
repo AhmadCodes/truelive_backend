@@ -13,14 +13,36 @@ import logging
 
 from app.core.config import settings
 from app.database import check_db_health, SessionLocal
-from app.api.v1 import auth, sites, devices, cameras, pcs, screens, views, users, categories, snapshots, configs, stream, invitations, audit_logs, settings as settings_router
-from app.api.v1 import alert_addresses, alerts as alerts_router, webhook_consumers, service_accounts
+from app.api.v1 import (
+    auth,
+    sites,
+    devices,
+    cameras,
+    pcs,
+    screens,
+    screen_layouts,
+    views,
+    users,
+    categories,
+    snapshots,
+    configs,
+    stream,
+    invitations,
+    audit_logs,
+    settings as settings_router,
+)  # noqa: E501
+from app.api.v1 import (
+    alert_addresses,
+    alerts as alerts_router,
+    webhook_consumers,
+    service_accounts,
+)
 
 
 # Configure logging
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
@@ -39,6 +61,7 @@ openapi_tags = [
     {"name": "Cameras"},
     {"name": "PCs"},
     {"name": "Screens"},
+    {"name": "Screen Layouts"},
     {"name": "Views"},
     {"name": "Users"},
     {"name": "Audit Logs"},
@@ -106,8 +129,7 @@ app.add_middleware(
 # Add Trusted Host middleware (security)
 if not settings.DEBUG:
     app.add_middleware(
-        TrustedHostMiddleware,
-        allowed_hosts=["*"]  # Configure properly in production
+        TrustedHostMiddleware, allowed_hosts=["*"]  # Configure properly in production
     )
 
 
@@ -134,8 +156,12 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         for key, value in error.items():
             if key == "ctx" and isinstance(value, dict):
                 # Recursively process context dict
-                processed_error[key] = {k: str(v) if not isinstance(v, (str, int, float, bool, type(None))) else v
-                                       for k, v in value.items()}
+                processed_error[key] = {
+                    k: str(v)
+                    if not isinstance(v, (str, int, float, bool, type(None)))
+                    else v
+                    for k, v in value.items()
+                }
             elif not isinstance(value, (str, int, float, bool, list, dict, type(None))):
                 processed_error[key] = str(value)
             else:
@@ -147,7 +173,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         content={
             "detail": "Validation error",
             "errors": errors,
-        }
+        },
     )
 
 
@@ -155,20 +181,14 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 async def sqlalchemy_exception_handler(request: Request, exc: SQLAlchemyError):
     """Handle database errors."""
     logger.error(f"Database error: {exc}")
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "Database error occurred"}
-    )
+    return JSONResponse(status_code=500, content={"detail": "Database error occurred"})
 
 
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
     """Handle general exceptions."""
     logger.error(f"Unexpected error: {exc}", exc_info=True)
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "Internal server error"}
-    )
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
 # Health check endpoints
@@ -200,93 +220,75 @@ async def root():
 
 # Include API routers
 app.include_router(
-    auth.router,
-    prefix=f"{settings.API_V1_PREFIX}/auth",
-    tags=["Authentication"]
+    auth.router, prefix=f"{settings.API_V1_PREFIX}/auth", tags=["Authentication"]
 )
 
 app.include_router(
     invitations.router,
     prefix=f"{settings.API_V1_PREFIX}/invitations",
-    tags=["Invitations"]
+    tags=["Invitations"],
 )
 
 app.include_router(
-    sites.router,
-    prefix=f"{settings.API_V1_PREFIX}/sites",
-    tags=["Sites"]
+    sites.router, prefix=f"{settings.API_V1_PREFIX}/sites", tags=["Sites"]
 )
 
 app.include_router(
-    devices.router,
-    prefix=f"{settings.API_V1_PREFIX}/devices",
-    tags=["Devices"]
+    devices.router, prefix=f"{settings.API_V1_PREFIX}/devices", tags=["Devices"]
 )
 
 app.include_router(
-    cameras.router,
-    prefix=f"{settings.API_V1_PREFIX}/cameras",
-    tags=["Cameras"]
+    cameras.router, prefix=f"{settings.API_V1_PREFIX}/cameras", tags=["Cameras"]
+)
+
+app.include_router(pcs.router, prefix=f"{settings.API_V1_PREFIX}/pcs", tags=["PCs"])
+
+app.include_router(
+    screens.router, prefix=f"{settings.API_V1_PREFIX}/screens", tags=["Screens"]
 )
 
 app.include_router(
-    pcs.router,
-    prefix=f"{settings.API_V1_PREFIX}/pcs",
-    tags=["PCs"]
+    screen_layouts.router,
+    prefix=f"{settings.API_V1_PREFIX}/screen-layouts",
+    tags=["Screen Layouts"],
 )
 
 app.include_router(
-    screens.router,
-    prefix=f"{settings.API_V1_PREFIX}/screens",
-    tags=["Screens"]
+    views.router, prefix=f"{settings.API_V1_PREFIX}/views", tags=["Views"]
 )
 
 app.include_router(
-    views.router,
-    prefix=f"{settings.API_V1_PREFIX}/views",
-    tags=["Views"]
-)
-
-app.include_router(
-    users.router,
-    prefix=f"{settings.API_V1_PREFIX}/users",
-    tags=["Users"]
+    users.router, prefix=f"{settings.API_V1_PREFIX}/users", tags=["Users"]
 )
 
 app.include_router(
     audit_logs.router,
     prefix=f"{settings.API_V1_PREFIX}/audit-logs",
-    tags=["Audit Logs"]
+    tags=["Audit Logs"],
 )
 
 app.include_router(
     categories.router,
     prefix=f"{settings.API_V1_PREFIX}/categories",
-    tags=["Categories"]
+    tags=["Categories"],
 )
 
 app.include_router(
     settings_router.router,
     prefix=f"{settings.API_V1_PREFIX}/settings",
-    tags=["System Settings"]
+    tags=["System Settings"],
 )
 
 app.include_router(
-    snapshots.router,
-    prefix=f"{settings.API_V1_PREFIX}/snapshots",
-    tags=["Snapshots"]
+    snapshots.router, prefix=f"{settings.API_V1_PREFIX}/snapshots", tags=["Snapshots"]
 )
 
 app.include_router(
-    configs.router,
-    prefix=f"{settings.API_V1_PREFIX}/configs",
-    tags=["Configurations"]
+    configs.router, prefix=f"{settings.API_V1_PREFIX}/configs", tags=["Configurations"]
 )
 
 app.include_router(
-    stream.router,
-    prefix=f"{settings.API_V1_PREFIX}/stream",
-    tags=["Streaming"]
+    stream.router, prefix=f"{settings.API_V1_PREFIX}/stream", tags=["Streaming"]
 )
 
 # ---------------- Alerting feature ---------------- #
@@ -332,6 +334,7 @@ async def startup_event():
         # Seed default system settings if not present
         try:
             from app.services.settings_seeder import seed_settings
+
             db = SessionLocal()
             result = seed_settings(db)
             if result["created"] > 0:
