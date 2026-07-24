@@ -7,9 +7,7 @@ Before 008 it modelled a single NVR/DVR; that entity is now `app.models.device.D
 telephones, notes and coordinates.
 """
 
-from sqlalchemy import (
-    Column, String, Text, Index
-)
+from sqlalchemy import Column, String, Text, Index
 from sqlalchemy.orm import relationship
 from app.models.base import BaseModel
 
@@ -33,91 +31,62 @@ class Site(BaseModel):
         notes: Site notes and instructions
         lat_long: Latitude and longitude coordinates
     """
+
     __tablename__ = "sites"
 
-    id = Column(
-        String(255),
-        primary_key=True,
-        comment="Unique site identifier"
-    )
-    name = Column(
-        String(255),
-        nullable=False,
-        index=True,
-        comment="Site name"
-    )
+    id = Column(String(255), primary_key=True, comment="Unique site identifier")
+    name = Column(String(255), nullable=False, index=True, comment="Site name")
 
     # Location / contact details (moved up from the former sites table in 008)
     customer_id = Column(
-        String(50),
-        nullable=True,
-        index=True,
-        comment="External customer reference ID"
+        String(50), nullable=True, index=True, comment="External customer reference ID"
     )
-    address = Column(
-        String(500),
-        nullable=True,
-        comment="Physical address of the site"
-    )
-    telephone = Column(
-        String(255),
-        nullable=True,
-        comment="Primary contact telephone"
-    )
+    address = Column(String(500), nullable=True, comment="Physical address of the site")
+    telephone = Column(String(255), nullable=True, comment="Primary contact telephone")
     telephone2 = Column(
-        String(255),
-        nullable=True,
-        comment="Secondary contact telephone"
+        String(255), nullable=True, comment="Secondary contact telephone"
     )
     telephone_police = Column(
-        String(100),
-        nullable=True,
-        comment="Police contact telephone"
+        String(100), nullable=True, comment="Police contact telephone"
     )
     telephone_fire = Column(
-        String(100),
-        nullable=True,
-        comment="Fire department contact telephone"
+        String(100), nullable=True, comment="Fire department contact telephone"
     )
-    notes = Column(
-        Text,
-        nullable=True,
-        comment="Site notes and instructions"
-    )
+    notes = Column(Text, nullable=True, comment="Site notes and instructions")
     lat_long = Column(
-        String(100),
-        nullable=True,
-        comment="Latitude and longitude coordinates"
+        String(100), nullable=True, comment="Latitude and longitude coordinates"
     )
 
     # Relationships
     devices = relationship(
-        "Device",
-        back_populates="site",
-        cascade="all, delete-orphan"
+        "Device", back_populates="site", cascade="all, delete-orphan"
     )
     category_mappings = relationship(
-        "SiteCategoryMapping",
-        back_populates="site",
-        cascade="all, delete-orphan"
+        "SiteCategoryMapping", back_populates="site", cascade="all, delete-orphan"
     )
     layout_config = relationship(
         "SiteCamerasLayoutConfig",
         back_populates="site",
         uselist=False,  # One-to-one relationship
-        cascade="all, delete-orphan"
+        cascade="all, delete-orphan",
     )
     layout_slots = relationship(
-        "SiteCamerasLayout",
-        back_populates="site",
-        cascade="all, delete-orphan"
+        "SiteCamerasLayout", back_populates="site", cascade="all, delete-orphan"
+    )
+    teams = relationship(
+        "Team",
+        secondary="site_team",
+        back_populates="sites",
+        doc="Teams this site is assigned to (many-to-many)",
     )
 
     # Table constraints
     __table_args__ = (
         Index("idx_sites_name", "name"),
         Index("idx_sites_customer_id", "customer_id"),
-        Index("idx_sites_created_at", "created_at", postgresql_ops={"created_at": "DESC"}),
+        Index(
+            "idx_sites_created_at", "created_at", postgresql_ops={"created_at": "DESC"}
+        ),
     )
 
     def __repr__(self):

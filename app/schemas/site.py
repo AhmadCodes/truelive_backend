@@ -11,10 +11,12 @@ from typing import Optional, List
 from datetime import datetime
 
 from app.schemas.device import DeviceResponse
+from app.schemas.team import TeamResponse
 
 
 class SiteBase(BaseModel):
     """Base site schema (the physical location)."""
+
     name: str = Field(..., min_length=1, max_length=255)
     customer_id: Optional[str] = Field(None, max_length=50)
     address: Optional[str] = Field(None, max_length=500)
@@ -28,11 +30,17 @@ class SiteBase(BaseModel):
 
 class SiteCreate(SiteBase):
     """Schema for creating a new site."""
-    pass
+
+    team_ids: List[str] = Field(
+        ...,
+        min_length=1,
+        description="Teams to assign this site to (at least one; a site may belong to many teams)",
+    )
 
 
 class SiteUpdate(BaseModel):
     """Schema for updating site details. All fields are optional."""
+
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     customer_id: Optional[str] = Field(None, max_length=50)
     address: Optional[str] = Field(None, max_length=500)
@@ -46,6 +54,7 @@ class SiteUpdate(BaseModel):
 
 class SiteResponse(BaseModel):
     """Site response schema."""
+
     id: str
     name: str
     customer_id: Optional[str] = None
@@ -65,6 +74,7 @@ class SiteResponse(BaseModel):
 
 class SiteSummaryResponse(SiteResponse):
     """Lightweight site response used in list views — no nested devices."""
+
     device_count: Optional[int] = 0
 
     class Config:
@@ -72,9 +82,11 @@ class SiteSummaryResponse(SiteResponse):
 
 
 class SiteDetailResponse(SiteResponse):
-    """Detailed site response with its devices."""
+    """Detailed site response with its devices and team memberships."""
+
     device_count: Optional[int] = 0
     devices: List[DeviceResponse] = []
+    teams: List[TeamResponse] = []
 
     class Config:
         from_attributes = True
@@ -82,6 +94,7 @@ class SiteDetailResponse(SiteResponse):
 
 class SiteListResponse(BaseModel):
     """Paginated site list response."""
+
     sites: List[SiteSummaryResponse]
     total: int
     page: int

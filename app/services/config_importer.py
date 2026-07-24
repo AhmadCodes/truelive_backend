@@ -19,6 +19,11 @@ from app.models.screen_mapping import ScreenMapping
 from app.models.camera import Camera
 from app.models.device import Device
 from app.services.pc_screen_configurator import get_or_create_layout_for_pc
+from app.services.team_enforcement import (
+    camera_ids_for_team,
+    team_id_for_layout,
+    assert_cameras_in_layout_team,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +84,16 @@ def import_config_for_pc(db: Session, pc_id: str, config: dict) -> ImportResult:
     try:
         # Resolve the PC's screen layout, auto-creating one if unassigned.
         layout_id = get_or_create_layout_for_pc(pc, db)
+
+        # Team boundary: only cameras whose site is in the layout's team may be
+        # placed. Restrict the allowed set so cross-team cameras are skipped the
+        # same way missing cameras are (keeps the team's-cameras-on-team's-layouts
+        # invariant on the import path, defense-in-depth behind the filtered UI).
+        layout_team_id = team_id_for_layout(db, layout_id)
+        if layout_team_id is not None:
+            existing_cameras = existing_cameras & camera_ids_for_team(
+                db, layout_team_id
+            )
 
         # Clear existing configuration for this layout
         _clear_pc_config(db, layout_id)
@@ -388,6 +403,20 @@ def copy_layout_from_pc(
     try:
         # Resolve the target PC's layout, auto-creating one if unassigned.
         target_layout_id = get_or_create_layout_for_pc(target_pc, db)
+
+        # Team boundary: refuse to copy cameras whose site isn't in the target
+        # layout's team (e.g. copying from a PC in another team). Checked BEFORE
+        # clearing the target so a rejected copy leaves the target untouched.
+        source_camera_ids = [
+            cam_id
+            for (cam_id,) in db.query(ScreenMapping.camera_id)
+            .filter(
+                ScreenMapping.screen_id.in_(source_screen_ids),
+                ScreenMapping.camera_id.isnot(None),
+            )
+            .all()
+        ]
+        assert_cameras_in_layout_team(db, source_camera_ids, target_layout_id)
 
         # Clear existing configuration for the target layout
         _clear_pc_config(db, target_layout_id)

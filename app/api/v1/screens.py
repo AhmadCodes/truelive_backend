@@ -17,6 +17,10 @@ from app.models.screen_mapping import ScreenMapping
 from app.models.pc_screen_mapping_state import PcScreenMappingState
 from app.models.camera import Camera
 from app.models.device import Device
+from app.services.team_enforcement import (
+    assert_camera_in_screen_team,
+    CrossTeamError,
+)
 from app.schemas.screen import (
     ScreenCreate,
     ScreenUpdate,
@@ -834,6 +838,13 @@ async def create_screen_mapping(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Camera with ID '{mapping_data.camera_id}' not found",
             )
+        # Team boundary: the camera's site must belong to this layout's team.
+        try:
+            assert_camera_in_screen_team(db, mapping_data.camera_id, view.screen_id)
+        except CrossTeamError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            )
 
     if mapping_data.device_id:
         device = db.query(Device).filter(Device.id == mapping_data.device_id).first()
@@ -940,6 +951,15 @@ async def update_screen_mapping(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Camera with ID '{update_data['camera_id']}' not found",
+            )
+        # Team boundary: the camera's site must belong to this layout's team.
+        try:
+            assert_camera_in_screen_team(
+                db, update_data["camera_id"], mapping.screen_id
+            )
+        except CrossTeamError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
             )
 
     # Verify device if updating

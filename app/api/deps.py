@@ -21,7 +21,7 @@ security = HTTPBearer()
 
 async def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)],
-    db: Annotated[Session, Depends(get_db)]
+    db: Annotated[Session, Depends(get_db)],
 ) -> User:
     """
     Get current authenticated user from JWT token.
@@ -64,8 +64,7 @@ async def get_current_user(
 
     if not user.is_active:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Inactive user"
+            status_code=status.HTTP_403_FORBIDDEN, detail="Inactive user"
         )
 
     return user
@@ -88,15 +87,13 @@ async def get_current_active_user(
     """
     if not current_user.is_active:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Inactive user"
+            status_code=status.HTTP_403_FORBIDDEN, detail="Inactive user"
         )
     return current_user
 
 
 async def require_role(
-    required_role: str,
-    current_user: Annotated[User, Depends(get_current_active_user)]
+    required_role: str, current_user: Annotated[User, Depends(get_current_active_user)]
 ) -> User:
     """
     Check if current user has required role.
@@ -111,11 +108,7 @@ async def require_role(
     Raises:
         HTTPException: If user doesn't have required role
     """
-    role_hierarchy = {
-        "user": 0,
-        "admin": 1,
-        "super_admin": 2
-    }
+    role_hierarchy = {"user": 0, "admin": 1, "super_admin": 2}
 
     user_role_level = role_hierarchy.get(current_user.role, -1)
     required_role_level = role_hierarchy.get(required_role, 999)
@@ -123,7 +116,7 @@ async def require_role(
     if user_role_level < required_role_level:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Insufficient permissions. {required_role} role required."
+            detail=f"Insufficient permissions. {required_role} role required.",
         )
 
     return current_user
@@ -146,8 +139,7 @@ def get_admin_user(
     """
     if current_user.role not in ["admin", "super_admin"]:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin privileges required"
+            status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required"
         )
     return current_user
 
@@ -170,7 +162,7 @@ def get_super_admin_user(
     if current_user.role != "super_admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Super admin privileges required"
+            detail="Super admin privileges required",
         )
     return current_user
 
@@ -213,7 +205,9 @@ async def get_current_service_account(
     # of the raw token as a fast index) is a follow-up if this becomes a hotspot.
     candidates = (
         db.query(ServiceAccountToken)
-        .join(ServiceAccount, ServiceAccountToken.service_account_id == ServiceAccount.id)
+        .join(
+            ServiceAccount, ServiceAccountToken.service_account_id == ServiceAccount.id
+        )
         .filter(
             ServiceAccountToken.revoked_at.is_(None),
             ServiceAccount.is_active == True,  # noqa: E712
@@ -251,7 +245,7 @@ def require_scope(*required_scopes: str):
     """
 
     async def _check(
-        sa = Depends(get_current_service_account),
+        sa=Depends(get_current_service_account),
     ):
         scopes = set(sa.scopes or [])
         if not any(s in scopes for s in required_scopes):
@@ -335,10 +329,47 @@ def admin_or_scope(*scopes: str):
     return _dep
 
 
+def super_admin_or_scope(*scopes: str):
+    """
+    Allow a super-admin JWT user OR a service account with one of `scopes`.
+
+    Stricter than `admin_or_scope`: plain admins are rejected. Used for
+    management surfaces that are reserved to super-admins for humans while still
+    being reachable by machine integrations holding the appropriate manage scope
+    (e.g. team management).
+    """
+
+    async def _dep(
+        credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)],
+        db: Annotated[Session, Depends(get_db)],
+    ):
+        raw = credentials.credentials or ""
+        if raw.startswith("tlsa_"):
+            sa = await get_current_service_account(credentials, db)
+            sa_scopes = set(sa.scopes or [])
+            if not (sa_scopes & set(scopes)):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Missing required scope ({' or '.join(scopes)})",
+                )
+            return sa
+        user = await get_current_user(credentials, db)
+        if user.role != "super_admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Super-admin privileges required",
+            )
+        return user
+
+    return _dep
+
+
 # Type aliases for dependency injection
 CurrentUser = Annotated[User, Depends(get_current_user)]
 ActiveUser = Annotated[User, Depends(get_current_active_user)]
 AdminUser = Annotated[User, Depends(get_admin_user)]
 SuperAdminUser = Annotated[User, Depends(get_super_admin_user)]
 DBSession = Annotated[Session, Depends(get_db)]
-ServiceAccountAuth = Annotated["ServiceAccount", Depends(get_current_service_account)]  # noqa: F821
+ServiceAccountAuth = Annotated[
+    "ServiceAccount", Depends(get_current_service_account)
+]  # noqa: F821

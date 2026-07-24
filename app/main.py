@@ -21,6 +21,7 @@ from app.api.v1 import (
     pcs,
     screens,
     screen_layouts,
+    teams,
     views,
     users,
     categories,
@@ -62,6 +63,7 @@ openapi_tags = [
     {"name": "PCs"},
     {"name": "Screens"},
     {"name": "Screen Layouts"},
+    {"name": "Teams"},
     {"name": "Views"},
     {"name": "Users"},
     {"name": "Audit Logs"},
@@ -251,6 +253,10 @@ app.include_router(
     screen_layouts.router,
     prefix=f"{settings.API_V1_PREFIX}/screen-layouts",
     tags=["Screen Layouts"],
+)
+
+app.include_router(
+    teams.router, prefix=f"{settings.API_V1_PREFIX}/teams", tags=["Teams"]
 )
 
 app.include_router(

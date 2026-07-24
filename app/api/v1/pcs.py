@@ -3,15 +3,20 @@ PC management API endpoints.
 Provides CRUD operations for PCs and their associations with screens.
 """
 
-from fastapi import APIRouter, HTTPException, status, Query
+from fastapi import APIRouter, HTTPException, status, Query, Depends
 from sqlalchemy import func, or_
 from typing import List, Optional
 import httpx
 from datetime import datetime
 
-from app.api.deps import AdminUser, DBSession, CurrentUser
+from app.api.deps import AdminUser, DBSession, CurrentUser, admin_or_scope
 from app.models.pc import PC
+from app.models.team import Team
 from app.models.screen import Screen
+from app.services.team_enforcement import (
+    MSG_PC_LAYOUT_DIFFERENT_TEAM,
+    MSG_PC_MOVE_HOLDS_LAYOUT,
+)
 from app.schemas.pc import (
     PCCreate,
     PCUpdate,
@@ -39,7 +44,11 @@ router = APIRouter()
 
 
 @router.post("", response_model=PCResponse, status_code=status.HTTP_201_CREATED)
-async def create_pc(pc_data: PCCreate, current_user: AdminUser, db: DBSession):
+async def create_pc(
+    pc_data: PCCreate,
+    db: DBSession,
+    _auth=Depends(admin_or_scope("teams:manage")),
+):
     """
     Create a new PC.
 
@@ -78,6 +87,13 @@ async def create_pc(pc_data: PCCreate, current_user: AdminUser, db: DBSession):
                 detail=f"PC '{pc_data.manager_id}' is not a manager PC",
             )
 
+    # Validate the team exists (every PC belongs to exactly one team).
+    if not db.query(Team).filter(Team.id == pc_data.team_id).first():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Team '{pc_data.team_id}' not found",
+        )
+
     # Create new PC
     new_pc = PC(
         id=pc_data.id,
@@ -86,13 +102,14 @@ async def create_pc(pc_data: PCCreate, current_user: AdminUser, db: DBSession):
         gpu_type=pc_data.gpu_type,
         role=pc_data.role,
         manager_id=pc_data.manager_id,
+        team_id=pc_data.team_id,
     )
 
     db.add(new_pc)
     db.commit()
     db.refresh(new_pc)
 
-    logger.info(f"PC '{new_pc.id}' created by user {current_user.username}")
+    logger.info(f"PC '{new_pc.id}' created")
     return new_pc
 
 
@@ -415,7 +432,10 @@ async def get_pc_screens(pc_id: str, current_user: CurrentUser, db: DBSession):
 
 @router.put("/{pc_id}", response_model=PCResponse)
 async def update_pc(
-    pc_id: str, pc_data: PCUpdate, current_user: AdminUser, db: DBSession
+    pc_id: str,
+    pc_data: PCUpdate,
+    db: DBSession,
+    _auth=Depends(admin_or_scope("teams:manage")),
 ):
     """
     Update a PC.
@@ -458,20 +478,48 @@ async def update_pc(
                 detail=f"PC '{update_data['manager_id']}' is not a manager PC",
             )
 
-    # Reparent to a screen layout. A non-null value must reference an existing
-    # layout; an explicit null unassigns the PC from its current layout.
-    if update_data.get("screen_layout_id"):
+    # Validate a team change (every PC belongs to exactly one team).
+    if "team_id" in update_data and update_data["team_id"] != pc.team_id:
+        if not db.query(Team).filter(Team.id == update_data["team_id"]).first():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Team '{update_data['team_id']}' not found",
+            )
+
+    # Resolve the PC's post-update team and layout, then enforce that the two
+    # stay in the same team. This single check covers both assigning a layout to
+    # a PC (AC-14) and moving a PC that still holds a layout (AC-17).
+    effective_team = update_data.get("team_id", pc.team_id)
+    if "screen_layout_id" in update_data:
+        effective_layout_id = update_data["screen_layout_id"]
+        layout_is_new = bool(effective_layout_id)
+    else:
+        effective_layout_id = pc.screen_layout_id
+        layout_is_new = False
+
+    if effective_layout_id:
         from app.models.screen_layout import ScreenLayout
 
         layout = (
             db.query(ScreenLayout)
-            .filter(ScreenLayout.id == update_data["screen_layout_id"])
+            .filter(ScreenLayout.id == effective_layout_id)
             .first()
         )
         if not layout:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Screen layout with ID '{update_data['screen_layout_id']}' not found",
+                detail=f"Screen layout with ID '{effective_layout_id}' not found",
+            )
+        if layout.team_id != effective_team:
+            # A newly-provided layout => an assignment; otherwise the PC is being
+            # moved to a team that doesn't match the layout it still holds.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    MSG_PC_LAYOUT_DIFFERENT_TEAM
+                    if layout_is_new
+                    else MSG_PC_MOVE_HOLDS_LAYOUT
+                ),
             )
 
     # Validate role change
@@ -488,7 +536,7 @@ async def update_pc(
     db.commit()
     db.refresh(pc)
 
-    logger.info(f"PC '{pc_id}' updated by user {current_user.username}")
+    logger.info(f"PC '{pc_id}' updated")
     return pc
 
 
@@ -576,7 +624,7 @@ async def preview_pc_config(pc_id: str, current_user: AdminUser, db: DBSession):
         logger.error(f"Error generating config for PC {pc_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to generate configuration: {str(e)}",
+            detail="Could not generate the display configuration.",
         )
 
 
@@ -843,7 +891,7 @@ async def configure_pc_screens(
         logger.error(f"Error configuring screens for PC {pc_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to configure PC screens: {str(e)}",
+            detail="Could not configure the display screens.",
         )
 
 
@@ -910,7 +958,7 @@ async def generate_pc_token(pc_id: str, current_user: AdminUser, db: DBSession):
         logger.error(f"Error generating token for PC {pc_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to generate token: {str(e)}",
+            detail="Could not generate the authentication token.",
         )
 
 

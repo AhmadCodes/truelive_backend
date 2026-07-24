@@ -16,6 +16,7 @@ from app.models.view import View
 from app.models.screen_mapping import ScreenMapping
 from app.models.camera import Camera
 from app.schemas.pc import ScreenConfigRequest
+from app.services.team_enforcement import assert_cameras_in_layout_team
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,8 @@ def get_or_create_layout_for_pc(pc: PC, db: Session) -> str:
     layout_id = f"lay_{pc.id}"
     layout = db.query(ScreenLayout).filter(ScreenLayout.id == layout_id).first()
     if layout is None:
-        layout = ScreenLayout(id=layout_id, name=pc.name)
+        # An auto-created layout inherits the PC's team (team_id is mandatory).
+        layout = ScreenLayout(id=layout_id, name=pc.name, team_id=pc.team_id)
         db.add(layout)
         db.flush()
         logger.info(f"Auto-created screen layout '{layout_id}' for PC {pc.id}")
@@ -287,6 +289,11 @@ def configure_pc_screens(
     # Resolve the PC's screen layout, auto-creating and assigning one if the PC
     # has no layout yet.
     layout_id = get_or_create_layout_for_pc(pc, db)
+
+    # Team boundary: every camera must belong to a site in the layout's team.
+    # CrossTeamError subclasses ValueError, so the endpoint surfaces it as a 400
+    # with the customer-facing message.
+    assert_cameras_in_layout_team(db, request.camera_ids, layout_id)
 
     # Get highest existing screen index for this layout to avoid ID conflicts
     existing_screens = (

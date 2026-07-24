@@ -32,6 +32,8 @@ Scope = Literal[
     "devices:manage",
     "cameras:read",
     "cameras:manage",
+    "teams:read",
+    "teams:manage",
 ]
 """Valid permission scopes for service-account tokens.
 
@@ -70,6 +72,18 @@ Inventory (read + manage are independent; `:manage` also satisfies any
                        /cameras/device/{id}.
 - `cameras:manage`   — POST/PUT/PATCH/DELETE on /cameras (including the
                        mark-as-seen and toggle-new sub-resources).
+
+Teams (organizational grouping over sites/PCs/layouts; read + manage independent,
+`:manage` also satisfies any `:read` requirement):
+
+- `teams:read`       — GET on /teams, /teams/{id}, and /teams/{id}/camera-library.
+                       A **Team** groups Sites (many-to-many), PCs, and Screen
+                       Layouts, and constrains which cameras may appear on a
+                       team's layouts and which PCs its layouts may be assigned to.
+- `teams:manage`     — POST/PUT/DELETE on /teams and its membership sub-resources
+                       (assign/unassign sites). Human callers must additionally be
+                       super_admin; this scope grants the same management surface
+                       to machine integrations.
 """
 
 
@@ -80,8 +94,11 @@ class ServiceAccountCreate(BaseModel):
     itself. After creation, issue one or more tokens via
     `POST /service-accounts/{id}/tokens`.
     """
+
     name: str = Field(
-        ..., min_length=1, max_length=255,
+        ...,
+        min_length=1,
+        max_length=255,
         description=(
             "Unique human-readable identifier, e.g. `acme-monitoring`. Use one "
             "service account per integrating system."
@@ -91,7 +108,9 @@ class ServiceAccountCreate(BaseModel):
     description: Optional[str] = Field(
         None,
         description="Free-form notes — who owns it, what it's used for, when to revoke.",
-        examples=["Production monitoring platform — owns webhook consumer + reads alerts."],
+        examples=[
+            "Production monitoring platform — owns webhook consumer + reads alerts."
+        ],
     )
     scopes: list[Scope] = Field(
         default_factory=list,
@@ -118,6 +137,7 @@ class ServiceAccountCreate(BaseModel):
 
 class ServiceAccountUpdate(BaseModel):
     """Partial update — only the fields you want to change need to be present."""
+
     description: Optional[str] = Field(None, description="New description.")
     scopes: Optional[list[Scope]] = Field(
         None,
@@ -134,7 +154,9 @@ class ServiceAccountUpdate(BaseModel):
             "keeping the account row. Omit the field entirely to leave scopes "
             "unchanged."
         ),
-        examples=[["alerts:read", "alerts:raw:read", "webhook:manage", "addresses:manage"]],
+        examples=[
+            ["alerts:read", "alerts:raw:read", "webhook:manage", "addresses:manage"]
+        ],
     )
     is_active: Optional[bool] = Field(
         None,
@@ -147,6 +169,7 @@ class ServiceAccountUpdate(BaseModel):
 
 class ServiceAccountResponse(BaseModel):
     """A service account record (no token material)."""
+
     id: str = Field(..., description="UUID of the service account.")
     name: str
     description: Optional[str] = None
@@ -163,7 +186,8 @@ class ServiceAccountResponse(BaseModel):
         ),
     )
     is_active: bool = Field(
-        ..., description="If false, all tokens for this account are rejected at auth time.",
+        ...,
+        description="If false, all tokens for this account are rejected at auth time.",
     )
     created_at: datetime
     updated_at: datetime
@@ -174,8 +198,11 @@ class ServiceAccountResponse(BaseModel):
 
 class ServiceAccountTokenCreate(BaseModel):
     """Request body for issuing a new bearer token for an existing account."""
+
     name: str = Field(
-        ..., min_length=1, max_length=255,
+        ...,
+        min_length=1,
+        max_length=255,
         description=(
             "Human-friendly token label — use this to track rotations. Recommended "
             "format: `<env>-<date>` or `<env>-<kid>`."
@@ -198,14 +225,17 @@ class ServiceAccountTokenResponse(BaseModel):
 
     Use `ServiceAccountTokenWithSecret` only on the initial POST response.
     """
+
     id: str = Field(..., description="UUID of the token row.")
     name: str
     expires_at: Optional[datetime] = None
     last_used_at: Optional[datetime] = Field(
-        None, description="UTC timestamp of the most recent successful auth.",
+        None,
+        description="UTC timestamp of the most recent successful auth.",
     )
     revoked_at: Optional[datetime] = Field(
-        None, description="If set, the token is permanently invalidated.",
+        None,
+        description="If set, the token is permanently invalidated.",
     )
     created_at: datetime
 
@@ -220,6 +250,7 @@ class ServiceAccountTokenWithSecret(ServiceAccountTokenResponse):
     secret manager immediately, then discard the response. If you lose it,
     issue a new token and revoke this one.
     """
+
     secret: str = Field(
         ...,
         description=(

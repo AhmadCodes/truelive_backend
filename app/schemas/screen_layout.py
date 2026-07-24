@@ -21,6 +21,9 @@ class ScreenLayoutCreate(BaseModel):
     name: str = Field(
         ..., min_length=1, max_length=255, description="Screen layout name"
     )
+    team_id: str = Field(
+        ..., min_length=1, max_length=50, description="Team this layout belongs to"
+    )
 
 
 class ScreenLayoutUpdate(BaseModel):
@@ -29,6 +32,9 @@ class ScreenLayoutUpdate(BaseModel):
     name: Optional[str] = Field(
         None, min_length=1, max_length=255, description="Screen layout name"
     )
+    team_id: Optional[str] = Field(
+        None, min_length=1, max_length=50, description="Team this layout belongs to"
+    )
 
 
 class ScreenLayoutResponse(BaseModel):
@@ -36,6 +42,7 @@ class ScreenLayoutResponse(BaseModel):
 
     id: str
     name: str
+    team_id: str
     created_at: datetime
     updated_at: datetime
 
