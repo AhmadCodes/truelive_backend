@@ -16,6 +16,7 @@ from sqlalchemy import func
 from app.api.deps import DBSession, user_or_scope, admin_or_scope
 from app.models.site import Site
 from app.models.device import Device
+from app.models.team import Team, site_team
 from app.models.category import SiteCategoryMapping
 from app.schemas.device import CategoryAssignment
 from app.schemas.site import (
@@ -24,21 +25,21 @@ from app.schemas.site import (
     SiteResponse,
     SiteSummaryResponse,
     SiteDetailResponse,
-    SiteListResponse
+    SiteListResponse,
 )
 from app.schemas.site_camera_layout import (
     AutoPopulateResponse,
     BulkAutoPopulateResponse,
     SiteCameraLayoutConfigResponse,
     SaveLayoutRequest,
-    SaveLayoutResponse
+    SaveLayoutResponse,
 )
 from app.services.site_camera_layout_service import (
     auto_populate_site_cameras,
     auto_populate_all_sites,
     get_site_camera_layout,
     save_site_camera_layout,
-    delete_site_camera_layout
+    delete_site_camera_layout,
 )
 
 router = APIRouter()
@@ -68,9 +69,9 @@ def _generate_site_id() -> str:
 @router.get("", response_model=SiteListResponse)
 async def list_sites(
     db: DBSession,
-    _auth = Depends(user_or_scope("sites:read", "sites:manage")),
+    _auth=Depends(user_or_scope("sites:read", "sites:manage")),
     page: int = Query(1, ge=1),
-    per_page: int = Query(50, ge=1, le=1000)
+    per_page: int = Query(50, ge=1, le=1000),
 ):
     """
     List all sites with pagination and a device count per site.
@@ -88,11 +89,12 @@ async def list_sites(
     site_ids = [site.id for site in sites]
     counts = {}
     if site_ids:
-        rows = db.query(
-            Device.site_id, func.count(Device.id)
-        ).filter(
-            Device.site_id.in_(site_ids)
-        ).group_by(Device.site_id).all()
+        rows = (
+            db.query(Device.site_id, func.count(Device.id))
+            .filter(Device.site_id.in_(site_ids))
+            .group_by(Device.site_id)
+            .all()
+        )
         counts = {site_id: count for site_id, count in rows}
 
     sites_response = []
@@ -102,24 +104,31 @@ async def list_sites(
         sites_response.append(site_data)
 
     return SiteListResponse(
-        sites=sites_response,
-        total=total,
-        page=page,
-        per_page=per_page
+        sites=sites_response, total=total, page=page, per_page=per_page
     )
 
 
 @router.post("", response_model=SiteResponse, status_code=status.HTTP_201_CREATED)
 async def create_site(
-    site_data: SiteCreate,
-    db: DBSession,
-    _auth = Depends(admin_or_scope("sites:manage"))
+    site_data: SiteCreate, db: DBSession, _auth=Depends(admin_or_scope("sites:manage"))
 ):
     """
     Create a new site.
 
     Requires admin or super_admin privileges.
     """
+    # Validate every requested team exists before creating anything.
+    requested_teams = list(dict.fromkeys(site_data.team_ids))
+    found_teams = {
+        t.id for t in db.query(Team.id).filter(Team.id.in_(requested_teams)).all()
+    }
+    missing_teams = [tid for tid in requested_teams if tid not in found_teams]
+    if missing_teams:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Unknown team(s): {', '.join(missing_teams)}",
+        )
+
     new_site = Site(
         id=_generate_site_id(),
         name=site_data.name,
@@ -130,10 +139,15 @@ async def create_site(
         telephone_police=site_data.telephone_police,
         telephone_fire=site_data.telephone_fire,
         notes=site_data.notes,
-        lat_long=site_data.lat_long
+        lat_long=site_data.lat_long,
     )
 
     db.add(new_site)
+    db.flush()
+
+    for team_id in requested_teams:
+        db.execute(site_team.insert().values(site_id=new_site.id, team_id=team_id))
+
     db.commit()
     db.refresh(new_site)
 
@@ -144,7 +158,7 @@ async def create_site(
 async def get_site(
     site_id: str,
     db: DBSession,
-    _auth = Depends(user_or_scope("sites:read", "sites:manage"))
+    _auth=Depends(user_or_scope("sites:read", "sites:manage")),
 ):
     """
     Get a single site with full details, including the devices it holds.
@@ -153,8 +167,7 @@ async def get_site(
 
     if not site:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Site '{site_id}' not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Site '{site_id}' not found"
         )
 
     site_data = SiteDetailResponse.model_validate(site)
@@ -170,7 +183,7 @@ async def update_site(
     site_id: str,
     site_data: SiteUpdate,
     db: DBSession,
-    _auth = Depends(admin_or_scope("sites:manage"))
+    _auth=Depends(admin_or_scope("sites:manage")),
 ):
     """
     Update site name and location/contact details.
@@ -181,8 +194,7 @@ async def update_site(
 
     if not site:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Site '{site_id}' not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Site '{site_id}' not found"
         )
 
     if site_data.name is not None:
@@ -201,9 +213,7 @@ async def update_site(
 
 @router.delete("/{site_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_site(
-    site_id: str,
-    db: DBSession,
-    _auth = Depends(admin_or_scope("sites:manage"))
+    site_id: str, db: DBSession, _auth=Depends(admin_or_scope("sites:manage"))
 ):
     """
     Delete a site and everything below it.
@@ -217,8 +227,7 @@ async def delete_site(
 
     if not site:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Site '{site_id}' not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Site '{site_id}' not found"
         )
 
     db.delete(site)
@@ -229,8 +238,7 @@ async def delete_site(
 
 @router.post("/auto-populate-all-cameras", response_model=BulkAutoPopulateResponse)
 async def auto_populate_all_site_cameras(
-    db: DBSession,
-    _auth = Depends(admin_or_scope("sites:manage"))
+    db: DBSession, _auth=Depends(admin_or_scope("sites:manage"))
 ):
     """
     Auto-populate camera layouts for all sites that have cameras.
@@ -258,7 +266,7 @@ async def auto_populate_all_site_cameras(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to auto-populate all site cameras: {str(e)}"
+            detail=f"Failed to auto-populate all site cameras: {str(e)}",
         )
 
 
@@ -267,7 +275,7 @@ async def assign_category_to_site(
     site_id: str,
     category_data: CategoryAssignment,
     db: DBSession,
-    _auth = Depends(admin_or_scope("sites:manage"))
+    _auth=Depends(admin_or_scope("sites:manage")),
 ):
     """
     Assign category to site.
@@ -278,21 +286,23 @@ async def assign_category_to_site(
 
     if not site:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Site '{site_id}' not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Site '{site_id}' not found"
         )
 
     # Check if mapping already exists
-    existing_mapping = db.query(SiteCategoryMapping).filter(
-        SiteCategoryMapping.site_id == site_id,
-        SiteCategoryMapping.category_id == category_data.category_id
-    ).first()
+    existing_mapping = (
+        db.query(SiteCategoryMapping)
+        .filter(
+            SiteCategoryMapping.site_id == site_id,
+            SiteCategoryMapping.category_id == category_data.category_id,
+        )
+        .first()
+    )
 
     if not existing_mapping:
         # Create new mapping
         mapping = SiteCategoryMapping(
-            site_id=site_id,
-            category_id=category_data.category_id
+            site_id=site_id, category_id=category_data.category_id
         )
         db.add(mapping)
         db.commit()
@@ -302,9 +312,7 @@ async def assign_category_to_site(
 
 @router.post("/{site_id}/auto-populate-cameras", response_model=AutoPopulateResponse)
 async def auto_populate_site_camera_layout(
-    site_id: str,
-    db: DBSession,
-    _auth = Depends(admin_or_scope("sites:manage"))
+    site_id: str, db: DBSession, _auth=Depends(admin_or_scope("sites:manage"))
 ):
     """
     Auto-populate camera layout for a single site.
@@ -333,24 +341,22 @@ async def auto_populate_site_camera_layout(
         result = auto_populate_site_cameras(site_id, db)
         return result
     except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to auto-populate site cameras: {str(e)}"
+            detail=f"Failed to auto-populate site cameras: {str(e)}",
         )
 
 
 # Manual camera layout management endpoints
 
+
 @router.get("/{site_id}/camera-layout", response_model=SiteCameraLayoutConfigResponse)
 async def get_site_camera_layout_config(
     site_id: str,
     db: DBSession,
-    _auth = Depends(user_or_scope("sites:read", "sites:manage"))
+    _auth=Depends(user_or_scope("sites:read", "sites:manage")),
 ):
     """
     Get the current camera layout configuration for a site.
@@ -370,14 +376,11 @@ async def get_site_camera_layout_config(
         result = get_site_camera_layout(site_id, db)
         return result
     except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get camera layout: {str(e)}"
+            detail=f"Failed to get camera layout: {str(e)}",
         )
 
 
@@ -386,7 +389,7 @@ async def save_site_camera_layout_config(
     site_id: str,
     layout_data: SaveLayoutRequest,
     db: DBSession,
-    _auth = Depends(admin_or_scope("sites:manage"))
+    _auth=Depends(admin_or_scope("sites:manage")),
 ):
     """
     Manually create or update camera layout configuration for a site.
@@ -425,7 +428,7 @@ async def save_site_camera_layout_config(
             {
                 "slot_row": slot.slot_row,
                 "slot_col": slot.slot_col,
-                "camera_id": slot.camera_id
+                "camera_id": slot.camera_id,
             }
             for slot in layout_data.camera_slots
         ]
@@ -435,34 +438,28 @@ async def save_site_camera_layout_config(
             n_rows=layout_data.n_rows,
             n_cols=layout_data.n_cols,
             camera_slots=camera_slots,
-            db=db
+            db=db,
         )
         return result
     except ValueError as e:
         # Validation or not found errors
         error_msg = str(e)
         if "not found" in error_msg.lower():
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=error_msg
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=error_msg)
         else:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_msg
+                status_code=status.HTTP_400_BAD_REQUEST, detail=error_msg
             )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to save camera layout: {str(e)}"
+            detail=f"Failed to save camera layout: {str(e)}",
         )
 
 
 @router.delete("/{site_id}/camera-layout", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_site_camera_layout_config(
-    site_id: str,
-    db: DBSession,
-    _auth = Depends(admin_or_scope("sites:manage"))
+    site_id: str, db: DBSession, _auth=Depends(admin_or_scope("sites:manage"))
 ):
     """
     Delete the camera layout configuration for a site.
@@ -483,12 +480,9 @@ async def delete_site_camera_layout_config(
         delete_site_camera_layout(site_id, db)
         return None
     except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete camera layout: {str(e)}"
+            detail=f"Failed to delete camera layout: {str(e)}",
         )

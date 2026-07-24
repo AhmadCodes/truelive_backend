@@ -9,21 +9,27 @@ Provides CRUD for layouts, PC assignment/unassignment, and deployment of a
 layout's configuration to its assigned PCs.
 """
 
-from fastapi import APIRouter, HTTPException, status, Query
+from fastapi import APIRouter, HTTPException, status, Query, Depends
 from sqlalchemy import or_
 from typing import List, Optional
 from pydantic import BaseModel, Field
 import logging
 
-from app.api.deps import AdminUser, DBSession, CurrentUser
+from app.api.deps import AdminUser, DBSession, CurrentUser, admin_or_scope
 from app.models.screen_layout import ScreenLayout
 from app.models.pc import PC
+from app.models.team import Team
 from app.schemas.screen_layout import (
     ScreenLayoutCreate,
     ScreenLayoutUpdate,
     ScreenLayoutResponse,
     AssignedPCsResponse,
     DeployRequest,
+)
+from app.services.team_enforcement import (
+    cameras_blocking_layout_move,
+    MSG_PC_LAYOUT_DIFFERENT_TEAM,
+    MSG_LAYOUT_MOVE_CAMERAS,
 )
 from app.api.v1.pcs import _deploy_config_to_pcs
 
@@ -41,7 +47,9 @@ class PCAssignmentRequest(BaseModel):
     "", response_model=ScreenLayoutResponse, status_code=status.HTTP_201_CREATED
 )
 async def create_screen_layout(
-    layout_data: ScreenLayoutCreate, current_user: AdminUser, db: DBSession
+    layout_data: ScreenLayoutCreate,
+    db: DBSession,
+    _auth=Depends(admin_or_scope("teams:manage")),
 ):
     """
     Create a new screen layout.
@@ -58,12 +66,20 @@ async def create_screen_layout(
             detail=f"Screen layout with ID '{layout_data.id}' already exists",
         )
 
-    layout = ScreenLayout(id=layout_data.id, name=layout_data.name)
+    if not db.query(Team).filter(Team.id == layout_data.team_id).first():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Team '{layout_data.team_id}' not found",
+        )
+
+    layout = ScreenLayout(
+        id=layout_data.id, name=layout_data.name, team_id=layout_data.team_id
+    )
     db.add(layout)
     db.commit()
     db.refresh(layout)
 
-    logger.info(f"Screen layout '{layout.id}' created by user {current_user.username}")
+    logger.info(f"Screen layout '{layout.id}' created")
     return layout
 
 
@@ -111,8 +127,8 @@ async def get_screen_layout(layout_id: str, current_user: CurrentUser, db: DBSes
 async def update_screen_layout(
     layout_id: str,
     layout_data: ScreenLayoutUpdate,
-    current_user: AdminUser,
     db: DBSession,
+    _auth=Depends(admin_or_scope("teams:manage")),
 ):
     """
     Update a screen layout's name.
@@ -130,13 +146,30 @@ async def update_screen_layout(
         )
 
     update_data = layout_data.model_dump(exclude_unset=True)
+
+    # Moving a layout to another team is blocked while it still contains cameras
+    # from locations that aren't part of the target team (AC-16).
+    new_team_id = update_data.get("team_id")
+    if new_team_id is not None and new_team_id != layout.team_id:
+        if not db.query(Team).filter(Team.id == new_team_id).first():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Team '{new_team_id}' not found",
+            )
+        blocking = cameras_blocking_layout_move(db, layout_id, new_team_id)
+        if blocking:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=MSG_LAYOUT_MOVE_CAMERAS,
+            )
+
     for field, value in update_data.items():
         setattr(layout, field, value)
 
     db.commit()
     db.refresh(layout)
 
-    logger.info(f"Screen layout '{layout_id}' updated by user {current_user.username}")
+    logger.info(f"Screen layout '{layout_id}' updated")
     return layout
 
 
@@ -209,7 +242,8 @@ async def assign_pcs(
             detail=f"Screen layout with ID '{layout_id}' not found",
         )
 
-    # Validate all PCs exist first, so the operation is all-or-nothing.
+    # Validate all PCs exist and share the layout's team first, so the operation
+    # is all-or-nothing.
     pcs = []
     for pc_id in request.pc_ids:
         pc = db.query(PC).filter(PC.id == pc_id).first()
@@ -217,6 +251,12 @@ async def assign_pcs(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"PC with ID '{pc_id}' not found",
+            )
+        # Team boundary: a layout may only be assigned to PCs in its own team.
+        if pc.team_id != layout.team_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=MSG_PC_LAYOUT_DIFFERENT_TEAM,
             )
         pcs.append(pc)
 

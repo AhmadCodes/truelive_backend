@@ -75,6 +75,14 @@ class PC(BaseModel):
         comment="ID of the screen layout assigned to this PC",
     )
 
+    # Owning team (each PC belongs to exactly one team)
+    team_id = Column(
+        String(50),
+        ForeignKey("teams.id", name="fk_pcs_team"),
+        nullable=False,
+        comment="ID of the team this PC belongs to",
+    )
+
     # Authentication
     auth_token = Column(Text, nullable=True, comment="Authentication token for PC")
 
@@ -122,6 +130,7 @@ class PC(BaseModel):
         ),
         Index("idx_pcs_name", "name"),
         Index("idx_pcs_screen_layout_id", "screen_layout_id"),
+        Index("idx_pcs_team_id", "team_id"),
     )
 
     # Relationships
@@ -140,6 +149,14 @@ class PC(BaseModel):
         back_populates="pcs",
         foreign_keys=[screen_layout_id],
         doc="Screen layout assigned to this PC",
+    )
+
+    # Relationship to owning team
+    team = relationship(
+        "Team",
+        back_populates="pcs",
+        foreign_keys=[team_id],
+        doc="Team this PC belongs to",
     )
 
     def __repr__(self):
@@ -161,6 +178,7 @@ class PC(BaseModel):
             "role": self.role,
             "manager_id": self.manager_id,
             "screen_layout_id": self.screen_layout_id,
+            "team_id": self.team_id,
             "auth_token": self.auth_token,
             "token_expiry": self.token_expiry,
             "last_connected": self.last_connected,

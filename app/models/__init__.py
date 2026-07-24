@@ -5,6 +5,7 @@ SQLAlchemy ORM models for the TrueLive Portal backend.
 from app.models.base import BaseModel, TimestampMixin
 from app.models.user import User, InvitationToken, AuditLog
 from app.models.category import SiteCategory, SiteCategoryMapping
+from app.models.team import Team, site_team
 from app.models.site import Site
 from app.models.device import Device
 from app.models.camera import Camera
@@ -41,6 +42,9 @@ __all__ = [
     # Category models
     "SiteCategory",
     "SiteCategoryMapping",
+    # Team
+    "Team",
+    "site_team",
     # Site / Device models
     "Site",
     "Device",

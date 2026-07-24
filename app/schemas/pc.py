@@ -29,6 +29,9 @@ class PCCreate(PCBase):
     id: str = Field(
         ..., min_length=1, max_length=50, description="Unique PC identifier"
     )
+    team_id: str = Field(
+        ..., min_length=1, max_length=50, description="Team this PC belongs to"
+    )
 
     @field_validator("manager_id")
     @classmethod
@@ -64,6 +67,9 @@ class PCUpdate(BaseModel):
     screen_layout_id: Optional[str] = Field(
         None, max_length=100, description="Screen layout ID this PC is assigned to"
     )
+    team_id: Optional[str] = Field(
+        None, max_length=50, description="Team this PC belongs to"
+    )
 
 
 class PCResponse(BaseModel):
@@ -76,6 +82,7 @@ class PCResponse(BaseModel):
     role: str
     manager_id: Optional[str] = None
     screen_layout_id: Optional[str] = None
+    team_id: Optional[str] = None
     last_connected: Optional[datetime] = None
     last_seen: Optional[datetime] = None
     last_applied: Optional[datetime] = None

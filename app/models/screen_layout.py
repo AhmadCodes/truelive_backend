@@ -6,7 +6,7 @@ SET NULL) so multiple PCs can share a layout; screens belong to exactly one
 layout (CASCADE).
 """
 
-from sqlalchemy import Column, String, Index
+from sqlalchemy import Column, String, ForeignKey, Index
 from sqlalchemy.orm import relationship
 from app.models.base import BaseModel
 
@@ -32,8 +32,19 @@ class ScreenLayout(BaseModel):
         String(255), nullable=False, comment="Display name of the screen layout"
     )
 
+    # Owning team (each layout belongs to exactly one team)
+    team_id = Column(
+        String(50),
+        ForeignKey("teams.id", name="fk_screen_layouts_team"),
+        nullable=False,
+        comment="ID of the team this screen layout belongs to",
+    )
+
     # Constraints
-    __table_args__ = (Index("idx_screen_layouts_name", "name"),)
+    __table_args__ = (
+        Index("idx_screen_layouts_name", "name"),
+        Index("idx_screen_layouts_team_id", "team_id"),
+    )
 
     # Relationships
     screens = relationship(
@@ -50,6 +61,13 @@ class ScreenLayout(BaseModel):
         doc="PCs assigned to this layout",
     )
 
+    team = relationship(
+        "Team",
+        back_populates="layouts",
+        foreign_keys=[team_id],
+        doc="Team this layout belongs to",
+    )
+
     def __repr__(self):
         """String representation of ScreenLayout."""
         return f"<ScreenLayout(id='{self.id}', name='{self.name}')>"
@@ -64,6 +82,7 @@ class ScreenLayout(BaseModel):
         return {
             "id": self.id,
             "name": self.name,
+            "team_id": self.team_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
