@@ -11,6 +11,7 @@ layout's configuration to its assigned PCs.
 
 from fastapi import APIRouter, HTTPException, status, Query, Depends
 from sqlalchemy import or_
+from sqlalchemy.orm import joinedload
 from typing import List, Optional
 from pydantic import BaseModel, Field
 import logging
@@ -94,7 +95,7 @@ async def list_screen_layouts(
 
     All authenticated users can view screen layouts.
     """
-    query = db.query(ScreenLayout)
+    query = db.query(ScreenLayout).options(joinedload(ScreenLayout.team))
 
     if search:
         search_pattern = f"%{search}%"
@@ -113,7 +114,12 @@ async def get_screen_layout(layout_id: str, current_user: CurrentUser, db: DBSes
     Raises:
         HTTPException 404: If the layout is not found
     """
-    layout = db.query(ScreenLayout).filter(ScreenLayout.id == layout_id).first()
+    layout = (
+        db.query(ScreenLayout)
+        .options(joinedload(ScreenLayout.team))
+        .filter(ScreenLayout.id == layout_id)
+        .first()
+    )
     if not layout:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -216,7 +222,13 @@ async def get_assigned_pcs(layout_id: str, current_user: CurrentUser, db: DBSess
             detail=f"Screen layout with ID '{layout_id}' not found",
         )
 
-    pcs = db.query(PC).filter(PC.screen_layout_id == layout_id).order_by(PC.name).all()
+    pcs = (
+        db.query(PC)
+        .options(joinedload(PC.team))
+        .filter(PC.screen_layout_id == layout_id)
+        .order_by(PC.name)
+        .all()
+    )
 
     return AssignedPCsResponse(screen_layout_id=layout_id, pcs=pcs)
 

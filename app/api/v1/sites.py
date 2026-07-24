@@ -13,6 +13,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy import func
+from sqlalchemy.orm import selectinload
 from app.api.deps import DBSession, user_or_scope, admin_or_scope
 from app.models.site import Site
 from app.models.device import Device
@@ -84,7 +85,13 @@ async def list_sites(
     total = query.count()
 
     offset = (page - 1) * per_page
-    sites = query.order_by(Site.name).offset(offset).limit(per_page).all()
+    sites = (
+        query.options(selectinload(Site.teams))
+        .order_by(Site.name)
+        .offset(offset)
+        .limit(per_page)
+        .all()
+    )
 
     site_ids = [site.id for site in sites]
     counts = {}

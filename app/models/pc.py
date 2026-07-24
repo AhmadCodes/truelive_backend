@@ -159,6 +159,15 @@ class PC(BaseModel):
         doc="Team this PC belongs to",
     )
 
+    @property
+    def team_name(self):
+        """Name of the owning team (convenience for API responses).
+
+        Read via the ``team`` relationship; eager-load it (e.g. joinedload) in
+        list endpoints to avoid a per-row query.
+        """
+        return self.team.name if self.team else None
+
     def __repr__(self):
         """String representation of PC."""
         return f"<PC(id='{self.id}', name='{self.name}', role='{self.role}')>"

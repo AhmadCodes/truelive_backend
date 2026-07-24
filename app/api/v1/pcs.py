@@ -5,6 +5,7 @@ Provides CRUD operations for PCs and their associations with screens.
 
 from fastapi import APIRouter, HTTPException, status, Query, Depends
 from sqlalchemy import func, or_
+from sqlalchemy.orm import joinedload
 from typing import List, Optional
 import httpx
 from datetime import datetime
@@ -138,7 +139,7 @@ async def list_pcs(
     Returns:
         List of PCs with screen counts
     """
-    query = db.query(PC)
+    query = db.query(PC).options(joinedload(PC.team))
 
     # Apply filters
     if role:
@@ -300,7 +301,7 @@ async def get_pc(pc_id: str, current_user: CurrentUser, db: DBSession):
     Raises:
         HTTPException: If PC not found
     """
-    pc = db.query(PC).filter(PC.id == pc_id).first()
+    pc = db.query(PC).options(joinedload(PC.team)).filter(PC.id == pc_id).first()
     if not pc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

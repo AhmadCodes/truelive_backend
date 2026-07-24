@@ -76,6 +76,7 @@ class SiteSummaryResponse(SiteResponse):
     """Lightweight site response used in list views — no nested devices."""
 
     device_count: Optional[int] = 0
+    teams: List[TeamResponse] = []
 
     class Config:
         from_attributes = True
