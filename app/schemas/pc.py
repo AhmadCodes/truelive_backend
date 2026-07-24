@@ -83,6 +83,7 @@ class PCResponse(BaseModel):
     manager_id: Optional[str] = None
     screen_layout_id: Optional[str] = None
     team_id: Optional[str] = None
+    team_name: Optional[str] = None
     last_connected: Optional[datetime] = None
     last_seen: Optional[datetime] = None
     last_applied: Optional[datetime] = None
