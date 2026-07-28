@@ -39,6 +39,16 @@ from app.services.team_enforcement import (
     layouts_blocking_site_unassign,
     MSG_SITE_UNASSIGN_IN_USE,
 )
+from app.services.actor import (
+    principal_to_actor,
+    stamp_created,
+    stamp_updated,
+    snapshot,
+    attach_actor_stamps,
+    attach_actor_stamps_list,
+)
+from app.services import audit_service
+from app.services.audit_service import ResourceType
 
 router = APIRouter()
 
@@ -64,14 +74,17 @@ async def list_teams(
     _auth=Depends(user_or_scope("teams:read", "teams:manage")),
 ):
     """List all teams, ordered by name."""
-    return db.query(Team).order_by(Team.name).all()
+    teams = db.query(Team).order_by(Team.name).all()
+    resps = [TeamResponse.model_validate(t) for t in teams]
+    attach_actor_stamps_list(db, resps, teams)
+    return resps
 
 
 @router.post("", response_model=TeamResponse, status_code=status.HTTP_201_CREATED)
 async def create_team(
     team_data: TeamCreate,
     db: DBSession,
-    _auth=Depends(super_admin_or_scope("teams:manage")),
+    principal=Depends(super_admin_or_scope("teams:manage")),
 ):
     """
     Create a new team.
@@ -85,8 +98,13 @@ async def create_team(
             detail=f"A team named '{team_data.name}' already exists",
         )
 
+    actor = principal_to_actor(principal)
     new_team = Team(id=_generate_team_id(), name=team_data.name)
     db.add(new_team)
+    stamp_created(new_team, actor)
+    audit_service.record_create(
+        db, resource_type=ResourceType.TEAM, resource_id=new_team.id, actor=actor
+    )
     db.commit()
     db.refresh(new_team)
     return new_team
@@ -99,7 +117,10 @@ async def get_team(
     _auth=Depends(user_or_scope("teams:read", "teams:manage")),
 ):
     """Get a single team by id."""
-    return _get_team_or_404(db, team_id)
+    team = _get_team_or_404(db, team_id)
+    resp = TeamResponse.model_validate(team)
+    attach_actor_stamps(db, resp, team)
+    return resp
 
 
 @router.api_route("/{team_id}", methods=["PUT", "PATCH"], response_model=TeamResponse)
@@ -107,7 +128,7 @@ async def rename_team(
     team_id: str,
     team_data: TeamUpdate,
     db: DBSession,
-    _auth=Depends(super_admin_or_scope("teams:manage")),
+    principal=Depends(super_admin_or_scope("teams:manage")),
 ):
     """
     Rename a team.
@@ -125,7 +146,19 @@ async def rename_team(
             detail=f"A team named '{team_data.name}' already exists",
         )
 
+    actor = principal_to_actor(principal)
+    before = snapshot(team)
     team.name = team_data.name
+    stamp_updated(team, actor)
+    after = snapshot(team)
+    audit_service.record_update(
+        db,
+        resource_type=ResourceType.TEAM,
+        resource_id=team_id,
+        actor=actor,
+        before=before,
+        after=after,
+    )
     db.commit()
     db.refresh(team)
     return team
@@ -135,7 +168,7 @@ async def rename_team(
 async def delete_team(
     team_id: str,
     db: DBSession,
-    _auth=Depends(super_admin_or_scope("teams:manage")),
+    principal=Depends(super_admin_or_scope("teams:manage")),
 ):
     """
     Delete a team.
@@ -165,6 +198,16 @@ async def delete_team(
             ),
         )
 
+    actor = principal_to_actor(principal)
+    before = snapshot(team)
+    audit_service.record_delete(
+        db,
+        resource_type=ResourceType.TEAM,
+        resource_id=team_id,
+        actor=actor,
+        snapshot=before,
+    )
+
     db.delete(team)
     db.commit()
     return None
@@ -175,7 +218,7 @@ async def assign_sites_to_team(
     team_id: str,
     body: SiteTeamAssignRequest,
     db: DBSession,
-    _auth=Depends(super_admin_or_scope("teams:manage")),
+    principal=Depends(super_admin_or_scope("teams:manage")),
 ):
     """
     Assign one or more sites to a team.
@@ -201,6 +244,19 @@ async def assign_sites_to_team(
             .values(site_id=site_id, team_id=team_id)
             .on_conflict_do_nothing(constraint="pk_site_team")
         )
+
+    actor = principal_to_actor(principal)
+    stamp_updated(team, actor)
+    audit_service.record_update(
+        db,
+        resource_type=ResourceType.TEAM,
+        resource_id=team_id,
+        actor=actor,
+        before={},
+        after={},
+        extra={"sites_assigned": requested},
+    )
+
     db.commit()
     db.refresh(team)
     return team
@@ -211,7 +267,7 @@ async def unassign_site_from_team(
     team_id: str,
     site_id: str,
     db: DBSession,
-    _auth=Depends(super_admin_or_scope("teams:manage")),
+    principal=Depends(super_admin_or_scope("teams:manage")),
 ):
     """
     Remove a site from a team.
@@ -220,7 +276,7 @@ async def unassign_site_from_team(
     remove those cameras from the layouts first. Requires super_admin or
     ``teams:manage``.
     """
-    _get_team_or_404(db, team_id)
+    team = _get_team_or_404(db, team_id)
 
     membership = db.execute(
         select(site_team.c.site_id)
@@ -239,6 +295,18 @@ async def unassign_site_from_team(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=MSG_SITE_UNASSIGN_IN_USE,
         )
+
+    actor = principal_to_actor(principal)
+    stamp_updated(team, actor)
+    audit_service.record_update(
+        db,
+        resource_type=ResourceType.TEAM,
+        resource_id=team_id,
+        actor=actor,
+        before={},
+        after={},
+        extra={"site_unassigned": site_id},
+    )
 
     db.execute(
         site_team.delete()

@@ -6,6 +6,8 @@ from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List, Literal
 from datetime import datetime
 
+from app.schemas.actor import ActorStampsMixin
+
 
 class PCBase(BaseModel):
     """Base schema with common PC fields."""
@@ -72,7 +74,7 @@ class PCUpdate(BaseModel):
     )
 
 
-class PCResponse(BaseModel):
+class PCResponse(ActorStampsMixin):
     """Basic PC response schema."""
 
     id: str

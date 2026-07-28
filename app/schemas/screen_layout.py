@@ -10,6 +10,7 @@ from typing import Optional, List
 from datetime import datetime
 
 from app.schemas.pc import PCResponse
+from app.schemas.actor import ActorStampsMixin
 
 
 class ScreenLayoutCreate(BaseModel):
@@ -37,7 +38,7 @@ class ScreenLayoutUpdate(BaseModel):
     )
 
 
-class ScreenLayoutResponse(BaseModel):
+class ScreenLayoutResponse(ActorStampsMixin):
     """Screen layout response schema."""
 
     id: str

@@ -6,6 +6,8 @@ from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
 
+from app.schemas.actor import ActorStampsMixin
+
 
 class ScreenBase(BaseModel):
     """Base schema with common screen fields."""
@@ -59,7 +61,7 @@ class ScreenUpdate(BaseModel):
     )
 
 
-class ScreenResponse(BaseModel):
+class ScreenResponse(ActorStampsMixin):
     """Basic screen response schema."""
 
     id: str
@@ -152,7 +154,7 @@ class ViewUpdate(BaseModel):
     )
 
 
-class ViewResponse(BaseModel):
+class ViewResponse(ActorStampsMixin):
     """Basic view response schema."""
 
     id: str
@@ -246,7 +248,7 @@ class ScreenMappingUpdate(BaseModel):
     camera_id: Optional[str] = Field(None, description="Camera ID")
 
 
-class ScreenMappingResponse(BaseModel):
+class ScreenMappingResponse(ActorStampsMixin):
     """Screen mapping response schema."""
 
     id: int

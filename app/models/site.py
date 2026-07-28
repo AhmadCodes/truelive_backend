@@ -9,10 +9,10 @@ telephones, notes and coordinates.
 
 from sqlalchemy import Column, String, Text, Index
 from sqlalchemy.orm import relationship
-from app.models.base import BaseModel
+from app.models.base import BaseModel, ActorStampMixin
 
 
-class Site(BaseModel):
+class Site(BaseModel, ActorStampMixin):
     """
     Site model representing a physical surveillance location.
 

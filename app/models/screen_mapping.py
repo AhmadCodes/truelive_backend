@@ -4,10 +4,10 @@ ScreenMapping model for camera-to-screen slot assignments.
 
 from sqlalchemy import Column, String, Integer, ForeignKey, Index, UniqueConstraint
 from sqlalchemy.orm import relationship
-from app.models.base import BaseModel
+from app.models.base import BaseModel, ActorStampMixin
 
 
-class ScreenMapping(BaseModel):
+class ScreenMapping(BaseModel, ActorStampMixin):
     """
     ScreenMapping model representing the assignment of cameras to specific grid positions.
 

@@ -20,6 +20,16 @@ from app.models.device import Device
 from app.models.team import Team, site_team
 from app.models.category import SiteCategoryMapping
 from app.schemas.device import CategoryAssignment
+from app.services.actor import (
+    principal_to_actor,
+    stamp_created,
+    stamp_updated,
+    snapshot,
+    attach_actor_stamps,
+    attach_actor_stamps_list,
+)
+from app.services import audit_service
+from app.services.audit_service import ResourceType
 from app.schemas.site import (
     SiteCreate,
     SiteUpdate,
@@ -110,6 +120,8 @@ async def list_sites(
         site_data.device_count = counts.get(site.id, 0)
         sites_response.append(site_data)
 
+    attach_actor_stamps_list(db, sites_response, sites)
+
     return SiteListResponse(
         sites=sites_response, total=total, page=page, per_page=per_page
     )
@@ -117,13 +129,15 @@ async def list_sites(
 
 @router.post("", response_model=SiteResponse, status_code=status.HTTP_201_CREATED)
 async def create_site(
-    site_data: SiteCreate, db: DBSession, _auth=Depends(admin_or_scope("sites:manage"))
+    site_data: SiteCreate, db: DBSession, principal=Depends(admin_or_scope("sites:manage"))
 ):
     """
     Create a new site.
 
     Requires admin or super_admin privileges.
     """
+    actor = principal_to_actor(principal)
+
     # Validate every requested team exists before creating anything.
     requested_teams = list(dict.fromkeys(site_data.team_ids))
     found_teams = {
@@ -155,6 +169,11 @@ async def create_site(
     for team_id in requested_teams:
         db.execute(site_team.insert().values(site_id=new_site.id, team_id=team_id))
 
+    stamp_created(new_site, actor)
+    audit_service.record_create(
+        db, resource_type=ResourceType.SITE, resource_id=new_site.id, actor=actor
+    )
+
     db.commit()
     db.refresh(new_site)
 
@@ -182,6 +201,8 @@ async def get_site(
     for device in site_data.devices:
         device.site_name = site.name
 
+    attach_actor_stamps(db, site_data, site)
+
     return site_data
 
 
@@ -190,19 +211,23 @@ async def update_site(
     site_id: str,
     site_data: SiteUpdate,
     db: DBSession,
-    _auth=Depends(admin_or_scope("sites:manage")),
+    principal=Depends(admin_or_scope("sites:manage")),
 ):
     """
     Update site name and location/contact details.
 
     Requires admin or super_admin privileges.
     """
+    actor = principal_to_actor(principal)
+
     site = db.query(Site).filter(Site.id == site_id).first()
 
     if not site:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Site '{site_id}' not found"
         )
+
+    before = snapshot(site)
 
     if site_data.name is not None:
         site.name = site_data.name
@@ -212,6 +237,16 @@ async def update_site(
         if value is not None:
             setattr(site, field, value)
 
+    stamp_updated(site, actor)
+    audit_service.record_update(
+        db,
+        resource_type=ResourceType.SITE,
+        resource_id=site.id,
+        actor=actor,
+        before=before,
+        after=snapshot(site),
+    )
+
     db.commit()
     db.refresh(site)
 
@@ -220,7 +255,7 @@ async def update_site(
 
 @router.delete("/{site_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_site(
-    site_id: str, db: DBSession, _auth=Depends(admin_or_scope("sites:manage"))
+    site_id: str, db: DBSession, principal=Depends(admin_or_scope("sites:manage"))
 ):
     """
     Delete a site and everything below it.
@@ -230,12 +265,19 @@ async def delete_site(
 
     Requires admin or super_admin privileges.
     """
+    actor = principal_to_actor(principal)
+
     site = db.query(Site).filter(Site.id == site_id).first()
 
     if not site:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Site '{site_id}' not found"
         )
+
+    snap = snapshot(site)
+    audit_service.record_delete(
+        db, resource_type=ResourceType.SITE, resource_id=site.id, actor=actor, snapshot=snap
+    )
 
     db.delete(site)
     db.commit()
@@ -282,13 +324,15 @@ async def assign_category_to_site(
     site_id: str,
     category_data: CategoryAssignment,
     db: DBSession,
-    _auth=Depends(admin_or_scope("sites:manage")),
+    principal=Depends(admin_or_scope("sites:manage")),
 ):
     """
     Assign category to site.
 
     Requires admin or super_admin privileges.
     """
+    actor = principal_to_actor(principal)
+
     site = db.query(Site).filter(Site.id == site_id).first()
 
     if not site:
@@ -312,6 +356,18 @@ async def assign_category_to_site(
             site_id=site_id, category_id=category_data.category_id
         )
         db.add(mapping)
+
+        stamp_updated(site, actor)
+        audit_service.record_update(
+            db,
+            resource_type=ResourceType.SITE,
+            resource_id=site_id,
+            actor=actor,
+            before={},
+            after={},
+            extra={"category_assigned": category_data.category_id},
+        )
+
         db.commit()
 
     return {"message": "Category assigned successfully"}
@@ -396,7 +452,7 @@ async def save_site_camera_layout_config(
     site_id: str,
     layout_data: SaveLayoutRequest,
     db: DBSession,
-    _auth=Depends(admin_or_scope("sites:manage")),
+    principal=Depends(admin_or_scope("sites:manage")),
 ):
     """
     Manually create or update camera layout configuration for a site.
@@ -429,7 +485,22 @@ async def save_site_camera_layout_config(
 
     Requires admin or super_admin privileges.
     """
+    actor = principal_to_actor(principal)
+
     try:
+        site = db.query(Site).filter(Site.id == site_id).first()
+        if site:
+            stamp_updated(site, actor)
+            audit_service.record_update(
+                db,
+                resource_type=ResourceType.SITE,
+                resource_id=site_id,
+                actor=actor,
+                before={},
+                after={},
+                extra={"camera_layout": "saved"},
+            )
+
         # Convert Pydantic models to dicts for service function
         camera_slots = [
             {
@@ -466,7 +537,7 @@ async def save_site_camera_layout_config(
 
 @router.delete("/{site_id}/camera-layout", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_site_camera_layout_config(
-    site_id: str, db: DBSession, _auth=Depends(admin_or_scope("sites:manage"))
+    site_id: str, db: DBSession, principal=Depends(admin_or_scope("sites:manage"))
 ):
     """
     Delete the camera layout configuration for a site.
@@ -483,7 +554,22 @@ async def delete_site_camera_layout_config(
 
     Requires admin or super_admin privileges.
     """
+    actor = principal_to_actor(principal)
+
     try:
+        site = db.query(Site).filter(Site.id == site_id).first()
+        if site:
+            stamp_updated(site, actor)
+            audit_service.record_update(
+                db,
+                resource_type=ResourceType.SITE,
+                resource_id=site_id,
+                actor=actor,
+                before={},
+                after={},
+                extra={"camera_layout": "cleared"},
+            )
+
         delete_site_camera_layout(site_id, db)
         return None
     except ValueError as e:

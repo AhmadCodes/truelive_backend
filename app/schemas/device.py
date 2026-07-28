@@ -13,6 +13,8 @@ from typing import Optional, List
 from datetime import datetime
 import uuid
 
+from app.schemas.actor import ActorStampsMixin
+
 
 class DeviceBase(BaseModel):
     """Base device schema."""
@@ -66,7 +68,7 @@ class SiteCategoryResponse(BaseModel):
         from_attributes = True
 
 
-class DeviceResponse(BaseModel):
+class DeviceResponse(ActorStampsMixin):
     """Device response schema."""
     id: str
     name: str

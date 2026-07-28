@@ -20,6 +20,16 @@ from app.schemas.device import (
     DeviceDetailResponse,
     DeviceListResponse
 )
+from app.services.actor import (
+    principal_to_actor,
+    stamp_created,
+    stamp_updated,
+    snapshot,
+    attach_actor_stamps,
+    attach_actor_stamps_list,
+)
+from app.services import audit_service
+from app.services.audit_service import ResourceType
 
 router = APIRouter()
 
@@ -102,6 +112,8 @@ async def list_devices(
         _to_detail(device, include_cameras) for device in devices
     ]
 
+    attach_actor_stamps_list(db, devices_response, devices)
+
     return DeviceListResponse(
         devices=devices_response,
         total=total,
@@ -114,13 +126,15 @@ async def list_devices(
 async def create_device(
     device_data: DeviceCreate,
     db: DBSession,
-    _auth = Depends(admin_or_scope("devices:manage"))
+    principal = Depends(admin_or_scope("devices:manage"))
 ):
     """
     Create a new device under an existing site.
 
     Requires admin or super_admin privileges.
     """
+    actor = principal_to_actor(principal)
+
     # The parent site must exist — a device cannot be created without a place
     site = _require_site(device_data.site_id, db)
 
@@ -135,6 +149,12 @@ async def create_device(
     )
 
     db.add(new_device)
+
+    stamp_created(new_device, actor)
+    audit_service.record_create(
+        db, resource_type=ResourceType.DEVICE, resource_id=new_device.id, actor=actor
+    )
+
     db.commit()
     db.refresh(new_device)
 
@@ -158,7 +178,10 @@ async def get_device(
             detail=f"Device '{device_id}' not found"
         )
 
-    return _to_detail(device, include_cameras=True)
+    device_data = _to_detail(device, include_cameras=True)
+    attach_actor_stamps(db, device_data, device)
+
+    return device_data
 
 
 @router.api_route("/{device_id}", methods=["PUT", "PATCH"], response_model=DeviceResponse)
@@ -166,7 +189,7 @@ async def update_device(
     device_id: str,
     device_data: DeviceUpdate,
     db: DBSession,
-    _auth = Depends(admin_or_scope("devices:manage"))
+    principal = Depends(admin_or_scope("devices:manage"))
 ):
     """
     Update device details.
@@ -176,6 +199,8 @@ async def update_device(
 
     Requires admin or super_admin privileges.
     """
+    actor = principal_to_actor(principal)
+
     device = db.query(Device).filter(Device.id == device_id).first()
 
     if not device:
@@ -183,6 +208,8 @@ async def update_device(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Device '{device_id}' not found"
         )
+
+    before = snapshot(device)
 
     # Reparenting — the target site must exist
     if device_data.site_id is not None and device_data.site_id != device.site_id:
@@ -199,6 +226,16 @@ async def update_device(
     if device_data.use_tcp is not None:
         device.use_tcp = device_data.use_tcp
 
+    stamp_updated(device, actor)
+    audit_service.record_update(
+        db,
+        resource_type=ResourceType.DEVICE,
+        resource_id=device.id,
+        actor=actor,
+        before=before,
+        after=snapshot(device),
+    )
+
     db.commit()
     db.refresh(device)
 
@@ -209,13 +246,15 @@ async def update_device(
 async def delete_device(
     device_id: str,
     db: DBSession,
-    _auth = Depends(admin_or_scope("devices:manage"))
+    principal = Depends(admin_or_scope("devices:manage"))
 ):
     """
     Delete device and all associated data (cascades to cameras).
 
     Requires admin or super_admin privileges.
     """
+    actor = principal_to_actor(principal)
+
     device = db.query(Device).filter(Device.id == device_id).first()
 
     if not device:
@@ -223,6 +262,11 @@ async def delete_device(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Device '{device_id}' not found"
         )
+
+    snap = snapshot(device)
+    audit_service.record_delete(
+        db, resource_type=ResourceType.DEVICE, resource_id=device.id, actor=actor, snapshot=snap
+    )
 
     db.delete(device)
     db.commit()

@@ -31,7 +31,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 
 from app.database import Base
-from app.models.base import BaseModel
+from app.models.base import BaseModel, ActorStampMixin
 
 
 # ---------------------------------------------------------------------------
@@ -61,7 +61,7 @@ site_team = Table(
 )
 
 
-class Team(BaseModel):
+class Team(BaseModel, ActorStampMixin):
     """
     Team model — organizational owner of sites (M:N), PCs (1:N), and layouts (1:N).
 

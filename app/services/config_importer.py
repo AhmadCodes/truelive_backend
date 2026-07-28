@@ -24,6 +24,9 @@ from app.services.team_enforcement import (
     team_id_for_layout,
     assert_cameras_in_layout_team,
 )
+from app.services.actor import ActorTriple, SYSTEM_ACTOR, stamp_created
+from app.services import audit_service
+from app.services.audit_service import ResourceType, AuditAction
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +46,9 @@ class ImportResult:
     errors: list = field(default_factory=list)
 
 
-def import_config_for_pc(db: Session, pc_id: str, config: dict) -> ImportResult:
+def import_config_for_pc(
+    db: Session, pc_id: str, config: dict, actor: ActorTriple = SYSTEM_ACTOR
+) -> ImportResult:
     """
     Import device config JSON and create/update screens, views, and mappings.
 
@@ -83,7 +88,7 @@ def import_config_for_pc(db: Session, pc_id: str, config: dict) -> ImportResult:
 
     try:
         # Resolve the PC's screen layout, auto-creating one if unassigned.
-        layout_id = get_or_create_layout_for_pc(pc, db)
+        layout_id = get_or_create_layout_for_pc(pc, db, actor=actor)
 
         # Team boundary: only cameras whose site is in the layout's team may be
         # placed. Restrict the allowed set so cross-team cameras are skipped the
@@ -109,6 +114,7 @@ def import_config_for_pc(db: Session, pc_id: str, config: dict) -> ImportResult:
                 existing_devices=existing_devices,
                 skipped_camera_ids=skipped_camera_ids,
                 skipped_device_ids=skipped_device_ids,
+                actor=actor,
             )
 
             result.screens_created += screen_result["screens_created"]
@@ -117,6 +123,22 @@ def import_config_for_pc(db: Session, pc_id: str, config: dict) -> ImportResult:
 
         result.cameras_skipped = len(skipped_camera_ids)
         result.devices_skipped = len(skipped_device_ids)
+
+        audit_service.record_event(
+            db,
+            action=AuditAction.PC_CONFIG_IMPORTED,
+            resource_type=ResourceType.PC,
+            resource_id=pc_id,
+            actor=actor,
+            changes={
+                "screens": result.screens_created,
+                "views": result.views_created,
+                "mappings": result.mappings_created,
+                "cameras_skipped": result.cameras_skipped,
+                "devices_skipped": result.devices_skipped,
+            },
+            commit=False,
+        )
 
         db.commit()
 
@@ -182,6 +204,7 @@ def _import_screen(
     existing_devices: set,
     skipped_camera_ids: set,
     skipped_device_ids: set,
+    actor: ActorTriple = SYSTEM_ACTOR,
 ) -> dict:
     """Import a single screen configuration."""
     result = {"screens_created": 0, "views_created": 0, "mappings_created": 0}
@@ -218,6 +241,7 @@ def _import_screen(
         columns=cols,
         switching_interval=switching_interval,
     )
+    stamp_created(screen, actor)
     db.add(screen)
     db.flush()
     result["screens_created"] = 1
@@ -239,6 +263,7 @@ def _import_screen(
             layout_columns=cols,
             view_number=view_n,
         )
+        stamp_created(view, actor)
         db.add(view)
         created_views[view_n] = view
         result["views_created"] += 1
@@ -295,6 +320,7 @@ def _import_screen(
                 device_id=device_id,
                 camera_id=camera_id,
             )
+            stamp_created(mapping, actor)
             db.add(mapping)
             result["mappings_created"] += 1
 
@@ -337,7 +363,10 @@ class CopyLayoutResult:
 
 
 def copy_layout_from_pc(
-    db: Session, target_pc_id: str, source_pc_id: str
+    db: Session,
+    target_pc_id: str,
+    source_pc_id: str,
+    actor: ActorTriple = SYSTEM_ACTOR,
 ) -> CopyLayoutResult:
     """
     Copy the entire screen layout from one PC to another.
@@ -402,7 +431,7 @@ def copy_layout_from_pc(
 
     try:
         # Resolve the target PC's layout, auto-creating one if unassigned.
-        target_layout_id = get_or_create_layout_for_pc(target_pc, db)
+        target_layout_id = get_or_create_layout_for_pc(target_pc, db, actor=actor)
 
         # Team boundary: refuse to copy cameras whose site isn't in the target
         # layout's team (e.g. copying from a PC in another team). Checked BEFORE
@@ -440,6 +469,7 @@ def copy_layout_from_pc(
                 columns=source_screen.columns,
                 switching_interval=source_screen.switching_interval,
             )
+            stamp_created(new_screen, actor)
             db.add(new_screen)
             result.screens_copied += 1
 
@@ -461,6 +491,7 @@ def copy_layout_from_pc(
                     layout_columns=source_view.layout_columns,
                     view_number=source_view.view_number,
                 )
+                stamp_created(new_view, actor)
                 db.add(new_view)
                 result.views_copied += 1
 
@@ -495,8 +526,24 @@ def copy_layout_from_pc(
                 device_id=source_mapping.device_id,
                 camera_id=source_mapping.camera_id,
             )
+            stamp_created(new_mapping, actor)
             db.add(new_mapping)
             result.mappings_copied += 1
+
+        audit_service.record_event(
+            db,
+            action=AuditAction.LAYOUT_COPIED,
+            resource_type=ResourceType.PC,
+            resource_id=target_pc_id,
+            actor=actor,
+            changes={
+                "screens": result.screens_copied,
+                "views": result.views_copied,
+                "mappings": result.mappings_copied,
+                "source_pc_id": source_pc_id,
+            },
+            commit=False,
+        )
 
         db.commit()
 

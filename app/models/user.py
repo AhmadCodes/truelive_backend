@@ -313,6 +313,21 @@ class AuditLog(BaseModel):
         nullable=True,
         comment="User agent string from the request"
     )
+    actor_type = Column(
+        String(20),
+        nullable=True,
+        comment="Actor kind that performed the action: user|service_account|system"
+    )
+    actor_id = Column(
+        String(36),
+        nullable=True,
+        comment="User UUID (as text) or service-account id of the actor"
+    )
+    actor_label = Column(
+        String(255),
+        nullable=True,
+        comment="Display name of the actor, frozen at action time"
+    )
 
     # Relationships
     user = relationship(
@@ -327,6 +342,7 @@ class AuditLog(BaseModel):
         Index("idx_audit_logs_action", "action"),
         Index("idx_audit_logs_resource_type", "resource_type"),
         Index("idx_audit_logs_created_at", "created_at", postgresql_ops={"created_at": "DESC"}),
+        Index("ix_audit_logs_actor", "actor_type", "actor_id"),
     )
 
     def __repr__(self):

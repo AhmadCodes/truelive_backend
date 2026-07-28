@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
 
+from app.schemas.actor import ActorStampsMixin
 from app.schemas.device import DeviceResponse
 from app.schemas.team import TeamResponse
 
@@ -52,7 +53,7 @@ class SiteUpdate(BaseModel):
     lat_long: Optional[str] = Field(None, max_length=100)
 
 
-class SiteResponse(BaseModel):
+class SiteResponse(ActorStampsMixin):
     """Site response schema."""
 
     id: str
