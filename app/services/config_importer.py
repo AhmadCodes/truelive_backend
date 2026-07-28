@@ -24,7 +24,7 @@ from app.services.team_enforcement import (
     team_id_for_layout,
     assert_cameras_in_layout_team,
 )
-from app.services.actor import ActorTriple, SYSTEM_ACTOR, stamp_created
+from app.services.actor import ActorTriple, SYSTEM_ACTOR, stamp_created, touch_layout
 from app.services import audit_service
 from app.services.audit_service import ResourceType, AuditAction
 
@@ -139,6 +139,8 @@ def import_config_for_pc(
             },
             commit=False,
         )
+
+        touch_layout(db, layout_id, actor)
 
         db.commit()
 
@@ -544,6 +546,8 @@ def copy_layout_from_pc(
             },
             commit=False,
         )
+
+        touch_layout(db, target_layout_id, actor)
 
         db.commit()
 
