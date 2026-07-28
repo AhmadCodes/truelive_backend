@@ -47,6 +47,7 @@ from app.services.actor import (
     snapshot,
     attach_actor_stamps,
     attach_actor_stamps_list,
+    touch_layout,
 )
 from app.services import audit_service
 from app.services.audit_service import ResourceType
@@ -138,6 +139,7 @@ async def create_screen(
     audit_service.record_create(
         db, resource_type=ResourceType.SCREEN, resource_id=new_screen.id, actor=actor
     )
+    touch_layout(db, new_screen.screen_layout_id, actor)
 
     db.commit()
     db.refresh(new_screen)
@@ -505,6 +507,7 @@ async def update_screen(
         before=before, after=snapshot(screen),
         extra={"pruned_mappings": pruned_mappings_snapshot} if grid_resized else None,
     )
+    touch_layout(db, screen.screen_layout_id, actor)
 
     db.commit()
     db.refresh(screen)
@@ -539,12 +542,14 @@ async def delete_screen(screen_id: str, current_user: AdminUser, db: DBSession):
         )
 
     snap = snapshot(screen)
+    layout_id = screen.screen_layout_id
 
     db.delete(screen)
 
     audit_service.record_delete(
         db, resource_type=ResourceType.SCREEN, resource_id=screen_id, actor=actor, snapshot=snap
     )
+    touch_layout(db, layout_id, actor)
 
     db.commit()
 
@@ -625,6 +630,7 @@ async def create_view(
     audit_service.record_create(
         db, resource_type=ResourceType.VIEW, resource_id=new_view.id, actor=actor
     )
+    touch_layout(db, screen.screen_layout_id, actor)
 
     db.commit()
     db.refresh(new_view)
@@ -827,6 +833,10 @@ async def update_view(
         db, resource_type=ResourceType.VIEW, resource_id=view.id, actor=actor,
         before=before, after=snapshot(view),
     )
+    layout_id = (
+        db.query(Screen.screen_layout_id).filter(Screen.id == view.screen_id).scalar()
+    )
+    touch_layout(db, layout_id, actor)
 
     db.commit()
     db.refresh(view)
@@ -861,12 +871,16 @@ async def delete_view(view_id: str, current_user: AdminUser, db: DBSession):
         )
 
     snap = snapshot(view)
+    layout_id = (
+        db.query(Screen.screen_layout_id).filter(Screen.id == view.screen_id).scalar()
+    )
 
     db.delete(view)
 
     audit_service.record_delete(
         db, resource_type=ResourceType.VIEW, resource_id=view_id, actor=actor, snapshot=snap
     )
+    touch_layout(db, layout_id, actor)
 
     db.commit()
 
@@ -985,6 +999,10 @@ async def create_screen_mapping(
     audit_service.record_create(
         db, resource_type=ResourceType.SCREEN_MAPPING, resource_id=str(new_mapping.id), actor=actor
     )
+    layout_id = (
+        db.query(Screen.screen_layout_id).filter(Screen.id == view.screen_id).scalar()
+    )
+    touch_layout(db, layout_id, actor)
 
     db.commit()
     db.refresh(new_mapping)
@@ -1106,6 +1124,10 @@ async def update_screen_mapping(
         db, resource_type=ResourceType.SCREEN_MAPPING, resource_id=str(mapping.id), actor=actor,
         before=before, after=snapshot(mapping),
     )
+    layout_id = (
+        db.query(Screen.screen_layout_id).filter(Screen.id == mapping.screen_id).scalar()
+    )
+    touch_layout(db, layout_id, actor)
 
     db.commit()
     db.refresh(mapping)
@@ -1141,6 +1163,9 @@ async def delete_screen_mapping(
         )
 
     snap = snapshot(mapping)
+    layout_id = (
+        db.query(Screen.screen_layout_id).filter(Screen.id == mapping.screen_id).scalar()
+    )
 
     db.delete(mapping)
 
@@ -1148,6 +1173,7 @@ async def delete_screen_mapping(
         db, resource_type=ResourceType.SCREEN_MAPPING, resource_id=str(mapping_id), actor=actor,
         snapshot=snap,
     )
+    touch_layout(db, layout_id, actor)
 
     db.commit()
 
@@ -1365,6 +1391,10 @@ async def rename_view(
         db, resource_type=ResourceType.VIEW, resource_id=view.id, actor=actor,
         before=before, after=snapshot(view),
     )
+    layout_id = (
+        db.query(Screen.screen_layout_id).filter(Screen.id == view.screen_id).scalar()
+    )
+    touch_layout(db, layout_id, actor)
 
     db.commit()
     db.refresh(view)
@@ -1516,6 +1546,9 @@ async def clear_slot(
         )
 
     snap = snapshot(mapping)
+    layout_id = (
+        db.query(Screen.screen_layout_id).filter(Screen.id == view.screen_id).scalar()
+    )
 
     db.delete(mapping)
 
@@ -1523,6 +1556,7 @@ async def clear_slot(
         db, resource_type=ResourceType.SCREEN_MAPPING, resource_id=str(mapping.id), actor=actor,
         snapshot=snap,
     )
+    touch_layout(db, layout_id, actor)
 
     db.commit()
 
@@ -1623,6 +1657,10 @@ async def assign_camera_to_slot(
             db, resource_type=ResourceType.SCREEN_MAPPING, resource_id=str(existing_mapping.id),
             actor=actor, before=before, after=snapshot(existing_mapping),
         )
+        layout_id = (
+            db.query(Screen.screen_layout_id).filter(Screen.id == view.screen_id).scalar()
+        )
+        touch_layout(db, layout_id, actor)
 
         db.commit()
         db.refresh(existing_mapping)
@@ -1647,6 +1685,10 @@ async def assign_camera_to_slot(
         audit_service.record_create(
             db, resource_type=ResourceType.SCREEN_MAPPING, resource_id=str(new_mapping.id), actor=actor
         )
+        layout_id = (
+            db.query(Screen.screen_layout_id).filter(Screen.id == view.screen_id).scalar()
+        )
+        touch_layout(db, layout_id, actor)
 
         db.commit()
         db.refresh(new_mapping)

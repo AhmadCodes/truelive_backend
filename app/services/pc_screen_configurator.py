@@ -17,7 +17,13 @@ from app.models.screen_mapping import ScreenMapping
 from app.models.camera import Camera
 from app.schemas.pc import ScreenConfigRequest
 from app.services.team_enforcement import assert_cameras_in_layout_team
-from app.services.actor import ActorTriple, SYSTEM_ACTOR, stamp_created, stamp_updated
+from app.services.actor import (
+    ActorTriple,
+    SYSTEM_ACTOR,
+    stamp_created,
+    stamp_updated,
+    touch_layout,
+)
 from app.services import audit_service
 from app.services.audit_service import ResourceType, AuditAction
 
@@ -382,6 +388,8 @@ def configure_pc_screens(
     }
 
     logger.info(f"Configuration complete: {result}")
+
+    touch_layout(db, layout_id, actor)
 
     audit_service.record_event(
         db,

@@ -66,6 +66,35 @@ def stamp_created(entity: Any, actor: ActorTriple) -> None:
     stamp_updated(entity, actor)
 
 
+def touch_layout(db: Session, layout_id: Optional[str], actor: ActorTriple) -> None:
+    """
+    Bump the owning ScreenLayout's updated_at + updated_by when one of its
+    children (screen / view / screen_mapping) is created, updated, or deleted.
+
+    A layout's editor, from the user's point of view, IS the camera grid — which
+    lives in the child rows. Without this, a layout's "last edited" only moves on
+    rename / team reassignment. Uses a bulk UPDATE (not ORM attribute set) so it
+    also records the acting actor and bypasses the timestamp onupdate. Joins the
+    caller's transaction; resolve `layout_id` and call this BEFORE deleting a
+    child (once the child is gone the layout is no longer reachable from it).
+    """
+    if not layout_id:
+        return
+    from datetime import datetime, timezone
+    from app.models.screen_layout import ScreenLayout
+
+    atype, aid, alabel = actor
+    db.query(ScreenLayout).filter(ScreenLayout.id == layout_id).update(
+        {
+            "updated_at": datetime.now(timezone.utc),
+            "updated_by_type": atype,
+            "updated_by_id": aid,
+            "updated_by_label": alabel,
+        },
+        synchronize_session=False,
+    )
+
+
 def snapshot(entity: Any) -> dict[str, Any]:
     """
     Generic column snapshot of an ORM entity, read straight from the mapped
