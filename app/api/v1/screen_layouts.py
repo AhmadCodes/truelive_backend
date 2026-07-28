@@ -33,6 +33,16 @@ from app.services.team_enforcement import (
     MSG_LAYOUT_MOVE_CAMERAS,
 )
 from app.api.v1.pcs import _deploy_config_to_pcs
+from app.services.actor import (
+    principal_to_actor,
+    stamp_created,
+    stamp_updated,
+    snapshot,
+    attach_actor_stamps,
+    attach_actor_stamps_list,
+)
+from app.services import audit_service
+from app.services.audit_service import ResourceType
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -50,7 +60,7 @@ class PCAssignmentRequest(BaseModel):
 async def create_screen_layout(
     layout_data: ScreenLayoutCreate,
     db: DBSession,
-    _auth=Depends(admin_or_scope("teams:manage")),
+    principal=Depends(admin_or_scope("teams:manage")),
 ):
     """
     Create a new screen layout.
@@ -60,6 +70,8 @@ async def create_screen_layout(
     Raises:
         HTTPException 409: If a layout with this ID already exists
     """
+    actor = principal_to_actor(principal)
+
     existing = db.query(ScreenLayout).filter(ScreenLayout.id == layout_data.id).first()
     if existing:
         raise HTTPException(
@@ -77,6 +89,12 @@ async def create_screen_layout(
         id=layout_data.id, name=layout_data.name, team_id=layout_data.team_id
     )
     db.add(layout)
+
+    stamp_created(layout, actor)
+    audit_service.record_create(
+        db, resource_type=ResourceType.LAYOUT, resource_id=layout.id, actor=actor
+    )
+
     db.commit()
     db.refresh(layout)
 
@@ -101,7 +119,10 @@ async def list_screen_layouts(
         search_pattern = f"%{search}%"
         query = query.filter(or_(ScreenLayout.name.ilike(search_pattern)))
 
-    return query.order_by(ScreenLayout.name).all()
+    layouts = query.order_by(ScreenLayout.name).all()
+    responses = [ScreenLayoutResponse.model_validate(l) for l in layouts]
+    attach_actor_stamps_list(db, responses, layouts)
+    return responses
 
 
 @router.get("/{layout_id}", response_model=ScreenLayoutResponse)
@@ -126,7 +147,9 @@ async def get_screen_layout(layout_id: str, current_user: CurrentUser, db: DBSes
             detail=f"Screen layout with ID '{layout_id}' not found",
         )
 
-    return layout
+    resp = ScreenLayoutResponse.model_validate(layout)
+    attach_actor_stamps(db, resp, layout)
+    return resp
 
 
 @router.put("/{layout_id}", response_model=ScreenLayoutResponse)
@@ -134,7 +157,7 @@ async def update_screen_layout(
     layout_id: str,
     layout_data: ScreenLayoutUpdate,
     db: DBSession,
-    _auth=Depends(admin_or_scope("teams:manage")),
+    principal=Depends(admin_or_scope("teams:manage")),
 ):
     """
     Update a screen layout's name.
@@ -144,12 +167,16 @@ async def update_screen_layout(
     Raises:
         HTTPException 404: If the layout is not found
     """
+    actor = principal_to_actor(principal)
+
     layout = db.query(ScreenLayout).filter(ScreenLayout.id == layout_id).first()
     if not layout:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Screen layout with ID '{layout_id}' not found",
         )
+
+    before = snapshot(layout)
 
     update_data = layout_data.model_dump(exclude_unset=True)
 
@@ -172,6 +199,12 @@ async def update_screen_layout(
     for field, value in update_data.items():
         setattr(layout, field, value)
 
+    stamp_updated(layout, actor)
+    audit_service.record_update(
+        db, resource_type=ResourceType.LAYOUT, resource_id=layout.id, actor=actor,
+        before=before, after=snapshot(layout),
+    )
+
     db.commit()
     db.refresh(layout)
 
@@ -192,6 +225,8 @@ async def delete_screen_layout(layout_id: str, current_user: AdminUser, db: DBSe
     Raises:
         HTTPException 404: If the layout is not found
     """
+    actor = principal_to_actor(current_user)
+
     layout = db.query(ScreenLayout).filter(ScreenLayout.id == layout_id).first()
     if not layout:
         raise HTTPException(
@@ -199,7 +234,14 @@ async def delete_screen_layout(layout_id: str, current_user: AdminUser, db: DBSe
             detail=f"Screen layout with ID '{layout_id}' not found",
         )
 
+    snap = snapshot(layout)
+
     db.delete(layout)
+
+    audit_service.record_delete(
+        db, resource_type=ResourceType.LAYOUT, resource_id=layout_id, actor=actor, snapshot=snap
+    )
+
     db.commit()
 
     logger.info(f"Screen layout '{layout_id}' deleted by user {current_user.username}")
@@ -247,6 +289,8 @@ async def assign_pcs(
     Raises:
         HTTPException 404: If the layout or any PC is not found
     """
+    actor = principal_to_actor(current_user)
+
     layout = db.query(ScreenLayout).filter(ScreenLayout.id == layout_id).first()
     if not layout:
         raise HTTPException(
@@ -274,6 +318,13 @@ async def assign_pcs(
 
     for pc in pcs:
         pc.screen_layout_id = layout_id
+        stamp_updated(pc, actor)
+
+    if pcs:
+        audit_service.record_update(
+            db, resource_type=ResourceType.LAYOUT, resource_id=layout_id, actor=actor,
+            before={}, after={}, extra={"pcs_assigned": [pc.id for pc in pcs]},
+        )
 
     db.commit()
 
@@ -304,6 +355,8 @@ async def unassign_pcs(
     Raises:
         HTTPException 404: If the layout or any PC is not found
     """
+    actor = principal_to_actor(current_user)
+
     layout = db.query(ScreenLayout).filter(ScreenLayout.id == layout_id).first()
     if not layout:
         raise HTTPException(
@@ -321,7 +374,14 @@ async def unassign_pcs(
             )
         if pc.screen_layout_id == layout_id:
             pc.screen_layout_id = None
+            stamp_updated(pc, actor)
             unassigned.append(pc_id)
+
+    if unassigned:
+        audit_service.record_update(
+            db, resource_type=ResourceType.LAYOUT, resource_id=layout_id, actor=actor,
+            before={}, after={}, extra={"pcs_unassigned": unassigned},
+        )
 
     db.commit()
 

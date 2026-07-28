@@ -10,10 +10,10 @@ from sqlalchemy import (
     Column, String, Boolean, Text, ForeignKey, Index
 )
 from sqlalchemy.orm import relationship
-from app.models.base import BaseModel
+from app.models.base import BaseModel, ActorStampMixin
 
 
-class Device(BaseModel):
+class Device(BaseModel, ActorStampMixin):
     """
     Device model representing a single NVR/DVR recorder at a Site.
 

@@ -6,6 +6,8 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
 
+from app.schemas.actor import ActorStampsMixin
+
 
 class CameraBase(BaseModel):
     """Base schema with common camera fields."""
@@ -38,7 +40,7 @@ class CameraUpdate(BaseModel):
     device_id: Optional[str] = Field(None, min_length=1, max_length=255, description="Device this camera belongs to")
 
 
-class CameraResponse(BaseModel):
+class CameraResponse(ActorStampsMixin):
     """Basic camera response schema."""
 
     id: str

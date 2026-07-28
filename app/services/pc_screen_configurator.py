@@ -17,11 +17,16 @@ from app.models.screen_mapping import ScreenMapping
 from app.models.camera import Camera
 from app.schemas.pc import ScreenConfigRequest
 from app.services.team_enforcement import assert_cameras_in_layout_team
+from app.services.actor import ActorTriple, SYSTEM_ACTOR, stamp_created, stamp_updated
+from app.services import audit_service
+from app.services.audit_service import ResourceType, AuditAction
 
 logger = logging.getLogger(__name__)
 
 
-def get_or_create_layout_for_pc(pc: PC, db: Session) -> str:
+def get_or_create_layout_for_pc(
+    pc: PC, db: Session, actor: ActorTriple = SYSTEM_ACTOR
+) -> str:
     """
     Resolve the screen layout id for a PC, auto-creating and assigning a layout
     if the PC has none.
@@ -48,6 +53,7 @@ def get_or_create_layout_for_pc(pc: PC, db: Session) -> str:
     if layout is None:
         # An auto-created layout inherits the PC's team (team_id is mandatory).
         layout = ScreenLayout(id=layout_id, name=pc.name, team_id=pc.team_id)
+        stamp_created(layout, actor)
         db.add(layout)
         db.flush()
         logger.info(f"Auto-created screen layout '{layout_id}' for PC {pc.id}")
@@ -83,7 +89,11 @@ def validate_camera_ids(camera_ids: List[str], db: Session) -> List[str]:
 
 
 def get_or_create_screen(
-    layout_id: str, screen_config: ScreenConfigRequest, screen_index: int, db: Session
+    layout_id: str,
+    screen_config: ScreenConfigRequest,
+    screen_index: int,
+    db: Session,
+    actor: ActorTriple = SYSTEM_ACTOR,
 ) -> Tuple[Screen, bool]:
     """
     Get existing screen by name or create new one.
@@ -118,6 +128,7 @@ def get_or_create_screen(
         existing_screen.rows = min(screen_config.layout_rows, 4)
         existing_screen.columns = min(screen_config.layout_cols, 4)
         existing_screen.switching_interval = screen_config.switch_interval
+        stamp_updated(existing_screen, actor)
         db.commit()
 
         return existing_screen, False
@@ -139,6 +150,7 @@ def get_or_create_screen(
             columns=min(screen_config.layout_cols, 4),
             switching_interval=screen_config.switch_interval,
         )
+        stamp_created(new_screen, actor)
 
         db.add(new_screen)
         db.commit()
@@ -148,7 +160,10 @@ def get_or_create_screen(
 
 
 def create_views_for_screen(
-    screen: Screen, screen_config: ScreenConfigRequest, db: Session
+    screen: Screen,
+    screen_config: ScreenConfigRequest,
+    db: Session,
+    actor: ActorTriple = SYSTEM_ACTOR,
 ) -> List[View]:
     """
     Create views for a screen.
@@ -174,6 +189,7 @@ def create_views_for_screen(
             layout_columns=screen_config.layout_cols,
             view_number=view_number,
         )
+        stamp_created(view, actor)
 
         db.add(view)
         views.append(view)
@@ -186,7 +202,10 @@ def create_views_for_screen(
 
 
 def distribute_cameras_and_create_mappings(
-    screens_views: List[Tuple[Screen, List[View]]], camera_ids: List[str], db: Session
+    screens_views: List[Tuple[Screen, List[View]]],
+    camera_ids: List[str],
+    db: Session,
+    actor: ActorTriple = SYSTEM_ACTOR,
 ) -> int:
     """
     Distribute cameras across screens and views, creating screen mappings.
@@ -248,6 +267,7 @@ def distribute_cameras_and_create_mappings(
                         device_id=camera.device_id,
                         camera_id=camera.id,
                     )
+                    stamp_created(mapping, actor)
 
                     db.add(mapping)
                     camera_index += 1
@@ -263,7 +283,10 @@ def distribute_cameras_and_create_mappings(
 
 
 def configure_pc_screens(
-    pc_id: str, request: "ConfigurePCScreensRequest", db: Session
+    pc_id: str,
+    request: "ConfigurePCScreensRequest",
+    db: Session,
+    actor: ActorTriple = SYSTEM_ACTOR,
 ) -> Dict[str, Any]:
     """
     Main orchestration function for configuring PC screens.
@@ -288,7 +311,7 @@ def configure_pc_screens(
 
     # Resolve the PC's screen layout, auto-creating and assigning one if the PC
     # has no layout yet.
-    layout_id = get_or_create_layout_for_pc(pc, db)
+    layout_id = get_or_create_layout_for_pc(pc, db, actor=actor)
 
     # Team boundary: every camera must belong to a site in the layout's team.
     # CrossTeamError subclasses ValueError, so the endpoint surfaces it as a 400
@@ -321,7 +344,7 @@ def configure_pc_screens(
     for screen_config in request.screens:
         # Get or create screen
         screen, is_new = get_or_create_screen(
-            layout_id, screen_config, next_screen_index, db
+            layout_id, screen_config, next_screen_index, db, actor=actor
         )
 
         # Only increment index if we created a new screen
@@ -334,7 +357,7 @@ def configure_pc_screens(
             screens_updated += 1
 
         # Create views for this screen
-        views = create_views_for_screen(screen, screen_config, db)
+        views = create_views_for_screen(screen, screen_config, db, actor=actor)
         views_created += len(views)
 
         # Collect for camera distribution
@@ -342,7 +365,7 @@ def configure_pc_screens(
 
     # Distribute cameras and create mappings
     mappings_created = distribute_cameras_and_create_mappings(
-        screens_views, request.camera_ids, db
+        screens_views, request.camera_ids, db, actor=actor
     )
 
     # Calculate cameras used (may be less than total if we ran out of slots)
@@ -359,5 +382,20 @@ def configure_pc_screens(
     }
 
     logger.info(f"Configuration complete: {result}")
+
+    audit_service.record_event(
+        db,
+        action=AuditAction.PC_SCREENS_CONFIGURED,
+        resource_type=ResourceType.PC,
+        resource_id=pc_id,
+        actor=actor,
+        changes={
+            "screens": screens_created + screens_updated,
+            "views": views_created,
+            "mappings": mappings_created,
+            "cameras_used": cameras_used,
+        },
+        commit=True,
+    )
 
     return result

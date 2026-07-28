@@ -18,6 +18,15 @@ from app.schemas.camera import (
     CameraDetailResponse,
     CameraSummary
 )
+from app.services.actor import (
+    principal_to_actor,
+    stamp_created,
+    stamp_updated,
+    snapshot,
+    resolve_stamps_for_orms,
+)
+from app.services import audit_service
+from app.services.audit_service import ResourceType
 
 
 router = APIRouter()
@@ -26,7 +35,7 @@ router = APIRouter()
 @router.post("", response_model=CameraDetailResponse, status_code=status.HTTP_201_CREATED)
 async def create_camera(
     camera_data: CameraCreate,
-    _auth: Annotated[object, Depends(admin_or_scope("cameras:manage"))],
+    principal: Annotated[object, Depends(admin_or_scope("cameras:manage"))],
     db: DBSession
 ):
     """
@@ -45,6 +54,8 @@ async def create_camera(
     Raises:
         HTTPException: If camera ID already exists or device not found
     """
+    actor = principal_to_actor(principal)
+
     # Check if camera ID already exists
     existing_camera = db.query(Camera).filter(Camera.id == camera_data.id).first()
     if existing_camera:
@@ -73,6 +84,10 @@ async def create_camera(
     )
 
     db.add(new_camera)
+
+    stamp_created(new_camera, actor)
+    audit_service.record_create(db, resource_type=ResourceType.CAMERA, resource_id=new_camera.id, actor=actor)
+
     db.commit()
     db.refresh(new_camera)
 
@@ -100,7 +115,9 @@ async def create_camera(
         "new": new_camera.new,
         "use_tcp": new_camera.use_tcp,
         "created_at": new_camera.created_at,
-        "updated_at": new_camera.updated_at
+        "updated_at": new_camera.updated_at,
+        "created_by": new_camera.created_by,
+        "updated_by": new_camera.updated_by
     }
 
 
@@ -155,9 +172,12 @@ async def list_cameras(
     # Apply pagination
     cameras = query.offset(skip).limit(limit).all()
 
+    # Live-resolve actor labels for the current page of cameras (batched, no N+1).
+    stamps = resolve_stamps_for_orms(db, cameras)
+
     # Add device_name to each camera
     result = []
-    for camera in cameras:
+    for camera, (created_by, updated_by) in zip(cameras, stamps):
         camera_dict = {
             "id": camera.id,
             "device_id": camera.device_id,
@@ -168,7 +188,9 @@ async def list_cameras(
             "new": camera.new,
             "use_tcp": camera.use_tcp,
             "created_at": camera.created_at,
-            "updated_at": camera.updated_at
+            "updated_at": camera.updated_at,
+            "created_by": created_by,
+            "updated_by": updated_by
         }
         result.append(camera_dict)
 
@@ -239,6 +261,9 @@ async def get_camera(
             detail=f"Camera with ID '{camera_id}' not found"
         )
 
+    # Live-resolve actor labels for this camera.
+    created_by, updated_by = resolve_stamps_for_orms(db, [camera])[0]
+
     # Add device_name to response
     return {
         "id": camera.id,
@@ -250,7 +275,9 @@ async def get_camera(
         "new": camera.new,
         "use_tcp": camera.use_tcp,
         "created_at": camera.created_at,
-        "updated_at": camera.updated_at
+        "updated_at": camera.updated_at,
+        "created_by": created_by,
+        "updated_by": updated_by
     }
 
 
@@ -258,7 +285,7 @@ async def get_camera(
 async def update_camera(
     camera_id: str,
     camera_data: CameraUpdate,
-    _auth: Annotated[object, Depends(admin_or_scope("cameras:manage"))],
+    principal: Annotated[object, Depends(admin_or_scope("cameras:manage"))],
     db: DBSession
 ):
     """
@@ -278,6 +305,8 @@ async def update_camera(
     Raises:
         HTTPException: If camera not found or device not found
     """
+    actor = principal_to_actor(principal)
+
     camera = db.query(Camera).filter(Camera.id == camera_id).first()
 
     if not camera:
@@ -285,6 +314,8 @@ async def update_camera(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Camera with ID '{camera_id}' not found"
         )
+
+    before = snapshot(camera)
 
     # If device_id is being updated, verify the new device exists
     if camera_data.device_id and camera_data.device_id != camera.device_id:
@@ -315,6 +346,12 @@ async def update_camera(
     if "use_tcp" in update_data:
         camera.use_tcp = update_data["use_tcp"]
 
+    stamp_updated(camera, actor)
+    audit_service.record_update(
+        db, resource_type=ResourceType.CAMERA, resource_id=camera.id, actor=actor,
+        before=before, after=snapshot(camera)
+    )
+
     db.commit()
     db.refresh(camera)
 
@@ -332,14 +369,16 @@ async def update_camera(
         "new": camera.new,
         "use_tcp": camera.use_tcp,
         "created_at": camera.created_at,
-        "updated_at": camera.updated_at
+        "updated_at": camera.updated_at,
+        "created_by": camera.created_by,
+        "updated_by": camera.updated_by
     }
 
 
 @router.delete("/{camera_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_camera(
     camera_id: str,
-    _auth: Annotated[object, Depends(admin_or_scope("cameras:manage"))],
+    principal: Annotated[object, Depends(admin_or_scope("cameras:manage"))],
     db: DBSession
 ):
     """
@@ -355,6 +394,8 @@ async def delete_camera(
     Raises:
         HTTPException: If camera not found
     """
+    actor = principal_to_actor(principal)
+
     camera = db.query(Camera).filter(Camera.id == camera_id).first()
 
     if not camera:
@@ -363,7 +404,14 @@ async def delete_camera(
             detail=f"Camera with ID '{camera_id}' not found"
         )
 
+    snap = snapshot(camera)
+
     db.delete(camera)
+
+    audit_service.record_delete(
+        db, resource_type=ResourceType.CAMERA, resource_id=camera_id, actor=actor, snapshot=snap
+    )
+
     db.commit()
 
     return None
@@ -484,9 +532,12 @@ async def get_cameras_by_device(
     # Get cameras for the device
     cameras = db.query(Camera).options(joinedload(Camera.device)).filter(Camera.device_id == device_id).order_by(Camera.created_at.desc()).all()
 
+    # Live-resolve actor labels for these cameras (batched, no N+1).
+    stamps = resolve_stamps_for_orms(db, cameras)
+
     # Add device_name to each camera
     result = []
-    for camera in cameras:
+    for camera, (created_by, updated_by) in zip(cameras, stamps):
         camera_dict = {
             "id": camera.id,
             "device_id": camera.device_id,
@@ -497,7 +548,9 @@ async def get_cameras_by_device(
             "new": camera.new,
             "use_tcp": camera.use_tcp,
             "created_at": camera.created_at,
-            "updated_at": camera.updated_at
+            "updated_at": camera.updated_at,
+            "created_by": created_by,
+            "updated_by": updated_by
         }
         result.append(camera_dict)
 

@@ -13,6 +13,8 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
+from app.schemas.actor import ActorStampsMixin
+
 
 class TeamCreate(BaseModel):
     """Schema for creating a new team."""
@@ -28,7 +30,7 @@ class TeamUpdate(BaseModel):
     )
 
 
-class TeamResponse(BaseModel):
+class TeamResponse(ActorStampsMixin):
     """Team response schema."""
 
     id: str

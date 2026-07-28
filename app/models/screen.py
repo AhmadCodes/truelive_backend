@@ -4,10 +4,10 @@ Screen model for managing display screens connected to PCs.
 
 from sqlalchemy import Column, String, Integer, CheckConstraint, ForeignKey, Index
 from sqlalchemy.orm import relationship
-from app.models.base import BaseModel
+from app.models.base import BaseModel, ActorStampMixin
 
 
-class Screen(BaseModel):
+class Screen(BaseModel, ActorStampMixin):
     """
     Screen model representing physical displays connected to PCs.
 

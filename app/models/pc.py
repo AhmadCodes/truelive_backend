@@ -12,10 +12,10 @@ from sqlalchemy import (
     Text,
 )
 from sqlalchemy.orm import relationship
-from app.models.base import BaseModel
+from app.models.base import BaseModel, ActorStampMixin
 
 
-class PC(BaseModel):
+class PC(BaseModel, ActorStampMixin):
     """
     PC model representing controller and manager PCs in the system.
 

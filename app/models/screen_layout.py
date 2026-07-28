@@ -8,10 +8,10 @@ layout (CASCADE).
 
 from sqlalchemy import Column, String, ForeignKey, Index
 from sqlalchemy.orm import relationship
-from app.models.base import BaseModel
+from app.models.base import BaseModel, ActorStampMixin
 
 
-class ScreenLayout(BaseModel):
+class ScreenLayout(BaseModel, ActorStampMixin):
     """
     ScreenLayout model representing a named collection of screens.
 

@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, status, Query
 from sqlalchemy import func, or_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from typing import List, Optional
+from datetime import datetime, timezone
 
 from app.api.deps import AdminUser, DBSession, CurrentUser
 from app.models.pc import PC
@@ -39,6 +40,16 @@ from app.schemas.screen import (
     CameraMappingInfo,
 )
 from app.schemas.screen_layout import PlayingStateUpdate
+from app.services.actor import (
+    principal_to_actor,
+    stamp_created,
+    stamp_updated,
+    snapshot,
+    attach_actor_stamps,
+    attach_actor_stamps_list,
+)
+from app.services import audit_service
+from app.services.audit_service import ResourceType
 import logging
 
 logger = logging.getLogger(__name__)
@@ -89,6 +100,8 @@ async def create_screen(
     Raises:
         HTTPException: If screen ID already exists or screen layout not found
     """
+    actor = principal_to_actor(current_user)
+
     # Check if screen with this ID already exists
     existing_screen = db.query(Screen).filter(Screen.id == screen_data.id).first()
     if existing_screen:
@@ -120,6 +133,12 @@ async def create_screen(
     )
 
     db.add(new_screen)
+
+    stamp_created(new_screen, actor)
+    audit_service.record_create(
+        db, resource_type=ResourceType.SCREEN, resource_id=new_screen.id, actor=actor
+    )
+
     db.commit()
     db.refresh(new_screen)
 
@@ -175,6 +194,8 @@ async def list_screens(
         screen_data.view_count = view_count
 
         result.append(screen_data)
+
+    attach_actor_stamps_list(db, result, screens)
 
     return result
 
@@ -235,7 +256,9 @@ async def get_screen(screen_id: str, current_user: CurrentUser, db: DBSession):
             detail=f"Screen with ID '{screen_id}' not found",
         )
 
-    return screen
+    resp = ScreenDetailResponse.model_validate(screen)
+    attach_actor_stamps(db, resp, screen)
+    return resp
 
 
 @router.get("/{screen_id}/with-views", response_model=ScreenWithViews)
@@ -276,6 +299,9 @@ async def get_screen_with_views(
     result = ScreenWithViews.model_validate(screen)
     result.views = [ViewResponse.model_validate(v) for v in views]
     result.view_count = len(views)
+
+    attach_actor_stamps_list(db, result.views, views)
+    attach_actor_stamps(db, result, screen)
 
     return result
 
@@ -356,6 +382,9 @@ async def get_screen_layout(
     result.views = views_with_mappings
     result.view_count = len(views_with_mappings)
 
+    attach_actor_stamps_list(db, views_with_mappings, views)
+    attach_actor_stamps(db, result, screen)
+
     return result
 
 
@@ -380,12 +409,16 @@ async def update_screen(
     Raises:
         HTTPException: If screen not found or validation fails
     """
+    actor = principal_to_actor(current_user)
+
     screen = db.query(Screen).filter(Screen.id == screen_id).first()
     if not screen:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Screen with ID '{screen_id}' not found",
         )
+
+    before = snapshot(screen)
 
     # Update fields
     update_data = screen_data.model_dump(exclude_unset=True)
@@ -413,12 +446,42 @@ async def update_screen(
     for field, value in update_data.items():
         setattr(screen, field, value)
 
+    pruned_mappings_snapshot: list = []
     if grid_resized:
-        # Cascade new dimensions to all views of this screen.
+        # Cascade new dimensions to all views of this screen. Bulk .update() bypasses
+        # ORM stamping/onupdate, so the actor triple + updated_at are set explicitly.
         db.query(View).filter(View.screen_id == screen.id).update(
-            {View.layout_rows: new_rows, View.layout_columns: new_cols},
+            {
+                View.layout_rows: new_rows,
+                View.layout_columns: new_cols,
+                View.updated_by_type: actor[0],
+                View.updated_by_id: actor[1],
+                View.updated_by_label: actor[2],
+                View.updated_at: datetime.now(timezone.utc),
+            },
             synchronize_session=False,
         )
+        # Capture the doomed mappings BEFORE the bulk delete so the audit trail
+        # records what was pruned.
+        doomed_mappings = (
+            db.query(ScreenMapping)
+            .filter(
+                ScreenMapping.screen_id == screen.id,
+                or_(
+                    ScreenMapping.slot_row > new_rows, ScreenMapping.slot_col > new_cols
+                ),
+            )
+            .all()
+        )
+        pruned_mappings_snapshot = [
+            {
+                "id": m.id,
+                "slot_row": m.slot_row,
+                "slot_col": m.slot_col,
+                "camera_id": m.camera_id,
+            }
+            for m in doomed_mappings
+        ]
         # Drop any mappings whose slot now falls outside the new grid.
         pruned = (
             db.query(ScreenMapping)
@@ -435,6 +498,13 @@ async def update_screen(
                 f"Screen '{screen_id}' resized to {new_rows}x{new_cols}; "
                 f"pruned {pruned} out-of-bounds mapping(s)"
             )
+
+    stamp_updated(screen, actor)
+    audit_service.record_update(
+        db, resource_type=ResourceType.SCREEN, resource_id=screen.id, actor=actor,
+        before=before, after=snapshot(screen),
+        extra={"pruned_mappings": pruned_mappings_snapshot} if grid_resized else None,
+    )
 
     db.commit()
     db.refresh(screen)
@@ -459,6 +529,8 @@ async def delete_screen(screen_id: str, current_user: AdminUser, db: DBSession):
     Raises:
         HTTPException: If screen not found
     """
+    actor = principal_to_actor(current_user)
+
     screen = db.query(Screen).filter(Screen.id == screen_id).first()
     if not screen:
         raise HTTPException(
@@ -466,7 +538,14 @@ async def delete_screen(screen_id: str, current_user: AdminUser, db: DBSession):
             detail=f"Screen with ID '{screen_id}' not found",
         )
 
+    snap = snapshot(screen)
+
     db.delete(screen)
+
+    audit_service.record_delete(
+        db, resource_type=ResourceType.SCREEN, resource_id=screen_id, actor=actor, snapshot=snap
+    )
+
     db.commit()
 
     logger.info(f"Screen '{screen_id}' deleted by user {current_user.username}")
@@ -500,6 +579,8 @@ async def create_view(
     Raises:
         HTTPException: If view ID already exists, screen not found, or view_number conflict
     """
+    actor = principal_to_actor(current_user)
+
     # Verify screen exists
     screen = db.query(Screen).filter(Screen.id == screen_id).first()
     if not screen:
@@ -539,6 +620,12 @@ async def create_view(
     )
 
     db.add(new_view)
+
+    stamp_created(new_view, actor)
+    audit_service.record_create(
+        db, resource_type=ResourceType.VIEW, resource_id=new_view.id, actor=actor
+    )
+
     db.commit()
     db.refresh(new_view)
 
@@ -581,7 +668,9 @@ async def list_views(screen_id: str, current_user: CurrentUser, db: DBSession):
         .all()
     )
 
-    return [ViewResponse.model_validate(v) for v in views]
+    responses = [ViewResponse.model_validate(v) for v in views]
+    attach_actor_stamps_list(db, responses, views)
+    return responses
 
 
 @router.get("/views/{view_id}", response_model=ViewDetailResponse)
@@ -609,7 +698,9 @@ async def get_view(view_id: str, current_user: CurrentUser, db: DBSession):
             detail=f"View with ID '{view_id}' not found",
         )
 
-    return view
+    resp = ViewDetailResponse.model_validate(view)
+    attach_actor_stamps(db, resp, view)
+    return resp
 
 
 @router.get("/views/{view_id}/with-mappings", response_model=ViewWithMappings)
@@ -671,6 +762,8 @@ async def get_view_with_mappings(
     result = ViewWithMappings.model_validate(view)
     result.mappings = mapping_infos
 
+    attach_actor_stamps(db, result, view)
+
     return result
 
 
@@ -695,12 +788,16 @@ async def update_view(
     Raises:
         HTTPException: If view not found or validation fails
     """
+    actor = principal_to_actor(current_user)
+
     view = db.query(View).filter(View.id == view_id).first()
     if not view:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"View with ID '{view_id}' not found",
         )
+
+    before = snapshot(view)
 
     # Update fields
     update_data = view_data.model_dump(exclude_unset=True)
@@ -725,6 +822,12 @@ async def update_view(
     for field, value in update_data.items():
         setattr(view, field, value)
 
+    stamp_updated(view, actor)
+    audit_service.record_update(
+        db, resource_type=ResourceType.VIEW, resource_id=view.id, actor=actor,
+        before=before, after=snapshot(view),
+    )
+
     db.commit()
     db.refresh(view)
 
@@ -748,6 +851,8 @@ async def delete_view(view_id: str, current_user: AdminUser, db: DBSession):
     Raises:
         HTTPException: If view not found
     """
+    actor = principal_to_actor(current_user)
+
     view = db.query(View).filter(View.id == view_id).first()
     if not view:
         raise HTTPException(
@@ -755,7 +860,14 @@ async def delete_view(view_id: str, current_user: AdminUser, db: DBSession):
             detail=f"View with ID '{view_id}' not found",
         )
 
+    snap = snapshot(view)
+
     db.delete(view)
+
+    audit_service.record_delete(
+        db, resource_type=ResourceType.VIEW, resource_id=view_id, actor=actor, snapshot=snap
+    )
+
     db.commit()
 
     logger.info(f"View '{view_id}' deleted by user {current_user.username}")
@@ -792,6 +904,8 @@ async def create_screen_mapping(
     Raises:
         HTTPException: If view not found, slot conflict, or camera/device not found
     """
+    actor = principal_to_actor(current_user)
+
     # Verify view exists
     view = db.query(View).filter(View.id == view_id).first()
     if not view:
@@ -865,6 +979,13 @@ async def create_screen_mapping(
     )
 
     db.add(new_mapping)
+    db.flush()  # Get the autoincrement mapping id before recording the audit entry
+
+    stamp_created(new_mapping, actor)
+    audit_service.record_create(
+        db, resource_type=ResourceType.SCREEN_MAPPING, resource_id=str(new_mapping.id), actor=actor
+    )
+
     db.commit()
     db.refresh(new_mapping)
 
@@ -907,7 +1028,9 @@ async def list_view_mappings(view_id: str, current_user: CurrentUser, db: DBSess
         .all()
     )
 
-    return [ScreenMappingResponse.model_validate(m) for m in mappings]
+    responses = [ScreenMappingResponse.model_validate(m) for m in mappings]
+    attach_actor_stamps_list(db, responses, mappings)
+    return responses
 
 
 @router.put("/mappings/{mapping_id}", response_model=ScreenMappingResponse)
@@ -934,12 +1057,16 @@ async def update_screen_mapping(
     Raises:
         HTTPException: If mapping not found or validation fails
     """
+    actor = principal_to_actor(current_user)
+
     mapping = db.query(ScreenMapping).filter(ScreenMapping.id == mapping_id).first()
     if not mapping:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Screen mapping with ID {mapping_id} not found",
         )
+
+    before = snapshot(mapping)
 
     # Update fields
     update_data = mapping_data.model_dump(exclude_unset=True)
@@ -974,6 +1101,12 @@ async def update_screen_mapping(
     for field, value in update_data.items():
         setattr(mapping, field, value)
 
+    stamp_updated(mapping, actor)
+    audit_service.record_update(
+        db, resource_type=ResourceType.SCREEN_MAPPING, resource_id=str(mapping.id), actor=actor,
+        before=before, after=snapshot(mapping),
+    )
+
     db.commit()
     db.refresh(mapping)
 
@@ -998,6 +1131,8 @@ async def delete_screen_mapping(
     Raises:
         HTTPException: If mapping not found
     """
+    actor = principal_to_actor(current_user)
+
     mapping = db.query(ScreenMapping).filter(ScreenMapping.id == mapping_id).first()
     if not mapping:
         raise HTTPException(
@@ -1005,7 +1140,15 @@ async def delete_screen_mapping(
             detail=f"Screen mapping with ID {mapping_id} not found",
         )
 
+    snap = snapshot(mapping)
+
     db.delete(mapping)
+
+    audit_service.record_delete(
+        db, resource_type=ResourceType.SCREEN_MAPPING, resource_id=str(mapping_id), actor=actor,
+        snapshot=snap,
+    )
+
     db.commit()
 
     logger.info(f"Screen mapping {mapping_id} deleted by user {current_user.username}")
@@ -1203,6 +1346,8 @@ async def rename_view(
     Raises:
         HTTPException: If view not found
     """
+    actor = principal_to_actor(current_user)
+
     view = db.query(View).filter(View.id == view_id).first()
     if not view:
         raise HTTPException(
@@ -1210,8 +1355,16 @@ async def rename_view(
             detail=f"View with ID '{view_id}' not found",
         )
 
+    before = snapshot(view)
+
     old_name = view.name
     view.name = new_name
+
+    stamp_updated(view, actor)
+    audit_service.record_update(
+        db, resource_type=ResourceType.VIEW, resource_id=view.id, actor=actor,
+        before=before, after=snapshot(view),
+    )
 
     db.commit()
     db.refresh(view)
@@ -1300,12 +1453,16 @@ async def get_all_views_for_pc(pc_id: str, current_user: CurrentUser, db: DBSess
             view_with_mappings.mappings = mapping_infos
             views_with_mappings.append(view_with_mappings)
 
+        attach_actor_stamps_list(db, views_with_mappings, views)
+
         # Build screen composite response
         screen_composite = ScreenCompositeResponse.model_validate(screen)
         screen_composite.views = views_with_mappings
         screen_composite.view_count = len(views_with_mappings)
 
         results.append(screen_composite)
+
+    attach_actor_stamps_list(db, results, screens)
 
     return results
 
@@ -1331,6 +1488,8 @@ async def clear_slot(
     Raises:
         HTTPException: If view or mapping not found
     """
+    actor = principal_to_actor(current_user)
+
     # Verify view exists
     view = db.query(View).filter(View.id == view_id).first()
     if not view:
@@ -1356,7 +1515,15 @@ async def clear_slot(
             detail=f"No camera assigned to slot ({row}, {col}) in view '{view_id}'",
         )
 
+    snap = snapshot(mapping)
+
     db.delete(mapping)
+
+    audit_service.record_delete(
+        db, resource_type=ResourceType.SCREEN_MAPPING, resource_id=str(mapping.id), actor=actor,
+        snapshot=snap,
+    )
+
     db.commit()
 
     logger.info(
@@ -1394,6 +1561,8 @@ async def assign_camera_to_slot(
     Raises:
         HTTPException: If view or camera not found, or slot out of bounds
     """
+    actor = principal_to_actor(current_user)
+
     # Verify view exists
     view = db.query(View).filter(View.id == view_id).first()
     if not view:
@@ -1445,8 +1614,16 @@ async def assign_camera_to_slot(
 
     if existing_mapping:
         # Update existing mapping
+        before = snapshot(existing_mapping)
         existing_mapping.camera_id = camera_id
         existing_mapping.device_id = device_id
+
+        stamp_updated(existing_mapping, actor)
+        audit_service.record_update(
+            db, resource_type=ResourceType.SCREEN_MAPPING, resource_id=str(existing_mapping.id),
+            actor=actor, before=before, after=snapshot(existing_mapping),
+        )
+
         db.commit()
         db.refresh(existing_mapping)
         logger.info(
@@ -1464,6 +1641,13 @@ async def assign_camera_to_slot(
             camera_id=camera_id,
         )
         db.add(new_mapping)
+        db.flush()  # Get the autoincrement mapping id before recording the audit entry
+
+        stamp_created(new_mapping, actor)
+        audit_service.record_create(
+            db, resource_type=ResourceType.SCREEN_MAPPING, resource_id=str(new_mapping.id), actor=actor
+        )
+
         db.commit()
         db.refresh(new_mapping)
         logger.info(

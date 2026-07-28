@@ -4,10 +4,10 @@ SQLAlchemy model for Camera table.
 
 from sqlalchemy import Column, String, Text, Boolean, ForeignKey, Index
 from sqlalchemy.orm import relationship
-from app.models.base import BaseModel
+from app.models.base import BaseModel, ActorStampMixin
 
 
-class Camera(BaseModel):
+class Camera(BaseModel, ActorStampMixin):
     """
     Camera model representing individual cameras associated with devices.
     Each camera has RTSP streaming URLs and can be marked as new.

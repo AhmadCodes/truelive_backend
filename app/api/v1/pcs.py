@@ -38,6 +38,16 @@ from app.schemas.pc import (
     CopyLayoutResponse,
 )
 from app.services.config_importer import import_config_for_pc, copy_layout_from_pc
+from app.services.actor import (
+    principal_to_actor,
+    stamp_created,
+    stamp_updated,
+    snapshot,
+    attach_actor_stamps,
+    attach_actor_stamps_list,
+)
+from app.services import audit_service
+from app.services.audit_service import ResourceType
 import logging
 
 logger = logging.getLogger(__name__)
@@ -48,7 +58,7 @@ router = APIRouter()
 async def create_pc(
     pc_data: PCCreate,
     db: DBSession,
-    _auth=Depends(admin_or_scope("teams:manage")),
+    principal=Depends(admin_or_scope("teams:manage")),
 ):
     """
     Create a new PC.
@@ -66,6 +76,8 @@ async def create_pc(
     Raises:
         HTTPException: If PC ID already exists or manager PC not found
     """
+    actor = principal_to_actor(principal)
+
     # Check if PC with this ID already exists
     existing_pc = db.query(PC).filter(PC.id == pc_data.id).first()
     if existing_pc:
@@ -107,6 +119,13 @@ async def create_pc(
     )
 
     db.add(new_pc)
+    db.flush()
+
+    stamp_created(new_pc, actor)
+    audit_service.record_create(
+        db, resource_type=ResourceType.PC, resource_id=new_pc.id, actor=actor
+    )
+
     db.commit()
     db.refresh(new_pc)
 
@@ -170,6 +189,8 @@ async def list_pcs(
         pc_data = PCWithScreenCount.model_validate(pc)
         pc_data.screen_count = screen_count
         result.append(pc_data)
+
+    attach_actor_stamps_list(db, result, pcs)
 
     return result
 
@@ -308,7 +329,9 @@ async def get_pc(pc_id: str, current_user: CurrentUser, db: DBSession):
             detail=f"PC with ID '{pc_id}' not found",
         )
 
-    return pc
+    resp = PCDetailResponse.model_validate(pc)
+    attach_actor_stamps(db, resp, pc)
+    return resp
 
 
 @router.get("/{pc_id}/with-manager", response_model=PCWithManager)
@@ -336,7 +359,9 @@ async def get_pc_with_manager(pc_id: str, current_user: CurrentUser, db: DBSessi
             detail=f"PC with ID '{pc_id}' not found",
         )
 
-    return PCWithManager.model_validate(pc)
+    resp = PCWithManager.model_validate(pc)
+    attach_actor_stamps(db, resp, pc)
+    return resp
 
 
 @router.get("/{pc_id}/controlled", response_model=PCWithControlled)
@@ -382,6 +407,7 @@ async def get_pc_with_controlled(pc_id: str, current_user: CurrentUser, db: DBSe
 
     result = PCWithControlled.model_validate(pc)
     result.screen_count = screen_count
+    attach_actor_stamps(db, result, pc)
 
     return result
 
@@ -427,6 +453,7 @@ async def get_pc_screens(pc_id: str, current_user: CurrentUser, db: DBSession):
     result = PCWithScreens.model_validate(pc)
     result.screen_count = len(screen_summaries)
     result.screens = screen_summaries
+    attach_actor_stamps(db, result, pc)
 
     return result
 
@@ -436,7 +463,7 @@ async def update_pc(
     pc_id: str,
     pc_data: PCUpdate,
     db: DBSession,
-    _auth=Depends(admin_or_scope("teams:manage")),
+    principal=Depends(admin_or_scope("teams:manage")),
 ):
     """
     Update a PC.
@@ -455,12 +482,16 @@ async def update_pc(
     Raises:
         HTTPException: If PC not found or validation fails
     """
+    actor = principal_to_actor(principal)
+
     pc = db.query(PC).filter(PC.id == pc_id).first()
     if not pc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"PC with ID '{pc_id}' not found",
         )
+
+    before = snapshot(pc)
 
     # Update fields
     update_data = pc_data.model_dump(exclude_unset=True)
@@ -534,6 +565,16 @@ async def update_pc(
     for field, value in update_data.items():
         setattr(pc, field, value)
 
+    stamp_updated(pc, actor)
+    audit_service.record_update(
+        db,
+        resource_type=ResourceType.PC,
+        resource_id=pc.id,
+        actor=actor,
+        before=before,
+        after=snapshot(pc),
+    )
+
     db.commit()
     db.refresh(pc)
 
@@ -574,6 +615,12 @@ async def delete_pc(pc_id: str, current_user: AdminUser, db: DBSession):
             detail=f"Cannot delete manager PC '{pc_id}' with {controlled_count} controlled PCs. "
             f"Reassign or delete controlled PCs first.",
         )
+
+    actor = principal_to_actor(current_user)
+    snap = snapshot(pc)
+    audit_service.record_delete(
+        db, resource_type=ResourceType.PC, resource_id=pc.id, actor=actor, snapshot=snap
+    )
 
     db.delete(pc)
     db.commit()
@@ -859,6 +906,8 @@ async def configure_pc_screens(
         configure_pc_screens as configure_screens,
     )
 
+    actor = principal_to_actor(current_user)
+
     try:
         # 1. Validate PC exists
         pc = db.query(PC).filter(PC.id == pc_id).first()
@@ -880,7 +929,7 @@ async def configure_pc_screens(
             )
 
         # 3. Only proceed if all validations pass
-        result = configure_screens(pc_id, request, db)
+        result = configure_screens(pc_id, request, db, actor=actor)
 
         return result
 
@@ -935,12 +984,26 @@ async def generate_pc_token(pc_id: str, current_user: AdminUser, db: DBSession):
         )
 
     try:
+        actor = principal_to_actor(current_user)
+        before = snapshot(pc)
+
         # Generate JWT token for PC
         token, expiry_timestamp = create_pc_auth_token(pc_id, pc.name)
 
         # Save token to database
         pc.auth_token = token
         pc.token_expiry = expiry_timestamp
+
+        stamp_updated(pc, actor)
+        audit_service.record_update(
+            db,
+            resource_type=ResourceType.PC,
+            resource_id=pc.id,
+            actor=actor,
+            before=before,
+            after=snapshot(pc),
+        )
+
         db.commit()
 
         logger.info(f"Token generated for PC '{pc_id}' by user {current_user.username}")
@@ -1087,7 +1150,8 @@ async def import_pc_config(
         400: Invalid configuration format
     """
     # Import the configuration
-    result = import_config_for_pc(db=db, pc_id=pc_id, config=request.config)
+    actor = principal_to_actor(current_user)
+    result = import_config_for_pc(db=db, pc_id=pc_id, config=request.config, actor=actor)
 
     if not result.success:
         # Check if it's a 404 (PC not found)
@@ -1140,7 +1204,10 @@ async def copy_layout_from_another_pc(
         404: Source or target PC not found
         400: Cannot copy to same PC or source has no screens
     """
-    result = copy_layout_from_pc(db=db, target_pc_id=pc_id, source_pc_id=source_pc_id)
+    actor = principal_to_actor(current_user)
+    result = copy_layout_from_pc(
+        db=db, target_pc_id=pc_id, source_pc_id=source_pc_id, actor=actor
+    )
 
     if not result.success:
         # Check if it's a 404 (PC not found)

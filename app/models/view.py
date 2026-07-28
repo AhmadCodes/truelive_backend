@@ -4,10 +4,10 @@ View model for managing camera view layouts on screens.
 
 from sqlalchemy import Column, String, Integer, CheckConstraint, ForeignKey, Index, UniqueConstraint
 from sqlalchemy.orm import relationship
-from app.models.base import BaseModel
+from app.models.base import BaseModel, ActorStampMixin
 
 
-class View(BaseModel):
+class View(BaseModel, ActorStampMixin):
     """
     View model representing camera view layouts on screens.
 
