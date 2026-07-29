@@ -6,8 +6,11 @@ for 180-camera (or custom) streaming setups.
 """
 
 import logging
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple, Optional, TYPE_CHECKING
 from sqlalchemy.orm import Session
+
+if TYPE_CHECKING:  # forward refs for type checkers only; runtime import is local
+    from app.schemas.stream_config import MonitorConfigInput, ViewGridInput
 
 from app.models.camera import Camera
 from app.models.device import Device
@@ -400,6 +403,191 @@ def build_device_config(
         "height": height,
         "screens": screens,
     }
+
+
+def _resolve_monitors(
+    monitors: Optional[List["MonitorConfigInput"]],
+    num_monitors: int,
+) -> List[Tuple[Optional[str], List[Tuple[int, int]]]]:
+    """Resolve the monitors/views/grid request into concrete per-monitor grids.
+
+    Returns one (name, grids) tuple per monitor, where grids is an ordered list
+    of (n_rows, n_cols) — one entry per view. Applies the documented fallbacks:
+    monitors omitted -> num_monitors default monitors; a monitor's views omitted
+    -> num_views copies of the default grid.
+    """
+    from app.schemas.stream_config import MonitorConfigInput, ViewGridInput
+
+    if monitors is None:
+        monitors = [MonitorConfigInput() for _ in range(num_monitors)]
+
+    default_grid = ViewGridInput()  # 3x3 by field defaults
+    resolved: List[Tuple[Optional[str], List[Tuple[int, int]]]] = []
+    for monitor in monitors:
+        if monitor.views is not None:
+            grids = [(v.n_rows, v.n_cols) for v in monitor.views]
+        else:
+            grids = [
+                (default_grid.n_rows, default_grid.n_cols)
+                for _ in range(monitor.num_views)
+            ]
+        resolved.append((monitor.name, grids))
+    return resolved
+
+
+def distribute_cameras_to_views(
+    cameras: List[Camera],
+    resolved_monitors: List[Tuple[Optional[str], List[Tuple[int, int]]]],
+    db: Session,
+) -> Tuple[List[Dict[str, Any]], int]:
+    """Distribute cameras into per-view independent grids (new views format).
+
+    Each view is its own n_rows x n_cols grid, filled row-major. Cameras are
+    consumed sequentially and distinctly, view-by-view across all monitors;
+    slots past the camera count become empty camera objects.
+
+    Args:
+        cameras: Camera objects to distribute
+        resolved_monitors: per-monitor (name, [(n_rows, n_cols), ...]) from _resolve_monitors
+        db: Database session
+
+    Returns:
+        Tuple of (list of screen data dicts, number of cameras used)
+    """
+    screens_data: List[Dict[str, Any]] = []
+    camera_index = 0
+    cameras_used = 0
+
+    for screen_idx, (name, grids) in enumerate(resolved_monitors):
+        views_dict: Dict[str, Any] = {}
+
+        for view_idx, (n_rows, n_cols) in enumerate(grids):
+            # view_id: stable per screen+view, matching the legacy scheme
+            view_id = f"generated_screen_{screen_idx}_view_{view_idx}"
+            sources: List[Dict[str, Any]] = []
+
+            for pos in range(n_rows * n_cols):
+                pos_x = pos // n_cols  # Row (0-indexed)
+                pos_y = pos % n_cols   # Column (0-indexed)
+
+                if camera_index < len(cameras):
+                    sources.append(
+                        create_camera_object(
+                            cameras[camera_index],
+                            db,
+                            view_n=view_idx,
+                            view_id=view_id,
+                            pos_x=pos_x,
+                            pos_y=pos_y,
+                        )
+                    )
+                    camera_index += 1
+                    cameras_used += 1
+                else:
+                    sources.append(
+                        create_empty_camera_object(
+                            view_n=view_idx, view_id=view_id, pos_x=pos_x, pos_y=pos_y
+                        )
+                    )
+
+            views_dict[str(view_idx)] = {
+                "n_rows": n_rows,
+                "n_cols": n_cols,
+                "sources": sources,
+            }
+
+        screen_name = name or f"Screen {screen_idx + 1}"
+        screens_data.append(
+            {"views": views_dict, "name": screen_name, "display_idx": screen_idx}
+        )
+
+    return screens_data, cameras_used
+
+
+def build_device_config_views(
+    screens_data: List[Dict[str, Any]], width: int, height: int, switch_interval: int
+) -> Dict[str, Any]:
+    """Build the final device config JSON in the new views-dict shape.
+
+    Identical top-level and per-screen shape as the legacy builder, except each
+    screen carries a ``views`` dict (keyed "0","1",...) instead of ``source_groups``.
+    """
+    screens = []
+
+    for screen_data in screens_data:
+        screen_obj = {
+            "id": f"generated_screen_{screen_data['display_idx']}",
+            "display_idx": screen_data["display_idx"],
+            "switchInterval": switch_interval,
+            "title": screen_data["name"],
+            "views": screen_data["views"],
+        }
+        screens.append(screen_obj)
+
+    return {
+        "pc_id": STREAM_CONFIG_PC_ID,
+        "pc_name": STREAM_CONFIG_PC_NAME,
+        "width": width,
+        "height": height,
+        "screens": screens,
+    }
+
+
+def generate_stream_config_views(
+    monitors: Optional[List["MonitorConfigInput"]],
+    num_monitors: int,
+    camera_ids: Optional[List[str]],
+    exclude_camera_ids: Optional[List[str]],
+    width: int,
+    height: int,
+    switch_interval: int,
+    db: Session,
+) -> Tuple[Dict[str, Any], Dict[str, int]]:
+    """Generate the new views-format stream configuration.
+
+    Same camera selection semantics as generate_stream_config; the difference is
+    per-view grids and a view-major (views-dict) output shape.
+
+    Returns:
+        Tuple of (device config dict, stats dict)
+    """
+    resolved = _resolve_monitors(monitors, num_monitors)
+    total_camera_slots = sum(r * c for _name, grids in resolved for (r, c) in grids)
+    total_views = sum(len(grids) for _name, grids in resolved)
+
+    logger.info(
+        f"Generating views stream config: {len(resolved)} monitors, "
+        f"{total_views} views, {total_camera_slots} camera slots"
+    )
+
+    cameras = get_cameras_for_config(
+        camera_ids, exclude_camera_ids, total_camera_slots, db
+    )
+    cameras_available = db.query(Camera).count()
+
+    logger.info(
+        f"Fetched {len(cameras)} cameras ({cameras_available} available in database)"
+    )
+
+    screens_data, cameras_used = distribute_cameras_to_views(cameras, resolved, db)
+
+    config = build_device_config_views(screens_data, width, height, switch_interval)
+
+    stats = {
+        "total_screens": len(resolved),
+        "total_views": total_views,
+        "total_camera_slots": total_camera_slots,
+        "cameras_used": cameras_used,
+        "cameras_available": cameras_available,
+        "empty_slots": total_camera_slots - cameras_used,
+    }
+
+    logger.info(
+        f"Generated views config: {stats['cameras_used']}/{stats['total_camera_slots']} "
+        f"slots filled, {stats['empty_slots']} empty"
+    )
+
+    return config, stats
 
 
 def generate_stream_config(
