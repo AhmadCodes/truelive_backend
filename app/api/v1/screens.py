@@ -37,6 +37,7 @@ from app.schemas.screen import (
     ScreenMappingCreate,
     ScreenMappingUpdate,
     ScreenMappingResponse,
+    ReplaceViewSlotsRequest,
     CameraMappingInfo,
 )
 from app.schemas.screen_layout import PlayingStateUpdate
@@ -1048,6 +1049,155 @@ async def list_view_mappings(view_id: str, current_user: CurrentUser, db: DBSess
 
     responses = [ScreenMappingResponse.model_validate(m) for m in mappings]
     attach_actor_stamps_list(db, responses, mappings)
+    return responses
+
+
+@router.put("/views/{view_id}/slots", response_model=List[ScreenMappingResponse])
+async def replace_view_slots(
+    view_id: str,
+    body: ReplaceViewSlotsRequest,
+    current_user: AdminUser,
+    db: DBSession,
+):
+    """
+    Atomically replace ALL camera->slot mappings of a view with the given set.
+
+    The view's mappings are made to match ``body.slots`` exactly: any slot not
+    present in the request is cleared. The whole operation runs in one
+    transaction and is all-or-nothing -- if ANY assignment is invalid (slot
+    outside the view's grid, duplicate slot position, unknown camera/device, or
+    a camera whose site is outside the view's team) the request is rejected with
+    a 4xx and NOTHING is written. On success the owning layout's
+    ``updated_at``/``updated_by`` is bumped once and the resulting mappings are
+    returned. Only admins and super admins may replace slots.
+
+    This is the transactional equivalent of replaying the per-slot
+    PUT/DELETE ``/views/{view_id}/slot/{row}/{col}`` calls, but without the
+    partial-failure window. Note: unlike the per-slot endpoint, this validates
+    team membership for every camera (matching the mapping create/update
+    endpoints).
+    """
+    actor = principal_to_actor(current_user)
+
+    # Verify view exists
+    view = db.query(View).filter(View.id == view_id).first()
+    if not view:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"View with ID '{view_id}' not found",
+        )
+
+    # ---- Validate EVERYTHING before any mutation (all-or-nothing) ----
+    seen_positions: set[tuple[int, int]] = set()
+    for s in body.slots:
+        pos = (s.slot_row, s.slot_col)
+        if pos in seen_positions:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Duplicate slot ({s.slot_row}, {s.slot_col}) in request",
+            )
+        seen_positions.add(pos)
+
+        if s.slot_row < 1 or s.slot_row > view.layout_rows:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid slot_row {s.slot_row}. Must be between 1 and {view.layout_rows}",
+            )
+        if s.slot_col < 1 or s.slot_col > view.layout_columns:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid slot_col {s.slot_col}. Must be between 1 and {view.layout_columns}",
+            )
+
+        camera = db.query(Camera).filter(Camera.id == s.camera_id).first()
+        if not camera:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Camera with ID '{s.camera_id}' not found",
+            )
+        # Team boundary: the camera's site must belong to this view's team.
+        try:
+            assert_camera_in_screen_team(db, s.camera_id, view.screen_id)
+        except CrossTeamError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            )
+
+        if s.device_id:
+            device = db.query(Device).filter(Device.id == s.device_id).first()
+            if not device:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Device with ID '{s.device_id}' not found",
+                )
+
+    # ---- Apply the diff against existing mappings (no commit yet) ----
+    existing = (
+        db.query(ScreenMapping).filter(ScreenMapping.view_id == view_id).all()
+    )
+    existing_by_pos = {(m.slot_row, m.slot_col): m for m in existing}
+    target_by_pos = {(s.slot_row, s.slot_col): s for s in body.slots}
+
+    # Clear slots that are no longer present in the target set.
+    for pos, m in existing_by_pos.items():
+        if pos not in target_by_pos:
+            snap = snapshot(m)
+            db.delete(m)
+            audit_service.record_delete(
+                db, resource_type=ResourceType.SCREEN_MAPPING, resource_id=str(m.id),
+                actor=actor, snapshot=snap,
+            )
+
+    # Upsert every target slot.
+    for pos, s in target_by_pos.items():
+        m = existing_by_pos.get(pos)
+        if m is not None:
+            if m.camera_id != s.camera_id or m.device_id != s.device_id:
+                before = snapshot(m)
+                m.camera_id = s.camera_id
+                m.device_id = s.device_id
+                stamp_updated(m, actor)
+                audit_service.record_update(
+                    db, resource_type=ResourceType.SCREEN_MAPPING, resource_id=str(m.id),
+                    actor=actor, before=before, after=snapshot(m),
+                )
+        else:
+            new_mapping = ScreenMapping(
+                screen_id=view.screen_id,
+                view_id=view_id,
+                slot_row=s.slot_row,
+                slot_col=s.slot_col,
+                device_id=s.device_id,
+                camera_id=s.camera_id,
+            )
+            db.add(new_mapping)
+            db.flush()  # Get the autoincrement id before recording the audit entry
+            stamp_created(new_mapping, actor)
+            audit_service.record_create(
+                db, resource_type=ResourceType.SCREEN_MAPPING, resource_id=str(new_mapping.id),
+                actor=actor,
+            )
+
+    # Bump the owning layout's stamp ONCE for the whole save.
+    layout_id = (
+        db.query(Screen.screen_layout_id).filter(Screen.id == view.screen_id).scalar()
+    )
+    touch_layout(db, layout_id, actor)
+
+    db.commit()
+
+    # Return the resulting mappings.
+    result = (
+        db.query(ScreenMapping)
+        .filter(ScreenMapping.view_id == view_id)
+        .order_by(ScreenMapping.slot_row, ScreenMapping.slot_col)
+        .all()
+    )
+    responses = [ScreenMappingResponse.model_validate(m) for m in result]
+    attach_actor_stamps_list(db, responses, result)
+    logger.info(
+        f"Replaced view '{view_id}' slots ({len(body.slots)} assignment(s)) by user {current_user.username}"
+    )
     return responses
 
 
