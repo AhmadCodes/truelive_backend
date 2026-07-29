@@ -248,6 +248,30 @@ class ScreenMappingUpdate(BaseModel):
     camera_id: Optional[str] = Field(None, description="Camera ID")
 
 
+class ViewSlotAssignment(BaseModel):
+    """A single camera->slot assignment within an atomic view-slots replace."""
+
+    slot_row: int = Field(..., ge=1, description="Grid row position (1-indexed)")
+    slot_col: int = Field(..., ge=1, description="Grid column position (1-indexed)")
+    camera_id: str = Field(..., min_length=1, description="Camera ID to place in this slot")
+    device_id: Optional[str] = Field(None, description="Optional device ID")
+
+
+class ReplaceViewSlotsRequest(BaseModel):
+    """Complete desired set of slot assignments for a view, applied atomically.
+
+    The view's mappings are made to match ``slots`` exactly: any slot not present
+    is cleared. If any assignment is invalid the whole request is rejected and
+    nothing is written.
+    """
+
+    slots: List[ViewSlotAssignment] = Field(
+        default_factory=list,
+        max_length=256,  # a view grid tops out at 10x10=100 slots; generous headroom
+        description="Complete list of slot assignments for the view; omitted slots are cleared",
+    )
+
+
 class ScreenMappingResponse(ActorStampsMixin):
     """Screen mapping response schema."""
 
