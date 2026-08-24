@@ -52,6 +52,25 @@ class ScreenLayoutResponse(ActorStampsMixin):
         from_attributes = True
 
 
+class LayoutDuplicateRequest(BaseModel):
+    """Request body for duplicating a screen layout. Body is optional."""
+
+    name: Optional[str] = Field(
+        None,
+        min_length=1,
+        max_length=255,
+        description="Name for the duplicated layout; defaults to '<source name> (Copy)'",
+    )
+
+
+class LayoutDuplicateResponse(ScreenLayoutResponse):
+    """Response for duplicating a screen layout: the new layout plus copy counts."""
+
+    screens_copied: int = Field(..., description="Number of screens copied")
+    views_copied: int = Field(..., description="Number of views copied")
+    mappings_copied: int = Field(..., description="Number of screen mappings copied")
+
+
 class AssignedPCsResponse(BaseModel):
     """Response listing the PCs currently assigned to a screen layout."""
 
