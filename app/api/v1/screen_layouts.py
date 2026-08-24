@@ -24,9 +24,12 @@ from app.schemas.screen_layout import (
     ScreenLayoutCreate,
     ScreenLayoutUpdate,
     ScreenLayoutResponse,
+    LayoutDuplicateRequest,
+    LayoutDuplicateResponse,
     AssignedPCsResponse,
     DeployRequest,
 )
+from app.services.config_importer import duplicate_layout
 from app.services.team_enforcement import (
     cameras_blocking_layout_move,
     MSG_PC_LAYOUT_DIFFERENT_TEAM,
@@ -100,6 +103,77 @@ async def create_screen_layout(
 
     logger.info(f"Screen layout '{layout.id}' created")
     return layout
+
+
+@router.post(
+    "/{layout_id}/duplicate",
+    response_model=LayoutDuplicateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def duplicate_screen_layout(
+    layout_id: str,
+    db: DBSession,
+    request: Optional[LayoutDuplicateRequest] = None,
+    principal=Depends(admin_or_scope("teams:manage")),
+):
+    """
+    Duplicate a screen layout into a new, independent layout.
+
+    Deep-copies the source layout's screens, views, and camera-slot mappings into
+    a freshly created layout in the SAME team. Camera/device references are reused
+    (not cloned). PC assignments are NOT carried over — the new layout starts
+    unassigned, and no PC is modified.
+
+    The request body is optional: provide ``name`` to name the copy, otherwise it
+    defaults to ``"<source name> (Copy)"``. A new unique layout id is generated
+    server-side.
+
+    Only admins and super admins (or ``teams:manage`` service accounts) can
+    duplicate screen layouts.
+
+    Raises:
+        HTTPException 404: If the source layout is not found
+    """
+    actor = principal_to_actor(principal)
+
+    source = db.query(ScreenLayout).filter(ScreenLayout.id == layout_id).first()
+    if not source:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Screen layout with ID '{layout_id}' not found",
+        )
+
+    new_name = request.name if request else None
+    result = duplicate_layout(db, layout_id, new_name, actor)
+
+    if not result.success or not result.new_layout_id:
+        # Keep the customer-facing message neutral; the service logs the cause.
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to duplicate screen layout",
+        )
+
+    new_layout = (
+        db.query(ScreenLayout)
+        .options(joinedload(ScreenLayout.team))
+        .filter(ScreenLayout.id == result.new_layout_id)
+        .first()
+    )
+    base = ScreenLayoutResponse.model_validate(new_layout)
+    attach_actor_stamps(db, base, new_layout)
+
+    logger.info(
+        f"Screen layout '{layout_id}' duplicated to '{result.new_layout_id}' "
+        f"({result.screens_copied} screens, {result.views_copied} views, "
+        f"{result.mappings_copied} mappings)"
+    )
+
+    return LayoutDuplicateResponse(
+        **base.model_dump(),
+        screens_copied=result.screens_copied,
+        views_copied=result.views_copied,
+        mappings_copied=result.mappings_copied,
+    )
 
 
 @router.get("", response_model=List[ScreenLayoutResponse])

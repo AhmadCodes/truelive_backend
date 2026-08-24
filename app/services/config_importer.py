@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from sqlalchemy.orm import Session
 
 from app.models.pc import PC
+from app.models.screen_layout import ScreenLayout
 from app.models.screen import Screen
 from app.models.view import View
 from app.models.screen_mapping import ScreenMapping
@@ -565,5 +566,191 @@ def copy_layout_from_pc(
         db.rollback()
         result.message = f"Copy layout failed: {str(e)}"
         logger.error(f"Copy layout failed from {source_pc_id} to {target_pc_id}: {e}")
+
+    return result
+
+
+@dataclass
+class DuplicateLayoutResult:
+    """Result of duplicating a screen layout into a new standalone layout."""
+
+    success: bool
+    source_layout_id: str
+    new_layout_id: Optional[str] = None
+    screens_copied: int = 0
+    views_copied: int = 0
+    mappings_copied: int = 0
+    message: str = ""
+
+
+def duplicate_layout(
+    db: Session,
+    source_layout_id: str,
+    new_name: Optional[str] = None,
+    actor: ActorTriple = SYSTEM_ACTOR,
+) -> DuplicateLayoutResult:
+    """
+    Duplicate a screen layout into a NEW, independent screen layout.
+
+    Deep-copies the source layout's screens, views, and mappings (including their
+    camera/device placements) into a freshly created ScreenLayout in the SAME
+    team. Camera and device records are referenced, not cloned. PC assignments
+    are NOT carried over: no PC is modified, and the new layout starts unassigned.
+
+    Args:
+        db: Database session
+        source_layout_id: ID of the layout to copy FROM
+        new_name: Name for the new layout; defaults to "<source name> (Copy)"
+        actor: Actor performing the operation (for stamps + audit)
+
+    Returns:
+        DuplicateLayoutResult with the new layout id, statistics, and status.
+        On failure the transaction is rolled back and ``success`` is False.
+    """
+    result = DuplicateLayoutResult(success=False, source_layout_id=source_layout_id)
+
+    # Resolve the source layout.
+    source_layout = (
+        db.query(ScreenLayout).filter(ScreenLayout.id == source_layout_id).first()
+    )
+    if not source_layout:
+        result.message = f"Source screen layout '{source_layout_id}' not found"
+        return result
+
+    # Source screens (may be empty — an empty layout duplicates to an empty layout).
+    source_screens = (
+        db.query(Screen).filter(Screen.screen_layout_id == source_layout_id).all()
+    )
+    source_screen_ids = [screen.id for screen in source_screens]
+
+    # Mint a fresh, standalone layout id (no PC association).
+    new_layout_id = f"lay_{uuid.uuid4()}"
+    if new_name:
+        # Caller-supplied names are already length-bounded by the request schema.
+        resolved_name = new_name
+    else:
+        # Derived default: clamp so appending the suffix can't exceed the
+        # ScreenLayout.name column (String(255)) and raise a truncation error.
+        _suffix = " (Copy)"
+        resolved_name = source_layout.name[: 255 - len(_suffix)] + _suffix
+
+    try:
+        # Create the new layout in the SAME team as the source. Because the copy
+        # stays in-team and reuses the same cameras, the camera/site team-boundary
+        # invariant holds by construction — no cross-team check is needed.
+        new_layout = ScreenLayout(
+            id=new_layout_id,
+            name=resolved_name,
+            team_id=source_layout.team_id,
+        )
+        stamp_created(new_layout, actor)
+        db.add(new_layout)
+        db.flush()  # ensure the layout row exists before its children reference it
+
+        # Map old screen/view IDs to new IDs.
+        screen_id_map = {}  # old_screen_id -> new_screen_id
+        view_id_map = {}  # old_view_id -> new_view_id
+
+        for source_screen in source_screens:
+            new_screen_id = f"{new_layout_id}_screen_{uuid.uuid4()}"
+            screen_id_map[source_screen.id] = new_screen_id
+
+            new_screen = Screen(
+                id=new_screen_id,
+                screen_layout_id=new_layout_id,
+                name=source_screen.name,
+                rows=source_screen.rows,
+                columns=source_screen.columns,
+                switching_interval=source_screen.switching_interval,
+            )
+            stamp_created(new_screen, actor)
+            db.add(new_screen)
+            result.screens_copied += 1
+
+            source_views = (
+                db.query(View).filter(View.screen_id == source_screen.id).all()
+            )
+            for source_view in source_views:
+                new_view_id = f"{new_screen_id}_view_{uuid.uuid4()}"
+                view_id_map[source_view.id] = new_view_id
+
+                new_view = View(
+                    id=new_view_id,
+                    screen_id=new_screen_id,
+                    name=source_view.name,
+                    layout_rows=source_view.layout_rows,
+                    layout_columns=source_view.layout_columns,
+                    view_number=source_view.view_number,
+                )
+                stamp_created(new_view, actor)
+                db.add(new_view)
+                result.views_copied += 1
+
+        db.flush()
+
+        # Copy mappings — reach source mappings via the source layout's screens.
+        if source_screen_ids:
+            source_mappings = (
+                db.query(ScreenMapping)
+                .filter(ScreenMapping.screen_id.in_(source_screen_ids))
+                .all()
+            )
+
+            for source_mapping in source_mappings:
+                new_screen_id = screen_id_map.get(source_mapping.screen_id)
+                new_view_id = view_id_map.get(source_mapping.view_id)
+
+                if not new_screen_id or not new_view_id:
+                    logger.warning(
+                        f"Skipping mapping - missing new IDs for screen "
+                        f"{source_mapping.screen_id} or view {source_mapping.view_id}"
+                    )
+                    continue
+
+                new_mapping = ScreenMapping(
+                    screen_id=new_screen_id,
+                    view_id=new_view_id,
+                    slot_row=source_mapping.slot_row,
+                    slot_col=source_mapping.slot_col,
+                    device_id=source_mapping.device_id,
+                    camera_id=source_mapping.camera_id,
+                )
+                stamp_created(new_mapping, actor)
+                db.add(new_mapping)
+                result.mappings_copied += 1
+
+        audit_service.record_event(
+            db,
+            action=AuditAction.LAYOUT_COPIED,
+            resource_type=ResourceType.LAYOUT,
+            resource_id=new_layout_id,
+            actor=actor,
+            changes={
+                "screens": result.screens_copied,
+                "views": result.views_copied,
+                "mappings": result.mappings_copied,
+                "source_layout_id": source_layout_id,
+            },
+            commit=False,
+        )
+
+        db.commit()
+
+        result.success = True
+        result.new_layout_id = new_layout_id
+        result.message = (
+            f"Successfully duplicated layout '{source_layout_id}' to "
+            f"'{new_layout_id}': {result.screens_copied} screens, "
+            f"{result.views_copied} views, {result.mappings_copied} mappings"
+        )
+        logger.info(result.message)
+
+    except Exception as e:
+        db.rollback()
+        result.success = False
+        result.message = f"Duplicate layout failed: {str(e)}"
+        logger.error(
+            f"Duplicate layout failed for source '{source_layout_id}': {e}"
+        )
 
     return result
