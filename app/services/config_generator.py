@@ -295,8 +295,8 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
                                     "view_n": view_n,  # Integer, not string
                                     "view_id": view_id,
                                     "view_name": view_name,
-                                    "pos_x": row_num,
-                                    "pos_y": col_num,
+                                    "pos_x": col_num,
+                                    "pos_y": row_num,
                                     "osd_color": osd_color,
                                     "osd_text": f"{parent_site_name} - {device_name} - {camera_name}",
                                     "url": try_encode_rtsp_password(
@@ -313,8 +313,8 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
                                         view_n=view_n,
                                         view_id=view_id,
                                         view_name=view_name,
-                                        pos_x=row_num,
-                                        pos_y=col_num,
+                                        pos_x=col_num,
+                                        pos_y=row_num,
                                     )
                                 )
                         else:
@@ -324,8 +324,8 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
                                     view_n=view_n,
                                     view_id=view_id,
                                     view_name=view_name,
-                                    pos_x=row_num,
-                                    pos_y=col_num,
+                                    pos_x=col_num,
+                                    pos_y=row_num,
                                 )
                             )
 
