@@ -239,8 +239,9 @@ def generate_config(site_config: Dict[str, Any], db: Session) -> Dict[str, Any]:
                     if view_key in view_metadata:
                         return (
                             0,
-                            view_metadata[view_key].created_at,
-                        )  # Sort by timestamp
+                            view_metadata[view_key].view_number,
+                        )  # Sort by explicit view_number (created_at ties on copied
+                        #    layouts, which scrambled the rotation order)
                     else:
                         return (1, view_key)  # Fallback to name sorting
 
