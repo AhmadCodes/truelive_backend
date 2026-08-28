@@ -33,9 +33,8 @@ class SiteCreate(SiteBase):
     """Schema for creating a new site."""
 
     team_ids: List[str] = Field(
-        ...,
-        min_length=1,
-        description="Teams to assign this site to (at least one; a site may belong to many teams)",
+        default_factory=list,
+        description="Teams to assign this site to (optional; omit or send [] for a team-less site; a site may belong to many teams)",
     )
 
 
