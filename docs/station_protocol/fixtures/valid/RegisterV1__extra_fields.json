@@ -1,0 +1,12 @@
+{
+  "auth_token": "FIXTURE-NOT-A-TOKEN",
+  "future_field": {
+    "nested": [
+      "a",
+      1,
+      true,
+      null
+    ]
+  },
+  "pc_id": "00000000-0000-4000-8000-0000000000d1"
+}

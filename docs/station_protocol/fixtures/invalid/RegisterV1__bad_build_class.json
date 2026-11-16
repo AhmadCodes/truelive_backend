@@ -1,0 +1,22 @@
+{
+  "auth_token": "FIXTURE-NOT-A-TOKEN",
+  "capabilities": [
+    "deploy_result.v1",
+    "station_status.v1",
+    "pc_token.v1"
+  ],
+  "client_build": "1.4.0+0000000",
+  "client_version": "1.4.0",
+  "core_build_class": "reports_v9",
+  "core_exe_sha256": "101b2cceb35bc3cd0cc7e7b45bb32ffe0d0d05e6b27bafd1a9db465871d4a43e",
+  "core_exe_size": 2867200,
+  "core_installed_version": "1.1.0+d53952a",
+  "core_running_version": "1.1.0+d53952a",
+  "core_version": "1.1.0+d53952a",
+  "core_version_source": "stdout",
+  "delivery_policy": "live_with_fallback",
+  "name": "Fixture Station 1",
+  "pc_id": "00000000-0000-4000-8000-0000000000d1",
+  "running_config_id": "3f2b8c1e-0d1a-4c55-9e00-000000000001",
+  "telemetry_mode": "stdout_only"
+}

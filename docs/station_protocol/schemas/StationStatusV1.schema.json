@@ -1,0 +1,893 @@
+{
+  "$defs": {
+    "ConfigStatusV1": {
+      "additionalProperties": {
+        "$ref": "#/$defs/SafeValue"
+      },
+      "description": "``StationStatusV1.config_status``: C23's managed-config status block.\nKey names only; never values.",
+      "properties": {
+        "core_caps": {
+          "items": {
+            "maxLength": 32,
+            "minLength": 1,
+            "not": {
+              "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+            },
+            "pattern": "^[A-Za-z0-9_.:+-]+$",
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Core Caps",
+          "type": "array"
+        },
+        "core_config_mode": {
+          "anyOf": [
+            {
+              "maxLength": 32,
+              "minLength": 1,
+              "not": {
+                "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+              },
+              "pattern": "^[A-Za-z0-9_.:+-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Core Config Mode"
+        },
+        "core_revision": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "not": {
+                "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+              },
+              "pattern": "^[\\x21-\\x7e]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Core Revision"
+        },
+        "core_version": {
+          "anyOf": [
+            {
+              "not": {
+                "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+              },
+              "pattern": "^[0-9A-Za-z.+_-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Core Version"
+        },
+        "data_dir_acl_warning": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Dir Acl Warning"
+        },
+        "drift_key_names": {
+          "items": {
+            "maxLength": 64,
+            "minLength": 1,
+            "not": {
+              "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+            },
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Drift Key Names",
+          "type": "array"
+        },
+        "fleet_errors_count": {
+          "anyOf": [
+            {
+              "maximum": 1000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fleet Errors Count"
+        },
+        "last_config_error": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "not": {
+                "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+              },
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Config Error"
+        },
+        "legacy_available": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Legacy Available"
+        },
+        "migration_status": {
+          "anyOf": [
+            {
+              "maxLength": 32,
+              "minLength": 1,
+              "not": {
+                "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+              },
+              "pattern": "^[A-Za-z0-9_.:+-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Migration Status"
+        },
+        "mode_set_by": {
+          "anyOf": [
+            {
+              "maxLength": 32,
+              "minLength": 1,
+              "not": {
+                "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+              },
+              "pattern": "^[A-Za-z0-9_.:+-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mode Set By"
+        }
+      },
+      "propertyNames": {
+        "not": {
+          "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+        }
+      },
+      "title": "ConfigStatusV1",
+      "type": "object"
+    },
+    "CoreStatusV1": {
+      "additionalProperties": {
+        "$ref": "#/$defs/SafeValue"
+      },
+      "description": "``StationStatusV1.core``: the supervised Core process.",
+      "properties": {
+        "build_class": {
+          "anyOf": [
+            {
+              "enum": [
+                "legacy",
+                "reports_v1",
+                "reports_v2",
+                "unknown"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Build Class"
+        },
+        "exe_sha256": {
+          "anyOf": [
+            {
+              "not": {
+                "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+              },
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exe Sha256"
+        },
+        "last_exit": {
+          "anyOf": [
+            {
+              "not": {
+                "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+              },
+              "pattern": "^0x[0-9A-Fa-f]{1,8}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Last exit code as hex, e.g. 0x544C0002",
+          "title": "Last Exit"
+        },
+        "pid": {
+          "anyOf": [
+            {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pid"
+        },
+        "restarts_24h": {
+          "anyOf": [
+            {
+              "maximum": 1000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Restarts 24H"
+        },
+        "state": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "not": {
+                "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+              },
+              "pattern": "^[A-Za-z0-9_.:+-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "CoreState phase (B7b), e.g. RUNNING",
+          "title": "State"
+        },
+        "uptime_sec": {
+          "anyOf": [
+            {
+              "maximum": 1000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uptime Sec"
+        }
+      },
+      "propertyNames": {
+        "not": {
+          "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+        }
+      },
+      "title": "CoreStatusV1",
+      "type": "object"
+    },
+    "ReadinessIssueV1": {
+      "additionalProperties": {
+        "$ref": "#/$defs/SafeValue"
+      },
+      "description": "One station readiness issue (B14), e.g. AUTOLOGON_OFF.",
+      "properties": {
+        "code": {
+          "maxLength": 64,
+          "minLength": 1,
+          "not": {
+            "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+          },
+          "pattern": "^[A-Z0-9_]+$",
+          "title": "Code",
+          "type": "string"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "not": {
+                "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+              },
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        }
+      },
+      "propertyNames": {
+        "not": {
+          "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+        }
+      },
+      "required": [
+        "code"
+      ],
+      "title": "ReadinessIssueV1",
+      "type": "object"
+    },
+    "SafeString": {
+      "description": "A string that holds no URI with userinfo (credentials).",
+      "not": {
+        "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+      },
+      "type": "string"
+    },
+    "SafeValue": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SafeString"
+        },
+        {
+          "type": [
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/SafeValue"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/SafeValue"
+          },
+          "propertyNames": {
+            "not": {
+              "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+            }
+          },
+          "type": "object"
+        }
+      ],
+      "description": "Any JSON value whose strings and keys hold no URI with userinfo."
+    },
+    "TelemetryChannelV1": {
+      "additionalProperties": {
+        "$ref": "#/$defs/SafeValue"
+      },
+      "description": "One Core report channel as the Client sees it.",
+      "properties": {
+        "connected": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Connected"
+        },
+        "last_message_age_sec": {
+          "anyOf": [
+            {
+              "maximum": 1000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Message Age Sec"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "maxLength": 32,
+              "minLength": 1,
+              "not": {
+                "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+              },
+              "pattern": "^[A-Za-z0-9_.:+-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "listener, pulse, none, unknown",
+          "title": "Target"
+        }
+      },
+      "propertyNames": {
+        "not": {
+          "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+        }
+      },
+      "title": "TelemetryChannelV1",
+      "type": "object"
+    },
+    "TelemetryV1": {
+      "additionalProperties": {
+        "$ref": "#/$defs/SafeValue"
+      },
+      "description": "``StationStatusV1.telemetry``.",
+      "properties": {
+        "channels": {
+          "additionalProperties": false,
+          "maxProperties": 8,
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/TelemetryChannelV1"
+            }
+          },
+          "propertyNames": {
+            "not": {
+              "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+            }
+          },
+          "title": "Channels",
+          "type": "object"
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "maxLength": 32,
+              "minLength": 1,
+              "not": {
+                "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+              },
+              "pattern": "^[A-Za-z0-9_.:+-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mode"
+        },
+        "tap_state": {
+          "anyOf": [
+            {
+              "enum": [
+                "ok",
+                "lossy",
+                "dead"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tap State"
+        }
+      },
+      "propertyNames": {
+        "not": {
+          "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+        }
+      },
+      "title": "TelemetryV1",
+      "type": "object"
+    },
+    "WallV1": {
+      "additionalProperties": {
+        "$ref": "#/$defs/SafeValue"
+      },
+      "description": "``StationStatusV1.wall``: what the wall shows. ``streams_failed`` is\ncapped at 50 source ids; ``streams_failed_count`` carries the true count.",
+      "properties": {
+        "deploying": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Deploying"
+        },
+        "running_config_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "not": {
+                "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+              },
+              "pattern": "^[\\x21-\\x7e]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Running Config Id"
+        },
+        "screens": {
+          "anyOf": [
+            {
+              "maximum": 64,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Screens"
+        },
+        "streams_connecting": {
+          "anyOf": [
+            {
+              "maximum": 1000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Streams Connecting"
+        },
+        "streams_failed": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "not": {
+              "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+            },
+            "pattern": "^[^\\x00-\\x1f\\x7f]+$",
+            "type": "string"
+          },
+          "maxItems": 50,
+          "title": "Streams Failed",
+          "type": "array"
+        },
+        "streams_failed_count": {
+          "anyOf": [
+            {
+              "maximum": 1000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Streams Failed Count"
+        },
+        "streams_playing": {
+          "anyOf": [
+            {
+              "maximum": 1000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Streams Playing"
+        },
+        "streams_total": {
+          "anyOf": [
+            {
+              "maximum": 1000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Streams Total"
+        }
+      },
+      "propertyNames": {
+        "not": {
+          "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+        }
+      },
+      "title": "WallV1",
+      "type": "object"
+    }
+  },
+  "$id": "urn:truelive:station-protocol:1:StationStatusV1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": {
+    "$ref": "#/$defs/SafeValue"
+  },
+  "description": "Client -> relay, Socket.IO event 'station_status'.",
+  "not": {
+    "anyOf": [
+      {
+        "required": [
+          "auth_token"
+        ]
+      },
+      {
+        "required": [
+          "token"
+        ]
+      },
+      {
+        "required": [
+          "password"
+        ]
+      },
+      {
+        "required": [
+          "config"
+        ]
+      },
+      {
+        "required": [
+          "screen_details"
+        ]
+      }
+    ]
+  },
+  "properties": {
+    "client_build": {
+      "anyOf": [
+        {
+          "not": {
+            "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+          },
+          "pattern": "^[0-9A-Za-z.+_-]{1,64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Client Build"
+    },
+    "client_version": {
+      "anyOf": [
+        {
+          "not": {
+            "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+          },
+          "pattern": "^[0-9A-Za-z.+_-]{1,64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Client Version"
+    },
+    "config_status": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ConfigStatusV1"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "core": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CoreStatusV1"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "core_installed_version": {
+      "anyOf": [
+        {
+          "not": {
+            "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+          },
+          "pattern": "^[0-9A-Za-z.+_-]{1,64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Core Installed Version"
+    },
+    "core_running_version": {
+      "anyOf": [
+        {
+          "not": {
+            "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+          },
+          "pattern": "^[0-9A-Za-z.+_-]{1,64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Core Running Version"
+    },
+    "core_version_source": {
+      "anyOf": [
+        {
+          "maxLength": 32,
+          "minLength": 1,
+          "not": {
+            "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+          },
+          "pattern": "^[A-Za-z0-9_.:+-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Core Version Source"
+    },
+    "flags": {
+      "additionalProperties": false,
+      "maxProperties": 32,
+      "patternProperties": {
+        "^[A-Za-z0-9_.:+-]+$": {
+          "type": "boolean"
+        }
+      },
+      "propertyNames": {
+        "not": {
+          "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+        }
+      },
+      "title": "Flags",
+      "type": "object"
+    },
+    "health": {
+      "enum": [
+        "ok",
+        "degraded",
+        "unhealthy",
+        "stopped",
+        "unknown"
+      ],
+      "title": "Health",
+      "type": "string"
+    },
+    "message_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "not": {
+        "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+      },
+      "pattern": "^[\\x21-\\x7e]+$",
+      "title": "Message Id",
+      "type": "string"
+    },
+    "readiness": {
+      "items": {
+        "$ref": "#/$defs/ReadinessIssueV1"
+      },
+      "maxItems": 32,
+      "title": "Readiness",
+      "type": "array"
+    },
+    "reasons": {
+      "items": {
+        "maxLength": 64,
+        "minLength": 1,
+        "not": {
+          "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+        },
+        "pattern": "^[A-Za-z0-9_.:+-]+$",
+        "type": "string"
+      },
+      "maxItems": 16,
+      "title": "Reasons",
+      "type": "array"
+    },
+    "telemetry": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TelemetryV1"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "ts": {
+      "maximum": 4102444800.0,
+      "minimum": 0.0,
+      "title": "Ts",
+      "type": "number"
+    },
+    "wall": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WallV1"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "propertyNames": {
+    "not": {
+      "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+    }
+  },
+  "required": [
+    "message_id",
+    "ts",
+    "health"
+  ],
+  "title": "StationStatusV1",
+  "type": "object",
+  "x-truelive-protocol": "truelive-station/1"
+}

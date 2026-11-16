@@ -1,0 +1,81 @@
+{
+  "client_build": "1.4.0+0000000",
+  "client_version": "1.4.0",
+  "config_status": {
+    "core_caps": [
+      "ack",
+      "payload_pc_id",
+      "safe_reporting_clients"
+    ],
+    "core_config_mode": "legacy",
+    "core_revision": "",
+    "core_version": "1.1.0+d53952a",
+    "data_dir_acl_warning": false,
+    "drift_key_names": [],
+    "fleet_errors_count": 0,
+    "last_config_error": "",
+    "legacy_available": true,
+    "migration_status": "not_started",
+    "mode_set_by": "default"
+  },
+  "core": {
+    "build_class": "reports_v1",
+    "exe_sha256": "101b2cceb35bc3cd0cc7e7b45bb32ffe0d0d05e6b27bafd1a9db465871d4a43e",
+    "last_exit": "0xC0000005",
+    "pid": 4321,
+    "restarts_24h": 1,
+    "state": "RUNNING",
+    "uptime_sec": 86400
+  },
+  "core_installed_version": "1.1.0+d53952a",
+  "core_running_version": "1.1.0+d53952a",
+  "core_version_source": "stdout",
+  "flags": {
+    "port_conflict": false,
+    "protocol_mismatch": false,
+    "token_outdated": false
+  },
+  "health": "degraded",
+  "message_id": "status-0001",
+  "readiness": [
+    {
+      "code": "AUTOLOGON_OFF"
+    },
+    {
+      "code": "MONITOR_SLEEP",
+      "detail": "Display turns off after 10 min"
+    }
+  ],
+  "reasons": [
+    "degraded",
+    "no_video"
+  ],
+  "telemetry": {
+    "channels": {
+      "heartbeat": {
+        "connected": false,
+        "target": "pulse"
+      },
+      "logs": {
+        "target": "none"
+      }
+    },
+    "mode": "stdout_only",
+    "tap_state": "ok"
+  },
+  "ts": 1794850802.25,
+  "wall": {
+    "deploying": false,
+    "running_config_id": "3f2b8c1e-0d1a-4c55-9e00-000000000001",
+    "screens": 2,
+    "streams_connecting": 0,
+    "streams_failed": [
+      "SITE_FIXTURE_0000",
+      "SITE_FIXTURE_0001",
+      "SITE_FIXTURE_0002"
+    ],
+    "streams_failed_count": 3,
+    "streams_playing": 29,
+    "streams_total": 32
+  }
+}

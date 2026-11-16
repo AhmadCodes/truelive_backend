@@ -1,0 +1,18 @@
+{
+  "core": {
+    "build_class": "legacy",
+    "pid": 4321,
+    "state": "RUNNING"
+  },
+  "health": "ok",
+  "message_id": "status-0004",
+  "telemetry": {
+    "mode": "stdout_only",
+    "tap_state": "lossy"
+  },
+  "ts": 1794850802.25,
+  "wall": {
+    "deploying": false,
+    "running_config_id": ""
+  }
+}

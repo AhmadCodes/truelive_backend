@@ -1,0 +1,101 @@
+{
+  "$id": "urn:truelive:station-protocol:1:CoreLogV1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "description": "Core -> Client, report channel logs: log line.",
+  "properties": {
+    "app_id": {
+      "maxLength": 1024,
+      "title": "App Id",
+      "type": "string"
+    },
+    "event": {
+      "const": "log",
+      "title": "Event"
+    },
+    "group": {
+      "maxLength": 64,
+      "title": "Group",
+      "type": "string"
+    },
+    "log_level": {
+      "maximum": 4,
+      "minimum": 0,
+      "title": "Log Level",
+      "type": "integer"
+    },
+    "message": {
+      "maxLength": 65536,
+      "title": "Message",
+      "type": "string"
+    },
+    "message_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Message Id",
+      "type": "string"
+    },
+    "pc_id": {
+      "maxLength": 1024,
+      "title": "Pc Id",
+      "type": "string"
+    },
+    "pc_name": {
+      "maxLength": 1024,
+      "title": "Pc Name",
+      "type": "string"
+    },
+    "pid": {
+      "anyOf": [
+        {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Core's own pid (D21); absent on 1.1.0 builds",
+      "title": "Pid"
+    },
+    "station_id": {
+      "maxLength": 1024,
+      "title": "Station Id",
+      "type": "string"
+    },
+    "station_name": {
+      "maxLength": 1024,
+      "title": "Station Name",
+      "type": "string"
+    },
+    "timestamp": {
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?Z$",
+      "title": "Timestamp",
+      "type": "string"
+    },
+    "version": {
+      "pattern": "^[0-9A-Za-z.+_-]{1,64}$",
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "event",
+    "timestamp",
+    "message_id",
+    "app_id",
+    "station_id",
+    "station_name",
+    "pc_id",
+    "pc_name",
+    "version",
+    "log_level",
+    "group",
+    "message"
+  ],
+  "title": "CoreLogV1",
+  "type": "object",
+  "x-truelive-protocol": "truelive-station/1"
+}

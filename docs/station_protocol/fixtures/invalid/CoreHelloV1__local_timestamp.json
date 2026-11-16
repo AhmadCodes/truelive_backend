@@ -1,0 +1,16 @@
+{
+  "app_id": "fixture-app",
+  "channel": "logs",
+  "config_id": "",
+  "event": "hello",
+  "host_server_port": "9022",
+  "is_master_app": true,
+  "message_id": "6a1c0f3e-5b7d-4e2a-9c1f-00000000c0de",
+  "pc_id": "00000000-0000-4000-8000-0000000000d1",
+  "pc_name": "Fixture Station 1",
+  "station_id": "00000000-0000-4000-8000-0000000000d1",
+  "station_name": "Fixture Station 1",
+  "timestamp": "20261117_144002",
+  "uptime_sec": 87,
+  "version": "1.1.0+d53952a"
+}

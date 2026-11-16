@@ -1,0 +1,266 @@
+{
+  "$defs": {
+    "SafeString": {
+      "description": "A string that holds no URI with userinfo (credentials).",
+      "not": {
+        "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+      },
+      "type": "string"
+    },
+    "SafeValue": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SafeString"
+        },
+        {
+          "type": [
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/SafeValue"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/SafeValue"
+          },
+          "propertyNames": {
+            "not": {
+              "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+            }
+          },
+          "type": "object"
+        }
+      ],
+      "description": "Any JSON value whose strings and keys hold no URI with userinfo."
+    }
+  },
+  "$id": "urn:truelive:station-protocol:1:DeployResultV1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": {
+    "$ref": "#/$defs/SafeValue"
+  },
+  "description": "Client -> relay, Socket.IO event 'deploy_result'.",
+  "not": {
+    "anyOf": [
+      {
+        "required": [
+          "auth_token"
+        ]
+      },
+      {
+        "required": [
+          "token"
+        ]
+      },
+      {
+        "required": [
+          "password"
+        ]
+      },
+      {
+        "required": [
+          "config"
+        ]
+      },
+      {
+        "required": [
+          "screen_details"
+        ]
+      }
+    ]
+  },
+  "properties": {
+    "config_id": {
+      "description": "The deploy's config_id (64 characters max)",
+      "maxLength": 64,
+      "minLength": 1,
+      "not": {
+        "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+      },
+      "pattern": "^[\\x21-\\x7e]+$",
+      "title": "Config Id",
+      "type": "string"
+    },
+    "core_pid": {
+      "anyOf": [
+        {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Core Pid"
+    },
+    "core_version": {
+      "anyOf": [
+        {
+          "not": {
+            "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+          },
+          "pattern": "^[0-9A-Za-z.+_-]{1,64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Core Version"
+    },
+    "detail": {
+      "anyOf": [
+        {
+          "maxLength": 500,
+          "not": {
+            "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+          },
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Detail"
+    },
+    "message_id": {
+      "description": "Unique per report; the relay deduplicates on it",
+      "maxLength": 64,
+      "minLength": 1,
+      "not": {
+        "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+      },
+      "pattern": "^[\\x21-\\x7e]+$",
+      "title": "Message Id",
+      "type": "string"
+    },
+    "mode": {
+      "anyOf": [
+        {
+          "maxLength": 32,
+          "minLength": 1,
+          "not": {
+            "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+          },
+          "pattern": "^[A-Za-z0-9_.:+-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Delivery mode: live, fallback_file, file_restart, ...",
+      "title": "Mode"
+    },
+    "persisted": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Persisted"
+    },
+    "restored_config_id": {
+      "anyOf": [
+        {
+          "maxLength": 64,
+          "not": {
+            "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+          },
+          "pattern": "^[\\x21-\\x7e]*$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Restored Config Id"
+    },
+    "source": {
+      "anyOf": [
+        {
+          "maxLength": 32,
+          "minLength": 1,
+          "not": {
+            "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+          },
+          "pattern": "^[A-Za-z0-9_.:+-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "What confirmed it: stdout, channel, timeout, ...",
+      "title": "Source"
+    },
+    "stage": {
+      "anyOf": [
+        {
+          "maxLength": 32,
+          "minLength": 1,
+          "not": {
+            "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+          },
+          "pattern": "^[A-Za-z0-9_.:+-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Where the deploy ended or failed",
+      "title": "Stage"
+    },
+    "status": {
+      "enum": [
+        "delivered",
+        "accepted",
+        "applied",
+        "failed",
+        "unconfirmed",
+        "superseded"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "ts": {
+      "maximum": 4102444800.0,
+      "minimum": 0.0,
+      "title": "Ts",
+      "type": "number"
+    }
+  },
+  "propertyNames": {
+    "not": {
+      "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+    }
+  },
+  "required": [
+    "message_id",
+    "config_id",
+    "status",
+    "ts"
+  ],
+  "title": "DeployResultV1",
+  "type": "object",
+  "x-truelive-protocol": "truelive-station/1"
+}

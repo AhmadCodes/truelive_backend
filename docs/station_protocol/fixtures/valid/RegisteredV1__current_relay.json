@@ -1,0 +1,11 @@
+{
+  "features": [
+    "deploy_result.v1",
+    "station_status.v1",
+    "station_config.v1",
+    "pc_token.v1"
+  ],
+  "message": "Successfully registered",
+  "pc_id": "00000000-0000-4000-8000-0000000000d1",
+  "protocol_hash": "e7308b84cdf9820bcbd1a4d1f05a73ace774c7cdceea61a1f932b60b670912b4"
+}

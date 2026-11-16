@@ -1,0 +1,135 @@
+{
+  "$id": "urn:truelive:station-protocol:1:CoreHelloV1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "description": "Core -> Client, report channels logs/heartbeat: hello.",
+  "properties": {
+    "app_id": {
+      "maxLength": 1024,
+      "title": "App Id",
+      "type": "string"
+    },
+    "capabilities": {
+      "anyOf": [
+        {
+          "items": {
+            "maxLength": 32,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:+-]+$",
+            "type": "string"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Capabilities"
+    },
+    "channel": {
+      "enum": [
+        "logs",
+        "heartbeat"
+      ],
+      "title": "Channel",
+      "type": "string"
+    },
+    "config_id": {
+      "maxLength": 64,
+      "title": "Config Id",
+      "type": "string"
+    },
+    "event": {
+      "const": "hello",
+      "title": "Event"
+    },
+    "host_server_port": {
+      "maxLength": 16,
+      "title": "Host Server Port",
+      "type": "string"
+    },
+    "is_master_app": {
+      "title": "Is Master App",
+      "type": "boolean"
+    },
+    "message_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Message Id",
+      "type": "string"
+    },
+    "pc_id": {
+      "maxLength": 1024,
+      "title": "Pc Id",
+      "type": "string"
+    },
+    "pc_name": {
+      "maxLength": 1024,
+      "title": "Pc Name",
+      "type": "string"
+    },
+    "pid": {
+      "anyOf": [
+        {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Core's own pid (D21); absent on 1.1.0 builds",
+      "title": "Pid"
+    },
+    "station_id": {
+      "maxLength": 1024,
+      "title": "Station Id",
+      "type": "string"
+    },
+    "station_name": {
+      "maxLength": 1024,
+      "title": "Station Name",
+      "type": "string"
+    },
+    "timestamp": {
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?Z$",
+      "title": "Timestamp",
+      "type": "string"
+    },
+    "uptime_sec": {
+      "description": "Seconds since the process started",
+      "maximum": 1000000,
+      "minimum": 0,
+      "title": "Uptime Sec",
+      "type": "integer"
+    },
+    "version": {
+      "pattern": "^[0-9A-Za-z.+_-]{1,64}$",
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "event",
+    "timestamp",
+    "message_id",
+    "app_id",
+    "station_id",
+    "station_name",
+    "pc_id",
+    "pc_name",
+    "version",
+    "channel",
+    "uptime_sec",
+    "host_server_port",
+    "is_master_app",
+    "config_id"
+  ],
+  "title": "CoreHelloV1",
+  "type": "object",
+  "x-truelive-protocol": "truelive-station/1"
+}

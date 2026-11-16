@@ -1,0 +1,106 @@
+{
+  "$defs": {
+    "SafeString": {
+      "description": "A string that holds no URI with userinfo (credentials).",
+      "not": {
+        "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+      },
+      "type": "string"
+    },
+    "SafeValue": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SafeString"
+        },
+        {
+          "type": [
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/SafeValue"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/SafeValue"
+          },
+          "propertyNames": {
+            "not": {
+              "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+            }
+          },
+          "type": "object"
+        }
+      ],
+      "description": "Any JSON value whose strings and keys hold no URI with userinfo."
+    }
+  },
+  "$id": "urn:truelive:station-protocol:1:ReportAckV1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": {
+    "$ref": "#/$defs/SafeValue"
+  },
+  "description": "Relay -> Client, ACK of a deploy_result or station_status call.",
+  "properties": {
+    "message_id": {
+      "anyOf": [
+        {
+          "maxLength": 64,
+          "minLength": 1,
+          "not": {
+            "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+          },
+          "pattern": "^[\\x21-\\x7e]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Message Id"
+    },
+    "reason": {
+      "anyOf": [
+        {
+          "maxLength": 200,
+          "not": {
+            "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+          },
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reason"
+    },
+    "status": {
+      "enum": [
+        "ok",
+        "duplicate",
+        "rejected",
+        "disabled"
+      ],
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "propertyNames": {
+    "not": {
+      "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+    }
+  },
+  "required": [
+    "status"
+  ],
+  "title": "ReportAckV1",
+  "type": "object",
+  "x-truelive-protocol": "truelive-station/1"
+}

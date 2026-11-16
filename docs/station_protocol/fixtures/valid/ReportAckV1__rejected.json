@@ -1,0 +1,5 @@
+{
+  "message_id": "status-0002",
+  "reason": "session is not the registered sid for this pc",
+  "status": "rejected"
+}

@@ -1,0 +1,24 @@
+{
+  "app_id": "fixture-app",
+  "capabilities": [
+    "report_fanout",
+    "config_id_on_success",
+    "ack_reason",
+    "pid",
+    "atomic_persist"
+  ],
+  "channel": "heartbeat",
+  "config_id": "3f2b8c1e-0d1a-4c55-9e00-000000000001",
+  "event": "hello",
+  "host_server_port": "9022",
+  "is_master_app": true,
+  "message_id": "6a1c0f3e-5b7d-4e2a-9c1f-00000000c0de",
+  "pc_id": "00000000-0000-4000-8000-0000000000d1",
+  "pc_name": "Fixture Station 1",
+  "pid": 4321,
+  "station_id": "00000000-0000-4000-8000-0000000000d1",
+  "station_name": "Fixture Station 1",
+  "timestamp": "2026-11-17T09:40:02Z",
+  "uptime_sec": 3,
+  "version": "1.2.0+0000000"
+}

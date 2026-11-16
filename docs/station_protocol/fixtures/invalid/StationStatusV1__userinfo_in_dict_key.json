@@ -1,0 +1,8 @@
+{
+  "debug": {
+    "rtsp://fixture-user@192.0.2.10:554/Streaming/channels/101": true
+  },
+  "health": "unknown",
+  "message_id": "status-0003",
+  "ts": 1794850802.25
+}

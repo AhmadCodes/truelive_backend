@@ -1,0 +1,119 @@
+{
+  "$defs": {
+    "SafeString": {
+      "description": "A string that holds no URI with userinfo (credentials).",
+      "not": {
+        "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+      },
+      "type": "string"
+    },
+    "SafeValue": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SafeString"
+        },
+        {
+          "type": [
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/SafeValue"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/SafeValue"
+          },
+          "propertyNames": {
+            "not": {
+              "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+            }
+          },
+          "type": "object"
+        }
+      ],
+      "description": "Any JSON value whose strings and keys hold no URI with userinfo."
+    }
+  },
+  "$id": "urn:truelive:station-protocol:1:RegisteredV1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": {
+    "$ref": "#/$defs/SafeValue"
+  },
+  "description": "Relay -> Client, Socket.IO event 'registered'.",
+  "properties": {
+    "features": {
+      "items": {
+        "maxLength": 64,
+        "minLength": 1,
+        "not": {
+          "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+        },
+        "pattern": "^[A-Za-z0-9_.:+-]+$",
+        "type": "string"
+      },
+      "maxItems": 32,
+      "title": "Features",
+      "type": "array"
+    },
+    "message": {
+      "anyOf": [
+        {
+          "maxLength": 256,
+          "not": {
+            "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+          },
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Message"
+    },
+    "pc_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "not": {
+        "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+      },
+      "pattern": "^[\\x21-\\x7e]+$",
+      "title": "Pc Id",
+      "type": "string"
+    },
+    "protocol_hash": {
+      "anyOf": [
+        {
+          "not": {
+            "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+          },
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "PROTOCOL_HASH of the relay's contract; a mismatch is flagged, not fatal",
+      "title": "Protocol Hash"
+    }
+  },
+  "propertyNames": {
+    "not": {
+      "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+    }
+  },
+  "required": [
+    "pc_id"
+  ],
+  "title": "RegisteredV1",
+  "type": "object",
+  "x-truelive-protocol": "truelive-station/1"
+}

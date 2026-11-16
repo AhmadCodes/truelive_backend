@@ -1,0 +1,13 @@
+{
+  "auth_token": "FIXTURE-NOT-A-TOKEN",
+  "config_id": "3f2b8c1e-0d1a-4c55-9e00-000000000001",
+  "core_pid": 4321,
+  "core_version": "1.1.0+d53952a",
+  "message_id": "deploy-0001",
+  "mode": "live",
+  "persisted": true,
+  "source": "stdout",
+  "stage": "completed",
+  "status": "applied",
+  "ts": 1794850802.25
+}

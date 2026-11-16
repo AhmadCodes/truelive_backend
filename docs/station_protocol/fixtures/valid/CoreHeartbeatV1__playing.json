@@ -1,0 +1,70 @@
+{
+  "app_id": "fixture-app",
+  "config_id": "3f2b8c1e-0d1a-4c55-9e00-000000000001",
+  "deploying": false,
+  "event": "heartbeat",
+  "is_master_app": true,
+  "message_id": "6a1c0f3e-5b7d-4e2a-9c1f-00000000c0de",
+  "pc_id": "00000000-0000-4000-8000-0000000000d1",
+  "pc_name": "Fixture Station 1",
+  "screen_details": [
+    {
+      "current_view": 0,
+      "display_idx": 0,
+      "id": "pc00000000-0000-4000-8000-0000000000d1_layoutfixture_screen0",
+      "idx": 0,
+      "title": "Monitor 1",
+      "views": [
+        {
+          "n_cols": 2,
+          "n_rows": 1,
+          "sources": [
+            {
+              "camera_id": "253271",
+              "camera_name": "Fixture Camera 253271",
+              "pos_x": 0,
+              "pos_y": 0,
+              "reconnect_attempts": 0,
+              "site_id": "SITE_FIXTURE",
+              "site_name": "Fixture Site",
+              "source_id": "SITE_FIXTURE_12146_253271",
+              "status": "playing",
+              "status_code": 2,
+              "uri": "rtsp://203.0.113.10:554/Streaming/channels/402"
+            },
+            {
+              "camera_id": "253272",
+              "camera_name": "Fixture Camera 253272",
+              "pos_x": 1,
+              "pos_y": 0,
+              "reconnect_attempts": 2,
+              "site_id": "SITE_FIXTURE",
+              "site_name": "Fixture Site",
+              "source_id": "SITE_FIXTURE_12146_253272",
+              "status": "failed",
+              "status_code": 4,
+              "uri": "rtsp://198.51.100.20:554/cam/realmonitor?channel=1&subtype=1"
+            }
+          ],
+          "view_id": "view-fixture-0",
+          "view_n": 0,
+          "view_name": "1"
+        }
+      ]
+    }
+  ],
+  "screens": 1,
+  "station_id": "00000000-0000-4000-8000-0000000000d1",
+  "station_name": "Fixture Station 1",
+  "status": 1,
+  "streams_connecting": 0,
+  "streams_failed": [
+    "SITE_FIXTURE_12146_253272"
+  ],
+  "streams_playing": 1,
+  "streams_total": 2,
+  "timestamp": "2026-11-17T09:40:02Z",
+  "type": "heartbeat",
+  "uptime_sec": 114,
+  "version": "1.1.0+d53952a"
+}

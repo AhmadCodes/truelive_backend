@@ -1,0 +1,370 @@
+{
+  "$defs": {
+    "CoreScreenDetailV1": {
+      "additionalProperties": true,
+      "properties": {
+        "current_view": {
+          "title": "Current View",
+          "type": "integer"
+        },
+        "display_idx": {
+          "title": "Display Idx",
+          "type": "integer"
+        },
+        "id": {
+          "maxLength": 512,
+          "title": "Id",
+          "type": "string"
+        },
+        "idx": {
+          "title": "Idx",
+          "type": "integer"
+        },
+        "title": {
+          "maxLength": 1024,
+          "title": "Title",
+          "type": "string"
+        },
+        "views": {
+          "items": {
+            "$ref": "#/$defs/CoreViewDetailV1"
+          },
+          "title": "Views",
+          "type": "array"
+        }
+      },
+      "required": [
+        "idx",
+        "id",
+        "title",
+        "display_idx",
+        "current_view",
+        "views"
+      ],
+      "title": "CoreScreenDetailV1",
+      "type": "object"
+    },
+    "CoreSourceDetailV1": {
+      "additionalProperties": true,
+      "properties": {
+        "camera_id": {
+          "maxLength": 256,
+          "title": "Camera Id",
+          "type": "string"
+        },
+        "camera_name": {
+          "maxLength": 1024,
+          "title": "Camera Name",
+          "type": "string"
+        },
+        "pos_x": {
+          "title": "Pos X",
+          "type": "integer"
+        },
+        "pos_y": {
+          "title": "Pos Y",
+          "type": "integer"
+        },
+        "reconnect_attempts": {
+          "title": "Reconnect Attempts",
+          "type": "integer"
+        },
+        "site_id": {
+          "maxLength": 256,
+          "title": "Site Id",
+          "type": "string"
+        },
+        "site_name": {
+          "maxLength": 1024,
+          "title": "Site Name",
+          "type": "string"
+        },
+        "source_id": {
+          "maxLength": 256,
+          "title": "Source Id",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "playing",
+            "connecting",
+            "failed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "status_code": {
+          "title": "Status Code",
+          "type": "integer"
+        },
+        "uri": {
+          "maxLength": 2048,
+          "not": {
+            "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+          },
+          "title": "Uri",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "site_id",
+        "site_name",
+        "camera_id",
+        "camera_name",
+        "uri",
+        "status",
+        "status_code",
+        "reconnect_attempts",
+        "pos_x",
+        "pos_y"
+      ],
+      "title": "CoreSourceDetailV1",
+      "type": "object"
+    },
+    "CoreViewDetailV1": {
+      "additionalProperties": true,
+      "properties": {
+        "n_cols": {
+          "title": "N Cols",
+          "type": "integer"
+        },
+        "n_rows": {
+          "title": "N Rows",
+          "type": "integer"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/CoreSourceDetailV1"
+          },
+          "title": "Sources",
+          "type": "array"
+        },
+        "view_id": {
+          "maxLength": 256,
+          "title": "View Id",
+          "type": "string"
+        },
+        "view_n": {
+          "title": "View N",
+          "type": "integer"
+        },
+        "view_name": {
+          "maxLength": 1024,
+          "title": "View Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "view_n",
+        "view_id",
+        "view_name",
+        "n_rows",
+        "n_cols",
+        "sources"
+      ],
+      "title": "CoreViewDetailV1",
+      "type": "object"
+    }
+  },
+  "$id": "urn:truelive:station-protocol:1:CoreHeartbeatV1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "description": "Core -> Client, report channel heartbeat: heartbeat.",
+  "properties": {
+    "app_id": {
+      "maxLength": 1024,
+      "title": "App Id",
+      "type": "string"
+    },
+    "config_id": {
+      "maxLength": 64,
+      "title": "Config Id",
+      "type": "string"
+    },
+    "deploying": {
+      "title": "Deploying",
+      "type": "boolean"
+    },
+    "event": {
+      "const": "heartbeat",
+      "title": "Event"
+    },
+    "is_master_app": {
+      "title": "Is Master App",
+      "type": "boolean"
+    },
+    "message_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Message Id",
+      "type": "string"
+    },
+    "pc_id": {
+      "maxLength": 1024,
+      "title": "Pc Id",
+      "type": "string"
+    },
+    "pc_name": {
+      "maxLength": 1024,
+      "title": "Pc Name",
+      "type": "string"
+    },
+    "pid": {
+      "anyOf": [
+        {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Core's own pid (D21); absent on 1.1.0 builds",
+      "title": "Pid"
+    },
+    "screen_details": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/CoreScreenDetailV1"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Screen Details"
+    },
+    "screens": {
+      "anyOf": [
+        {
+          "maximum": 1000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Screens"
+    },
+    "station_id": {
+      "maxLength": 1024,
+      "title": "Station Id",
+      "type": "string"
+    },
+    "station_name": {
+      "maxLength": 1024,
+      "title": "Station Name",
+      "type": "string"
+    },
+    "status": {
+      "title": "Status",
+      "type": "integer"
+    },
+    "streams_connecting": {
+      "anyOf": [
+        {
+          "maximum": 1000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Streams Connecting"
+    },
+    "streams_failed": {
+      "anyOf": [
+        {
+          "items": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Streams Failed"
+    },
+    "streams_playing": {
+      "anyOf": [
+        {
+          "maximum": 1000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Streams Playing"
+    },
+    "streams_total": {
+      "anyOf": [
+        {
+          "maximum": 1000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Streams Total"
+    },
+    "timestamp": {
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?Z$",
+      "title": "Timestamp",
+      "type": "string"
+    },
+    "type": {
+      "const": "heartbeat",
+      "title": "Type"
+    },
+    "uptime_sec": {
+      "maximum": 1000000,
+      "minimum": 0,
+      "title": "Uptime Sec",
+      "type": "integer"
+    },
+    "version": {
+      "pattern": "^[0-9A-Za-z.+_-]{1,64}$",
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "event",
+    "timestamp",
+    "message_id",
+    "app_id",
+    "station_id",
+    "station_name",
+    "pc_id",
+    "pc_name",
+    "version",
+    "type",
+    "status",
+    "uptime_sec",
+    "config_id",
+    "is_master_app",
+    "deploying"
+  ],
+  "title": "CoreHeartbeatV1",
+  "type": "object",
+  "x-truelive-protocol": "truelive-station/1"
+}

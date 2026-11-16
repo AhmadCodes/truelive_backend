@@ -1,0 +1,316 @@
+{
+  "$defs": {
+    "SafeString": {
+      "description": "A string that holds no URI with userinfo (credentials).",
+      "not": {
+        "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+      },
+      "type": "string"
+    },
+    "SafeValue": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SafeString"
+        },
+        {
+          "type": [
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/SafeValue"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/SafeValue"
+          },
+          "propertyNames": {
+            "not": {
+              "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+            }
+          },
+          "type": "object"
+        }
+      ],
+      "description": "Any JSON value whose strings and keys hold no URI with userinfo."
+    }
+  },
+  "$id": "urn:truelive:station-protocol:1:RegisterV1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": {
+    "$ref": "#/$defs/SafeValue"
+  },
+  "description": "Client -> relay, Socket.IO event 'register'.",
+  "properties": {
+    "auth_token": {
+      "description": "PC JWT (pc_auth). Never logged or stored by receivers",
+      "maxLength": 4096,
+      "minLength": 1,
+      "not": {
+        "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+      },
+      "pattern": "^[A-Za-z0-9_.=+/-]+$",
+      "title": "Auth Token",
+      "type": "string"
+    },
+    "capabilities": {
+      "items": {
+        "maxLength": 32,
+        "minLength": 1,
+        "not": {
+          "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+        },
+        "pattern": "^[A-Za-z0-9_.:+-]+$",
+        "type": "string"
+      },
+      "maxItems": 16,
+      "title": "Capabilities",
+      "type": "array"
+    },
+    "client_build": {
+      "anyOf": [
+        {
+          "not": {
+            "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+          },
+          "pattern": "^[0-9A-Za-z.+_-]{1,64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Client Build"
+    },
+    "client_version": {
+      "anyOf": [
+        {
+          "not": {
+            "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+          },
+          "pattern": "^[0-9A-Za-z.+_-]{1,64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Client Version"
+    },
+    "core_build_class": {
+      "anyOf": [
+        {
+          "enum": [
+            "legacy",
+            "reports_v1",
+            "reports_v2",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Core Build Class"
+    },
+    "core_exe_sha256": {
+      "anyOf": [
+        {
+          "not": {
+            "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+          },
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Core Exe Sha256"
+    },
+    "core_exe_size": {
+      "anyOf": [
+        {
+          "maximum": 1099511627776,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Core Exe Size"
+    },
+    "core_installed_version": {
+      "anyOf": [
+        {
+          "not": {
+            "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+          },
+          "pattern": "^[0-9A-Za-z.+_-]{1,64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Core Installed Version"
+    },
+    "core_running_version": {
+      "anyOf": [
+        {
+          "not": {
+            "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+          },
+          "pattern": "^[0-9A-Za-z.+_-]{1,64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Core Running Version"
+    },
+    "core_version": {
+      "anyOf": [
+        {
+          "not": {
+            "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+          },
+          "pattern": "^[0-9A-Za-z.+_-]{1,64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Core Version"
+    },
+    "core_version_source": {
+      "anyOf": [
+        {
+          "maxLength": 32,
+          "minLength": 1,
+          "not": {
+            "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+          },
+          "pattern": "^[A-Za-z0-9_.:+-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Where core_version came from: hello, stdout, manifest, versioninfo, markers, unknown",
+      "title": "Core Version Source"
+    },
+    "delivery_policy": {
+      "anyOf": [
+        {
+          "enum": [
+            "live_with_fallback",
+            "file_restart"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Delivery Policy"
+    },
+    "name": {
+      "anyOf": [
+        {
+          "maxLength": 255,
+          "not": {
+            "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+          },
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Station display name (NEW-55)",
+      "title": "Name"
+    },
+    "pc_id": {
+      "description": "PC id the Client believes it is (the token decides)",
+      "maxLength": 64,
+      "minLength": 1,
+      "not": {
+        "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+      },
+      "pattern": "^[\\x21-\\x7e]+$",
+      "title": "Pc Id",
+      "type": "string"
+    },
+    "running_config_id": {
+      "anyOf": [
+        {
+          "maxLength": 64,
+          "not": {
+            "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+          },
+          "pattern": "^[\\x21-\\x7e]*$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "config_id the wall runs; empty for a legacy layout",
+      "title": "Running Config Id"
+    },
+    "telemetry_mode": {
+      "anyOf": [
+        {
+          "maxLength": 32,
+          "minLength": 1,
+          "not": {
+            "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+          },
+          "pattern": "^[A-Za-z0-9_.:+-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "How the Client hears Core: stdout_only, listener, fanout, none",
+      "title": "Telemetry Mode"
+    }
+  },
+  "propertyNames": {
+    "not": {
+      "pattern": "[A-Za-z][A-Za-z0-9+.-]*://[^\\s]*@"
+    }
+  },
+  "required": [
+    "pc_id",
+    "auth_token"
+  ],
+  "title": "RegisterV1",
+  "type": "object",
+  "x-truelive-protocol": "truelive-station/1"
+}

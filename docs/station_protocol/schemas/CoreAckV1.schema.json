@@ -1,0 +1,110 @@
+{
+  "$id": "urn:truelive:station-protocol:1:CoreAckV1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "description": "Core -> Client, report channel ack: config-deploy.",
+  "properties": {
+    "app_id": {
+      "maxLength": 1024,
+      "title": "App Id",
+      "type": "string"
+    },
+    "config_id": {
+      "maxLength": 64,
+      "title": "Config Id",
+      "type": "string"
+    },
+    "event": {
+      "const": "config-deploy",
+      "title": "Event"
+    },
+    "message_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Message Id",
+      "type": "string"
+    },
+    "pc_id": {
+      "maxLength": 1024,
+      "title": "Pc Id",
+      "type": "string"
+    },
+    "pc_name": {
+      "maxLength": 1024,
+      "title": "Pc Name",
+      "type": "string"
+    },
+    "pid": {
+      "anyOf": [
+        {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Core's own pid (D21); absent on 1.1.0 builds",
+      "title": "Pid"
+    },
+    "reason": {
+      "anyOf": [
+        {
+          "maxLength": 200,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reason"
+    },
+    "station_id": {
+      "maxLength": 1024,
+      "title": "Station Id",
+      "type": "string"
+    },
+    "station_name": {
+      "maxLength": 1024,
+      "title": "Station Name",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "OK",
+        "Failed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "timestamp": {
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?Z$",
+      "title": "Timestamp",
+      "type": "string"
+    },
+    "version": {
+      "pattern": "^[0-9A-Za-z.+_-]{1,64}$",
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "event",
+    "timestamp",
+    "message_id",
+    "app_id",
+    "station_id",
+    "station_name",
+    "pc_id",
+    "pc_name",
+    "version",
+    "config_id",
+    "status"
+  ],
+  "title": "CoreAckV1",
+  "type": "object",
+  "x-truelive-protocol": "truelive-station/1"
+}
