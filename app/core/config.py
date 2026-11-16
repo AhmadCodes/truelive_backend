@@ -60,6 +60,10 @@ class Settings(BaseSettings):
     # Engine.IO / Socket.IO packet logging in the relay (D12). Off by default:
     # packets carry tokens and layouts (NEW-56).
     RELAY_DEBUG_LOGGING: bool = False
+    # OD-23 (b): refuse a PC token that differs from pcs.auth_token. Off by
+    # default (OD-23 (a)): the relay registers the PC and flags token_outdated.
+    # Turn it on only once the flag is clean fleet-wide (re-token through D30).
+    RELAY_REQUIRE_CURRENT_TOKEN: bool = False
 
     # CORS (stored as string, parsed to list via property)
     CORS_ORIGINS_STR: str = "http://localhost:3000,http://localhost:8000,http://localhost:3001"

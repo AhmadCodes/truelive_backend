@@ -179,6 +179,7 @@ def collect(service: str, cfg: Any = None, check_broker_reachable: bool = False)
         "deploy_catchup_enabled": bool(cfg.DEPLOY_CATCHUP_ENABLED),
         "deploy_ack_timeout_sec": int(cfg.DEPLOY_ACK_TIMEOUT_SEC),
         "relay_debug_logging": bool(cfg.RELAY_DEBUG_LOGGING),
+        "relay_require_current_token": bool(getattr(cfg, "RELAY_REQUIRE_CURRENT_TOKEN", False)),
     }
     report.relay_sender_secret = fingerprint(cfg.RELAY_SENDER_SECRET)
     if not cfg.RELAY_SENDER_SECRET:

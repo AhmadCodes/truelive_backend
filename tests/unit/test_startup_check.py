@@ -32,6 +32,7 @@ def _cfg(**overrides):
         DEPLOY_CATCHUP_ENABLED=False,
         DEPLOY_ACK_TIMEOUT_SEC=300,
         RELAY_DEBUG_LOGGING=False,
+        RELAY_REQUIRE_CURRENT_TOKEN=False,
         RELAY_SENDER_SECRET="s" * 43,
         SETTINGS_ENCRYPTION_KEY=None,
         JWT_SECRET="j" * 32,
@@ -182,6 +183,7 @@ def test_report_carries_flags_and_fingerprints():
         DEPLOY_CATCHUP_ENABLED=True,
         DEPLOY_ACK_TIMEOUT_SEC=120,
         RELAY_DEBUG_LOGGING=True,
+        RELAY_REQUIRE_CURRENT_TOKEN=True,
     )
     report = sc.collect("api", cfg=cfg)
     assert report.flags == {
@@ -190,6 +192,7 @@ def test_report_carries_flags_and_fingerprints():
         "deploy_catchup_enabled": True,
         "deploy_ack_timeout_sec": 120,
         "relay_debug_logging": True,
+        "relay_require_current_token": True,
     }
     assert report.relay_sender_secret == sc.fingerprint(cfg.RELAY_SENDER_SECRET)
     assert report.settings_encryption_key == "ok"
@@ -204,6 +207,7 @@ def test_report_carries_flags_and_fingerprints():
         "deploy_catchup_enabled=true",
         "deploy_ack_timeout_sec=120",
         "relay_debug_logging=true",
+        "relay_require_current_token=true",
         f"relay_sender_secret={sc.fingerprint(cfg.RELAY_SENDER_SECRET)}",
         f"settings_encryption_key=ok {sc.fingerprint(key)}",
         "jwt_secret_is_client_constant=false",

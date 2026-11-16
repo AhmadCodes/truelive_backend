@@ -53,6 +53,17 @@ import logging
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# Roles that may read a PC's relay token (the AdminUser roles, app/api/deps.py).
+TOKEN_VISIBLE_ROLES = ("admin", "super_admin")
+
+
+def _hide_token_unless_admin(resp, user) -> None:
+    """NEW-40 (D12): a PC token lets its holder register as that PC on the
+    relay, so only admins see it. Everyone else gets ``auth_token = None``;
+    ``token_expiry`` stays visible."""
+    if getattr(user, "role", None) not in TOKEN_VISIBLE_ROLES:
+        resp.auth_token = None
+
 
 @router.post("", response_model=PCResponse, status_code=status.HTTP_201_CREATED)
 async def create_pc(
@@ -188,6 +199,7 @@ async def list_pcs(
             )
         pc_data = PCWithScreenCount.model_validate(pc)
         pc_data.screen_count = screen_count
+        _hide_token_unless_admin(pc_data, current_user)
         result.append(pc_data)
 
     attach_actor_stamps_list(db, result, pcs)
@@ -330,6 +342,7 @@ async def get_pc(pc_id: str, current_user: CurrentUser, db: DBSession):
         )
 
     resp = PCDetailResponse.model_validate(pc)
+    _hide_token_unless_admin(resp, current_user)
     attach_actor_stamps(db, resp, pc)
     return resp
 
@@ -453,6 +466,7 @@ async def get_pc_screens(pc_id: str, current_user: CurrentUser, db: DBSession):
     result = PCWithScreens.model_validate(pc)
     result.screen_count = len(screen_summaries)
     result.screens = screen_summaries
+    _hide_token_unless_admin(result, current_user)
     attach_actor_stamps(db, result, pc)
 
     return result
@@ -700,6 +714,7 @@ def _deploy_config_to_pcs(pcs: List[PC], db) -> dict:
     from app.services.config_generator import generate_config
     import socketio as sio_client
     from app.core.config import settings
+    from app.services.relay_auth import sender_auth
     import time
 
     results: dict = {}
@@ -740,7 +755,9 @@ def _deploy_config_to_pcs(pcs: List[PC], db) -> dict:
         connected = False
         try:
             logger.info(f"Connecting to display client service at {websocket_url}")
-            sio.connect(websocket_url)
+            # D12: a sender session authenticates with RELAY_SENDER_SECRET in
+            # the CONNECT auth payload (never in the URL).
+            sio.connect(websocket_url, auth=sender_auth(settings.RELAY_SENDER_SECRET))
             connected = True
         except Exception as e:
             logger.error(f"Could not reach display client service: {e}")

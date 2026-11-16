@@ -71,9 +71,34 @@ Celery therefore see the same values.
 | SECRET_KEY, JWT_SECRET | `.env` | Celery and the relay used `${VAR:-<default>}` before D28: the `.env` value, or a committed fallback when `.env` lacked it. The fallback is gone, so a missing value now stops the service at start instead of running with a different secret than the API |
 | SETTINGS_ENCRYPTION_KEY | `.env` | **Required.** Fernet key shared by every process (NEW-47). Missing: ERROR at start, and writes to encrypted `core.*` settings get 503 |
 | RELAY_SENDER_SECRET | `.env` | Portal -> relay sender auth (D12). Empty: legacy-open relay, WARNING at start |
-| DEPLOY_INJECT_CONFIG_ID (true), RELAY_STATION_REPORTS (on), DEPLOY_CATCHUP_ENABLED (false), DEPLOY_ACK_TIMEOUT_SEC (300), RELAY_DEBUG_LOGGING (false) | `x-backend-env` default, overridable from `.env` or the shell | Kill switches and timers of the confirmed-deploy path (D14, D15, D17, D12) |
+| DEPLOY_INJECT_CONFIG_ID (true), RELAY_STATION_REPORTS (on), DEPLOY_CATCHUP_ENABLED (false), DEPLOY_ACK_TIMEOUT_SEC (300), RELAY_DEBUG_LOGGING (false), RELAY_REQUIRE_CURRENT_TOKEN (false) | `x-backend-env` default, overridable from `.env` or the shell | Kill switches and timers of the confirmed-deploy path (D14, D15, D17, D12) |
 
 Backend and Celery also read `./secrets/alerting.env`; the relay reads only `.env`.
+
+**Relay trust (D12).** The API opens its relay session as a *sender*: the Socket.IO
+CONNECT auth payload carries `{"role": "sender", "secret": RELAY_SENDER_SECRET}`
+(never the URL). With the secret set, the relay refuses a sender with a wrong or
+missing secret, accepts `message` (type `config` only) from senders only, and sends
+the presence list (`clients_update`, `clients_list`) to senders only; a rejected
+message gets an `error` event and nobody is disconnected. With the secret unset the
+relay is *legacy-open*: any session that has not registered as a PC may push, as
+before D12 (a WARNING at start and on the first such message). Set the same secret
+for the API and the relay; a mismatch makes every deploy fail with "Could not reach
+the display client".
+
+`register` accepts only a valid `pc_auth` token for a PC that exists in `pcs`; the
+token's pc_id wins. A token that differs from the stored `pcs.auth_token` registers
+with the flag `token_outdated` (OD-23 (a), logged as a WARNING without the token).
+`RELAY_REQUIRE_CURRENT_TOKEN=true` refuses such tokens (OD-23 (b)); switch it on only
+when no station logs `token_outdated` any more. A second registration of the same
+pc_id takes over and is flagged `duplicate_registration`. If the database cannot be
+read during `register`, the PC is registered fail-open with `db_unverified`.
+`registered` carries `features` (only for handlers the relay has) and
+`protocol_hash`. Packet logging is off unless `RELAY_DEBUG_LOGGING=true` (packets
+carry tokens and layouts). The relay start line `Relay trust: sender_auth=...
+require_current_token=... packet_logging=... features=...` shows the active mode.
+The HTTP endpoint `/api/connected-pcs` is unchanged and still unauthenticated
+(open question 21); the compose file publishes the relay port on all interfaces.
 
 **Startup self-check.** Each of the four services logs one line at start:
 
