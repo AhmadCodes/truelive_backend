@@ -43,6 +43,24 @@ class Settings(BaseSettings):
     JWT_SECRET: str = Field(..., min_length=16)
     JWT_PC_TOKEN_EXPIRE_HOURS: int = 8760  # 1 year
 
+    # Shared relay / deploy environment (plan 06 D28, X-18). docker-compose.yml
+    # gives the API, the relay and both Celery services one env block, so all
+    # four see the same values; app/core/startup_check.py logs them at start.
+    # Fernet key for encrypted system_settings. Must be identical in every
+    # process (NEW-47); without it, encrypted core.* settings refuse writes.
+    SETTINGS_ENCRYPTION_KEY: Optional[str] = None
+    # Shared secret of portal -> relay sender sessions (D12). Empty means the
+    # relay runs legacy-open, with a warning.
+    RELAY_SENDER_SECRET: str = ""
+    # Kill switches and timers of the confirmed-deploy path (D14, D15, D17).
+    DEPLOY_INJECT_CONFIG_ID: bool = True
+    RELAY_STATION_REPORTS: bool = True  # "off" makes the report handlers return disabled
+    DEPLOY_CATCHUP_ENABLED: bool = False
+    DEPLOY_ACK_TIMEOUT_SEC: int = Field(300, ge=30, le=86400)
+    # Engine.IO / Socket.IO packet logging in the relay (D12). Off by default:
+    # packets carry tokens and layouts (NEW-56).
+    RELAY_DEBUG_LOGGING: bool = False
+
     # CORS (stored as string, parsed to list via property)
     CORS_ORIGINS_STR: str = "http://localhost:3000,http://localhost:8000,http://localhost:3001"
 

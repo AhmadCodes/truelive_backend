@@ -51,10 +51,13 @@ class Screenshot(BaseModel):
     )
 
     # Relationships
-    # Note: Assumes 'Camera' model exists with 'id' as primary key
+    # One-way: Camera has no 'screenshot' property (its one-to-one is
+    # Camera.snapshot). A back_populates="screenshot" here made every ORM
+    # mapper fail to configure once this module was imported (plan 06 D28
+    # hit it in the test suite: "Mapper[Camera(cameras)] has no property
+    # 'screenshot'").
     camera = relationship(
         "Camera",
-        back_populates="screenshot",
         lazy="select"
     )
 

@@ -21,10 +21,25 @@ from app.schemas.system_setting import (
     SMTPTestRequest,
     SMTPTestResponse,
 )
-from app.services.system_settings_service import system_settings_service
+from app.services.system_settings_service import (
+    EncryptionKeyUnavailable,
+    system_settings_service,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _key_unavailable(exc: EncryptionKeyUnavailable) -> HTTPException:
+    """503 for a write that needs SETTINGS_ENCRYPTION_KEY (C18, NEW-47)."""
+    logger.error(f"Refused write of encrypted shared settings {exc.keys}: SETTINGS_ENCRYPTION_KEY is missing")
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=(
+            "SETTINGS_ENCRYPTION_KEY is not configured on the server, so encrypted settings "
+            f"{', '.join(exc.keys)} cannot be stored. Nothing was changed."
+        ),
+    )
 
 
 @router.get("/", response_model=Dict[str, List[SystemSettingResponse]])
@@ -118,6 +133,8 @@ async def update_settings_bulk(
 
     Raises:
         400: If validation fails
+        503: If the batch holds an encrypted core.* key and SETTINGS_ENCRYPTION_KEY is missing
+             (nothing is written)
     """
     try:
         updated_settings = system_settings_service.update_settings_bulk(
@@ -138,6 +155,8 @@ async def update_settings_bulk(
             for setting in updated_settings
         ]
 
+    except EncryptionKeyUnavailable as e:
+        raise _key_unavailable(e)
     except Exception as e:
         logger.error(f"Error updating settings in bulk: {e}")
         raise HTTPException(
@@ -205,6 +224,7 @@ async def update_setting(
     Raises:
         404: If setting not found
         400: If validation fails
+        503: If the setting is an encrypted core.* key and SETTINGS_ENCRYPTION_KEY is missing
     """
     try:
         setting = system_settings_service.update_setting(
@@ -219,6 +239,8 @@ async def update_setting(
 
         return SystemSettingResponse.model_validate(setting)
 
+    except EncryptionKeyUnavailable as e:
+        raise _key_unavailable(e)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

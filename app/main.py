@@ -333,6 +333,11 @@ async def startup_event():
     logger.info(f"Environment: {settings.ENVIRONMENT}")
     logger.info(f"Debug mode: {settings.DEBUG}")
 
+    # Shared-env self-check (D28): flags, secret fingerprints, key status, G-1.
+    from app.core.startup_check import run_startup_check
+
+    run_startup_check("api")
+
     # Check database connection
     if check_db_health():
         logger.info("Database connection established")

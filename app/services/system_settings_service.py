@@ -17,24 +17,77 @@ from app.core.config import settings as app_settings
 logger = logging.getLogger(__name__)
 
 
+# Settings whose encrypted values other processes read (the relay reads
+# core.* for get_station_config, C10). Writing them with a per-process
+# generated key would store values no other process can decrypt (NEW-47), so
+# such writes are refused while SETTINGS_ENCRYPTION_KEY is missing (C18).
+SHARED_ENCRYPTED_PREFIXES = ("core.",)
+
+KEY_STATUS_OK = "ok"
+KEY_STATUS_NO_KEY = "no_key"  # reported to C10's loader in its errors list
+
+
+class EncryptionKeyUnavailable(RuntimeError):
+    """An encrypted shared setting was written while SETTINGS_ENCRYPTION_KEY is
+    missing. The API answers 503."""
+
+    def __init__(self, keys: List[str]):
+        self.keys = sorted(keys)
+        super().__init__(
+            "SETTINGS_ENCRYPTION_KEY is not configured; encrypted settings "
+            + ", ".join(self.keys)
+            + " cannot be written (they must be readable by every backend process)"
+        )
+
+
+def requires_shared_key(setting: SystemSetting) -> bool:
+    """True for an encrypted setting that other processes must decrypt."""
+    return bool(setting.is_encrypted) and setting.key.startswith(SHARED_ENCRYPTED_PREFIXES)
+
+
 class SystemSettingsService:
     """Service for managing system settings with encryption and caching."""
 
     def __init__(self):
         """Initialize settings service with encryption key."""
-        # Get encryption key from environment or generate one
-        # In production, this should be stored securely in ENV
-        encryption_key = os.getenv('SETTINGS_ENCRYPTION_KEY')
-        if not encryption_key:
-            # Generate a key for development (NOT for production!)
+        # Resolved like every other backend process does (app/core/startup_check):
+        # the process environment first, then Settings (a local .env file).
+        from app.core.startup_check import resolve_settings_encryption_key
+
+        encryption_key = resolve_settings_encryption_key(app_settings)
+        if encryption_key:
+            self.key_status = KEY_STATUS_OK
+        else:
+            # Keep non-shared features working with a per-process key, but
+            # refuse writes of shared encrypted settings (requires_shared_key).
+            self.key_status = KEY_STATUS_NO_KEY
             encryption_key = Fernet.generate_key().decode()
-            logger.warning(
-                "No SETTINGS_ENCRYPTION_KEY found in environment. "
-                "Using generated key (NOT suitable for production!)"
+            logger.error(
+                "No SETTINGS_ENCRYPTION_KEY found in environment. Using a generated per-process key: "
+                "values encrypted now cannot be read by other processes or after a restart, and "
+                "encrypted core.* settings refuse writes (set it in .env, see .env.example)"
             )
 
         self.fernet = Fernet(encryption_key.encode() if isinstance(encryption_key, str) else encryption_key)
         self._cache: Dict[str, Any] = {}
+
+    @property
+    def has_shared_key(self) -> bool:
+        """True when SETTINGS_ENCRYPTION_KEY is configured (shared by all processes)."""
+        return self.key_status == KEY_STATUS_OK
+
+    def ensure_writable(self, db: Session, keys: List[str]) -> None:
+        """Raise EncryptionKeyUnavailable when any of ``keys`` is an encrypted
+        shared setting and no shared key is configured. Writes nothing."""
+        if self.has_shared_key or not keys:
+            return
+        blocked = [
+            setting.key
+            for setting in db.query(SystemSetting).filter(SystemSetting.key.in_(list(keys))).all()
+            if requires_shared_key(setting)
+        ]
+        if blocked:
+            raise EncryptionKeyUnavailable(blocked)
 
     def _encrypt_value(self, value: str) -> str:
         """
@@ -225,6 +278,9 @@ class SystemSettingsService:
         if not setting:
             raise ValueError(f"Setting with key '{key}' not found")
 
+        if requires_shared_key(setting) and not self.has_shared_key:
+            raise EncryptionKeyUnavailable([key])
+
         # Encrypt value if needed
         if setting.is_encrypted:
             value = self._encrypt_value(value)
@@ -258,7 +314,12 @@ class SystemSettingsService:
 
         Returns:
             List of updated SystemSetting objects
+
+        Raises:
+            EncryptionKeyUnavailable: before any write, when the batch holds an
+                encrypted shared setting and SETTINGS_ENCRYPTION_KEY is missing
         """
+        self.ensure_writable(db, list(settings_dict))
         updated_settings = []
 
         for key, value in settings_dict.items():

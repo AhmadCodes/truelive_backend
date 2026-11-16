@@ -5,6 +5,7 @@ This module sets up Celery for background task processing.
 """
 from celery import Celery
 from celery.schedules import crontab
+from celery.signals import beat_init, celeryd_after_setup
 import logging
 
 from app.core.config import settings
@@ -70,6 +71,26 @@ celery_app.conf.beat_schedule = {
 }
 
 
+@celeryd_after_setup.connect
+def _worker_startup_check(**_kwargs):
+    """Shared-env self-check of the worker (D28). Logged, never fatal.
+
+    celeryd_after_setup runs once logging is configured and before the worker
+    connects to the broker (worker_init runs too early: its INFO line is lost).
+    """
+    from app.core.startup_check import run_startup_check
+
+    run_startup_check("celery_worker")
+
+
+@beat_init.connect
+def _beat_startup_check(**_kwargs):
+    """Shared-env self-check of beat (D28). Logged, never fatal."""
+    from app.core.startup_check import run_startup_check
+
+    run_startup_check("celery_beat")
+
+
 @celery_app.task(bind=True)
 def debug_task(self):
     """
@@ -94,3 +115,9 @@ try:
     )
 except ImportError as e:
     logger.warning(f"Could not import alerting task modules: {e}")
+
+# PC maintenance tasks (D28 wiring; D16 retention and D17 catch-up live here).
+try:
+    from app.tasks import pc_maintenance  # noqa: F401
+except ImportError as e:
+    logger.warning(f"Could not import pc_maintenance task module: {e}")

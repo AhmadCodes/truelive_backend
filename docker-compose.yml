@@ -1,3 +1,25 @@
+# Shared environment of the four backend services (plan 06 D28, X-18).
+# backend, websocket, celery_worker and celery_beat use this one list, so the
+# API, the relay and Celery see the same values. No secret is inlined here:
+# SECRET_KEY, JWT_SECRET, SETTINGS_ENCRYPTION_KEY and RELAY_SENDER_SECRET come
+# from .env (env_file), which all four services read (see .env.example).
+# The deploy flags default here; set them in .env or the shell to override
+# (compose interpolation), and every service picks up the same value.
+x-backend-env: &backend-env
+  - DATABASE_URL=postgresql://truelive:truelive_password@postgres:5432/truelive_portal
+  - REDIS_URL=redis://:YtrewqQwerty123123Ytrewq@redis:6379/0
+  - CELERY_BROKER_URL=redis://:YtrewqQwerty123123Ytrewq@redis:6379/0
+  - CELERY_RESULT_BACKEND=redis://:YtrewqQwerty123123Ytrewq@redis:6379/1
+  - WEBSOCKET_URL=http://websocket:8080
+  - WEBSOCKET_PORT=8080
+  - DEBUG=False
+  - ENVIRONMENT=production
+  - DEPLOY_INJECT_CONFIG_ID=${DEPLOY_INJECT_CONFIG_ID:-true}
+  - RELAY_STATION_REPORTS=${RELAY_STATION_REPORTS:-on}
+  - DEPLOY_CATCHUP_ENABLED=${DEPLOY_CATCHUP_ENABLED:-false}
+  - DEPLOY_ACK_TIMEOUT_SEC=${DEPLOY_ACK_TIMEOUT_SEC:-300}
+  - RELAY_DEBUG_LOGGING=${RELAY_DEBUG_LOGGING:-false}
+
 services:
   # PostgreSQL Database
   postgres:
@@ -61,14 +83,7 @@ services:
       - logs:/app/logs
     ports:
       - "8000:8000"
-    environment:
-      - DATABASE_URL=postgresql://truelive:truelive_password@postgres:5432/truelive_portal
-      - REDIS_URL=redis://:YtrewqQwerty123123Ytrewq@redis:6379/0
-      - CELERY_BROKER_URL=redis://:YtrewqQwerty123123Ytrewq@redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://:YtrewqQwerty123123Ytrewq@redis:6379/1
-      - WEBSOCKET_URL=http://websocket:8080
-      - DEBUG=False
-      - ENVIRONMENT=production
+    environment: *backend-env
     depends_on:
       postgres:
         condition: service_healthy
@@ -103,13 +118,7 @@ services:
       - ./app:/app/app:ro
       - upload_data:/app/uploads
       - logs:/app/logs
-    environment:
-      - DATABASE_URL=postgresql://truelive:truelive_password@postgres:5432/truelive_portal
-      - REDIS_URL=redis://:YtrewqQwerty123123Ytrewq@redis:6379/0
-      - CELERY_BROKER_URL=redis://:YtrewqQwerty123123Ytrewq@redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://:YtrewqQwerty123123Ytrewq@redis:6379/1
-      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
-      - JWT_SECRET=${JWT_SECRET:-your-jwt-secret-key}
+    environment: *backend-env
     depends_on:
       postgres:
         condition: service_healthy
@@ -134,13 +143,7 @@ services:
       - ./app:/app/app:ro
       - celery_beat_data:/var/lib/celery
       - logs:/app/logs
-    environment:
-      - DATABASE_URL=postgresql://truelive:truelive_password@postgres:5432/truelive_portal
-      - REDIS_URL=redis://:YtrewqQwerty123123Ytrewq@redis:6379/0
-      - CELERY_BROKER_URL=redis://:YtrewqQwerty123123Ytrewq@redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://:YtrewqQwerty123123Ytrewq@redis:6379/1
-      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
-      - JWT_SECRET=${JWT_SECRET:-your-jwt-secret-key}
+    environment: *backend-env
     depends_on:
       - redis
       - celery_worker
@@ -156,17 +159,16 @@ services:
     container_name: truelive_websocket
     restart: unless-stopped
     command: python -m app.services.websocket_server
+    # .env provides SECRET_KEY, JWT_SECRET, SETTINGS_ENCRYPTION_KEY and
+    # RELAY_SENDER_SECRET, the same values the API reads (D28, C18).
+    env_file:
+      - .env
     ports:
       - "8080:8080"
     volumes:
       - ./app:/app/app:ro
       - logs:/app/logs
-    environment:
-      - DATABASE_URL=postgresql://truelive:truelive_password@postgres:5432/truelive_portal
-      - REDIS_URL=redis://:YtrewqQwerty123123Ytrewq@redis:6379/0
-      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
-      - JWT_SECRET=${JWT_SECRET:-your-jwt-secret-key}
-      - WEBSOCKET_PORT=8080
+    environment: *backend-env
     depends_on:
       postgres:
         condition: service_healthy

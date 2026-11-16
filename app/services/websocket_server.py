@@ -429,6 +429,12 @@ def run_server(host: str = "0.0.0.0", port: int = 8080):
     """
     logger.info(f"Starting WebSocket server on {host}:{port}")
 
+    # Shared-env self-check (D28): flags, secret fingerprints, key status, G-1,
+    # and a broker PING. Never fatal: the relay starts with the broker down.
+    from app.core.startup_check import run_startup_check
+
+    run_startup_check("websocket", check_broker_reachable=True)
+
     sweep_interval = int(os.environ.get("WS_LAST_SEEN_SWEEP_SECONDS", "30"))
     eventlet.spawn(_last_seen_sweep, sweep_interval)
 
