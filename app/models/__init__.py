@@ -17,6 +17,7 @@ from app.models.screen import Screen
 from app.models.view import View
 from app.models.screen_mapping import ScreenMapping
 from app.models.pc_screen_mapping_state import PcScreenMappingState
+from app.models.pc_tracking import PcDeployment, PcHealth, PcTokenRenewal
 from app.models.system_setting import SystemSetting
 from app.models.alerting import (
     AlertAddress,
@@ -59,6 +60,10 @@ __all__ = [
     "View",
     "ScreenMapping",
     "PcScreenMappingState",
+    # Deploy tracking and station health (D13)
+    "PcDeployment",
+    "PcHealth",
+    "PcTokenRenewal",
     # System models
     "SystemSetting",
     # Alerting models
