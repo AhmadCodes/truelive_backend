@@ -30,7 +30,7 @@ from app.models.team import Team
 from app.services import pc_status
 from tests.deploy_testkit import camera_url, sqlite_engine
 
-NOW = int(time.time())
+NOW = int(time.time())  # refreshed by the api fixture: staleness is relative to the test's own clock
 TEAM = "TEAM_d16"
 LAYOUT = "LAYOUT_d16"
 
@@ -42,6 +42,8 @@ def _naive(ts):
 
 @pytest.fixture
 def api(monkeypatch):
+    global NOW
+    NOW = int(time.time())
     from app.api import deps
     from app.api.v1 import pcs as pcs_api
     from app.database import get_db
