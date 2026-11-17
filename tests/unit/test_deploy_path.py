@@ -413,9 +413,35 @@ def test_pc_deploy_route_offline_is_502_and_recorded(api, env):
     api.sender.answers["PC_A"] = "offline"
     response = api.client.post("/api/v1/pcs/PC_A/deploy")
     assert response.status_code == 502
-    assert "not connected" in response.json()["detail"]
+    body = response.json()
+    # A string detail (what older portals show) plus the per-PC result (D18).
+    assert set(body) == {"detail", "result"}
+    assert isinstance(body["detail"], str) and "not connected" in body["detail"]
+    assert set(body["result"]) == RESULT_KEYS
+    assert (body["result"]["pc_id"], body["result"]["status"], body["result"]["delivery"]) == (
+        "PC_A", "failed", "offline")
+    assert body["result"]["message"] == body["detail"]
+    assert body["result"]["confirmable"] is False
     _assert_no_layout_in(response)
-    assert [r.status for r in _rows(env).values()] == ["offline"]
+    rows = _rows(env)
+    assert [r.status for r in rows.values()] == ["offline"]
+    assert body["result"]["config_id"] in rows
+
+
+@pytest.mark.parametrize("answer", ["timeout", "error", "unreachable"])
+def test_pc_deploy_route_relay_failure_is_502_with_result(api, env, answer):
+    if answer == "unreachable":
+        api.sender.unreachable = True
+    else:
+        api.sender.answers["PC_A"] = answer
+    response = api.client.post("/api/v1/pcs/PC_A/deploy")
+    assert response.status_code == 502
+    body = response.json()
+    assert set(body) == {"detail", "result"} and isinstance(body["detail"], str)
+    assert set(body["result"]) == RESULT_KEYS
+    assert (body["result"]["status"], body["result"]["delivery"]) == ("failed", "error")
+    assert _rows(env)[body["result"]["config_id"]].status == "relay_failed"
+    _assert_no_layout_in(response)
 
 
 def test_layout_deploy_route_response(api, env):

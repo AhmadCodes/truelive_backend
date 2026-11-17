@@ -4,6 +4,7 @@ Provides CRUD operations for PCs and their associations with screens.
 """
 
 from fastapi import APIRouter, HTTPException, status, Query, Depends
+from fastapi.responses import JSONResponse
 from sqlalchemy import func, or_
 from sqlalchemy.orm import joinedload
 from typing import List, Optional
@@ -716,9 +717,11 @@ def deploy_config(pc_id: str, current_user: AdminUser, db: DBSession):
         (never the generated configuration).
 
     Raises:
-        HTTPException: 404 if the PC is not found, 409 if it has no layout,
-        502 if the layout was not delivered (offline PC, relay unreachable or
-        no answer).
+        HTTPException: 404 if the PC is not found, 409 if it has no layout.
+
+    A layout that was not delivered (offline PC, relay unreachable or no
+    answer) answers 502 with ``{detail: <message>, result: <the same per-PC
+    result>}`` (D18).
     """
     from app.services.deploy_service import TRIGGER_PC_DEPLOY, deploy_config_to_pcs
 
@@ -742,8 +745,13 @@ def deploy_config(pc_id: str, current_user: AdminUser, db: DBSession):
     result = summary["results"][0]
 
     if result["status"] == "failed":
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=result["message"]
+        # 502 with the message as a string ``detail`` (what older portals show),
+        # plus the per-PC ``result`` (plan 06 D18): the portal tracks the deploy
+        # row of a failed deploy too (config_id, delivery offline or error).
+        # Built from PCDeployResult, so no other key can leak (NEW-45).
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={"detail": result["message"], "result": PCDeployResult(**result).model_dump(mode="json")},
         )
 
     return result
