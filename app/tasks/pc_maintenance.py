@@ -8,7 +8,7 @@ catch-up re-push.
 """
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from celery import shared_task
 
@@ -48,4 +48,31 @@ def prune_deploy_history() -> Dict[str, Any]:
     finally:
         db.close()
     logger.info("prune_deploy_history: %s", result)
+    return result
+
+
+@shared_task(name="app.tasks.pc_maintenance.catch_up_deploy", ignore_result=True)
+def catch_up_deploy(pc_id: str, config_id: str, config_hash: Optional[str] = None) -> Dict[str, Any]:
+    """D17 catch-up re-push, queued by the relay (app/services/catchup.py).
+
+    Re-checks that ``config_id`` is still the PC's latest deploy and still
+    missed, that the PC still has that layout and that the layout's content
+    still hashes to ``config_hash``; then deploys it again with trigger
+    ``catch_up`` (a new config_id). Does nothing while
+    DEPLOY_CATCHUP_ENABLED is off in the worker. Returns no layout.
+    """
+    from app.core.config import settings
+    from app.database import SessionLocal
+    from app.services import catchup
+
+    if not settings.DEPLOY_CATCHUP_ENABLED:
+        logger.info("catch_up_deploy for PC %s ignored: DEPLOY_CATCHUP_ENABLED is off in this worker", pc_id)
+        return {"status": "disabled"}
+    db = SessionLocal()
+    try:
+        result = catchup.run_catch_up(db, pc_id, config_id, config_hash)
+    finally:
+        db.close()
+    logger.info("catch_up_deploy for PC %s (missed %s): %s", pc_id, config_id,
+                {k: result.get(k) for k in ("status", "delivery", "config_id", "reason")})
     return result

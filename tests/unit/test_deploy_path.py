@@ -515,6 +515,47 @@ def test_a_silent_relay_costs_one_timeout_per_batch(monkeypatch):
     assert len(emits) == 5 and emits[-1][2] - emits[0][2] < 0.2  # all in flight before any wait
 
 
+def test_sender_keeps_each_polling_post_under_the_engineio_packet_limit(monkeypatch):
+    """python-engineio refuses a polling POST with more than 16 packets; the
+    sender polls. 40 deploys through a real engine.io server all get their
+    answer (before the window: every one timed out, relay_failed)."""
+    from tests.fake_relay import FakeRelay
+
+    monkeypatch.setattr(settings, "RELAY_SENDER_SECRET", "")
+    relay = FakeRelay().start()
+    try:
+        requests = [{"config_id": f"c{i:02d}", "targetId": f"PC_{i:02d}", "content": {"n": i}} for i in range(40)]
+        started = time.monotonic()
+        answers = ds.socketio_sender(requests, url=relay.url, timeout=3.0)
+        elapsed = time.monotonic() - started
+    finally:
+        relay.stop()
+    assert {k: (v or {}).get("status") for k, v in answers.items()} == {f"c{i:02d}": "delivered" for i in range(40)}
+    assert [r["config_id"] for r in relay.requests] == [f"c{i:02d}" for i in range(40)]
+    assert elapsed < 3.0, elapsed
+
+
+def test_a_silent_relay_still_costs_one_timeout_with_many_requests(monkeypatch):
+    import socketio
+
+    _FakeClient.instances = []
+    monkeypatch.setattr(socketio, "Client", _FakeClient)
+    original_init = _FakeClient.__init__
+
+    def silent_init(self, *a, **k):
+        original_init(self, *a, **k)
+        self.answer = False
+
+    monkeypatch.setattr(_FakeClient, "__init__", silent_init)
+    requests = [{"config_id": f"c{i}", "targetId": f"PC_{i}", "content": {}} for i in range(30)]
+    started = time.monotonic()
+    answers = ds.socketio_sender(requests, url="http://127.0.0.1:9", timeout=0.4)
+    elapsed = time.monotonic() - started
+    assert answers == {f"c{i}": None for i in range(30)}
+    assert 0.35 <= elapsed < 1.2, elapsed  # one round's timeout, not 4
+    assert len(_FakeClient.instances[0].emits) == ds.SENDER_WINDOW  # the rest were never sent
+
+
 def test_unreachable_relay_raises(monkeypatch):
     import socketio
 

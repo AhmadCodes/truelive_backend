@@ -136,6 +136,27 @@ offset; no response carries a layout, a token or a URL. Celery beat runs
 50 deploys stay and none older than 90 days (a PC not deployed for 90 days then shows
 `last_deploy: null`).
 
+**Catch-up re-push (D17, `DEPLOY_CATCHUP_ENABLED`, default false).** Keep it off until
+D15's data shows the deploy states are reliable (plan: after M7); it changes walls
+unattended. When on, the relay checks once per session whether the station missed its
+latest deploy: a Client that reports (`deploy_result.v1`) on its first `station_status`
+that carries `wall.running_config_id`, any other Client right after `registered`. It
+re-pushes only when the latest deploy is `offline`, `relay_failed` or `unconfirmed`
+with no receipt, the wall does not report running it, and the PC is still assigned
+that layout; at most once per 10 minutes per PC (Redis key
+`truelive:catchup:<pc_id>`, from `REDIS_URL`). The Celery task
+`app.tasks.pc_maintenance.catch_up_deploy` (worker on the default `celery` queue,
+also with `DEPLOY_CATCHUP_ENABLED=true`) re-checks, refuses a layout whose content
+changed since, and deploys with trigger `catch_up` (a new config_id). The relay queues
+it with `retry=False` and 1 s socket timeouts from a background task; a Redis or broker
+failure pauses catch-up for 30 s (a WARNING) and never delays `registered`. Start
+line: `Relay catch-up: enabled=... rate_limit=600s retry=false pause_on_failure=30s`.
+
+**Sender window.** The API sends at most 8 `deploy_config` calls to the relay at a
+time: python-engineio refuses a polling POST with more than 16 packets, and the API's
+Socket.IO client polls (no websocket-client in requirements.txt). Before this, a
+deploy to more than 16 PCs at once ended `relay_failed` for all of them.
+
 **Startup self-check.** Each of the four services logs one line at start:
 
 ```

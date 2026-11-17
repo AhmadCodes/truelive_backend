@@ -66,6 +66,12 @@ TRIGGER_CATCH_UP = "catch_up"  # D17
 # ``sio.call`` timeout of the card.
 RELAY_EVENT = "deploy_config"
 RELAY_CALL_TIMEOUT = 5.0
+# python-engineio 4.x refuses a polling POST that carries more than 16 packets
+# ("Too many packets in payload"), and the API's client polls (websocket-client
+# is not in requirements.txt), sending everything queued in one POST. So at
+# most this many deploy_config calls are in flight at once; found by D17 with
+# 50 PCs (every one ended relay_failed).
+SENDER_WINDOW = 8
 
 # Relay answers (``delivery`` in the response).
 DELIVERY_DELIVERED = "delivered"
@@ -82,6 +88,7 @@ MSG_NO_LAYOUT = "No screen layout is assigned to this deployment target"
 MSG_GENERATION_FAILED = "Failed to generate the display configuration"
 MSG_SUPERSEDED = "A newer deploy to this PC replaced this one before it was sent"
 MSG_UNREACHABLE = "Could not reach the display client service to deploy the configuration"
+MSG_CONTENT_CHANGED = "The layout changed since the deploy being re-pushed; nothing was sent"  # D17
 
 DETAIL_OFFLINE = "PC not connected to the relay"
 DETAIL_NO_ANSWER = "relay did not answer"
@@ -105,13 +112,15 @@ def relay_url() -> str:
 
 
 def socketio_sender(requests: List[Dict[str, Any]], *, url: Optional[str] = None,
-                    timeout: float = RELAY_CALL_TIMEOUT) -> Dict[str, Optional[Any]]:
+                    timeout: float = RELAY_CALL_TIMEOUT, window: int = SENDER_WINDOW) -> Dict[str, Optional[Any]]:
     """Send every request over one authenticated sender session.
 
-    Each ``deploy_config`` is emitted with an ACK callback, so all calls are
-    in flight together; each gets at least ``timeout`` seconds to answer.
-    Raises RelayUnreachable when the session cannot be opened (also a wrong
-    RELAY_SENDER_SECRET: the relay refuses the CONNECT).
+    Each ``deploy_config`` is emitted with an ACK callback, ``window`` calls
+    in flight together (SENDER_WINDOW); each round gets ``timeout`` seconds
+    to answer. A round the relay leaves unanswered ends the batch: the
+    requests not sent yet get no answer (relay_failed) instead of one timeout
+    per round. Raises RelayUnreachable when the session cannot be opened
+    (also a wrong RELAY_SENDER_SECRET: the relay refuses the CONNECT).
     """
     import socketio
 
@@ -127,24 +136,35 @@ def socketio_sender(requests: List[Dict[str, Any]], *, url: Optional[str] = None
 
     answers: Dict[str, Optional[Any]] = {}
     waits: Dict[str, threading.Event] = {}
+    window = max(1, int(window))
     try:
-        for request in requests:
-            config_id = request["config_id"]
-            done = threading.Event()
-            waits[config_id] = done
+        for start in range(0, len(requests), window):
+            round_waits = []
+            for request in requests[start:start + window]:
+                config_id = request["config_id"]
+                done = threading.Event()
+                waits[config_id] = done
+                round_waits.append(done)
 
-            def _on_answer(*args, _config_id=config_id, _done=done):
-                answers[_config_id] = args[0] if args else None
-                _done.set()
+                def _on_answer(*args, _config_id=config_id, _done=done):
+                    answers[_config_id] = args[0] if args else None
+                    _done.set()
 
-            try:
-                client.emit(RELAY_EVENT, request, callback=_on_answer)
-            except Exception as exc:
-                logger.error(f"Could not send deploy {config_id}: {type(exc).__name__}")
-                done.set()
-        deadline = time.monotonic() + timeout
-        for done in waits.values():
-            done.wait(max(0.0, deadline - time.monotonic()))
+                try:
+                    client.emit(RELAY_EVENT, request, callback=_on_answer)
+                except Exception as exc:
+                    logger.error(f"Could not send deploy {config_id}: {type(exc).__name__}")
+                    done.set()
+            deadline = time.monotonic() + timeout
+            for done in round_waits:
+                done.wait(max(0.0, deadline - time.monotonic()))
+            if not all(done.is_set() for done in round_waits):
+                rest = requests[start + window:]
+                if rest:
+                    logger.error(f"The relay left deploys unanswered; {len(rest)} more not sent")
+                for request in rest:
+                    waits.setdefault(request["config_id"], threading.Event())
+                break
     finally:
         try:
             client.disconnect()
@@ -210,7 +230,8 @@ def _audit(db, target: _Target, actor: ActorTriple, trigger: str, layout_name: O
 
 
 def deploy_config_to_pcs(pcs: Sequence[PC], db, *, trigger: str, actor: ActorTriple = SYSTEM_ACTOR,
-                         sender: Optional[Sender] = None) -> Dict[str, Any]:
+                         sender: Optional[Sender] = None,
+                         expected_hashes: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
     """Deploy each PC's layout and report what really happened, per PC.
 
     Args:
@@ -221,6 +242,9 @@ def deploy_config_to_pcs(pcs: Sequence[PC], db, *, trigger: str, actor: ActorTri
         trigger: pc_deployments.trigger (TRIGGER_*).
         actor: who deploys (created_by_* of the rows, audit actor).
         sender: how requests reach the relay (default socketio_sender).
+        expected_hashes: per PC, the content hash the generated layout must
+            have (D17 catch-up re-pushes only an unchanged layout); a PC whose
+            layout differs is ``skipped`` and gets no row.
 
     Returns ``{total, deployed, skipped, failed, results}``, results in input
     order, each ``{pc_id, status, delivery, config_id, confirmable, message,
@@ -253,9 +277,14 @@ def deploy_config_to_pcs(pcs: Sequence[PC], db, *, trigger: str, actor: ActorTri
             logger.error(f"Error generating config for PC {target.pc_id}: {type(exc).__name__}")
             target.result = _result(target, STATUS_FAILED, MSG_GENERATION_FAILED)
             continue
-        target.config_id = str(uuid.uuid4())
-        target.config_hash = deploy_tracking.config_hash(config)
+        content_hash = deploy_tracking.config_hash(config)
         target.screens = deploy_tracking.screen_count(config)
+        if expected_hashes and target.pc_id in expected_hashes and expected_hashes[target.pc_id] != content_hash:
+            logger.info(f"Deploy to PC {target.pc_id} not sent: its layout changed since the expected content")
+            target.result = _result(target, STATUS_SKIPPED, MSG_CONTENT_CHANGED)
+            continue
+        target.config_id = str(uuid.uuid4())
+        target.config_hash = content_hash
         payload = dict(config)
         if inject:
             payload["config_id"] = target.config_id

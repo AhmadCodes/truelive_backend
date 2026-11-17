@@ -81,6 +81,10 @@ class RelayHarness:
         relay.pending_deploy_events.clear()
         relay.health_buffer.clear()
         relay.report_ids.clear()
+        # D17 catch-up state: an empty queue, a closed breaker, no Redis client.
+        relay._catchup_queue.clear()
+        relay.catchup_breaker.reset()
+        monkeypatch.setattr(relay, "_catchup_limiter", None)
 
         from app.models.pc import PC
         from app.models.pc_tracking import PcDeployment, PcHealth, PcTokenRenewal

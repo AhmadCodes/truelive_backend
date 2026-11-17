@@ -93,6 +93,19 @@ NEW-77; app/services/pc_tokens.py):
   (pc_health.relay_flags; ``python -m app.services.pc_tokens report`` lists
   them for B22's token drop or a technician).
 
+Catch-up re-push (plan 06 D17, OD-20; app/services/catchup.py), only with
+DEPLOY_CATCHUP_ENABLED (off in M2):
+
+* Once per session the relay asks whether the PC missed its latest deploy: a
+  confirmable session on its first station_status that carries
+  ``wall.running_config_id``, any other session at register (after
+  ``registered`` went out).
+* A background loop does the work on a tpool thread: the decision (latest
+  row offline, relay_failed or unconfirmed with no receipt), a 10-minute
+  Redis key per PC, and the Celery task with ``retry=False``. A Redis or
+  broker failure pauses catch-up for 30 s; the hub and ``registered`` never
+  wait for either.
+
 The relay never rotates JWT_SECRET itself (OD-23): ops rotates it through the
 window above (DOCKER_SETUP.md runbook).
 """
@@ -102,6 +115,7 @@ import logging
 import os
 import re
 import time
+from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
@@ -114,7 +128,7 @@ from app.core.config import settings
 from app.database import get_db
 from app.models.pc import PC
 from app.schemas import station_protocol
-from app.services import deploy_tracking, pc_tokens, relay_auth, station_reports
+from app.services import catchup, deploy_tracking, pc_tokens, relay_auth, station_reports
 
 logger = logging.getLogger(__name__)
 
@@ -299,6 +313,11 @@ relay_counters: Dict[str, int] = {
     "token_renewals_confirmed": 0,
     "token_renewals_refused": 0,
     "token_drop_needed": 0,
+    "catchup_scheduled": 0,
+    "catchup_queued": 0,
+    "catchup_not_needed": 0,
+    "catchup_paused": 0,
+    "catchup_errors": 0,
 }
 
 # Deploy events whose row did not exist yet, or whose write failed (D14).
@@ -777,6 +796,7 @@ def register(sid, data):
         session["features"] = features
         session["status_seen"] = False  # D17: catch-up is decided on the first station_status
         session["token_renewal_id"] = None  # D30: the renewal sent on this session
+        session["catchup_evaluated"] = False  # D17: decided once per session
 
         # E20: the register's version fields, each checked; stored with the
         # relay flags at the next health flush. pc_id is the session's.
@@ -797,6 +817,12 @@ def register(sid, data):
         # D30: mint (or resend) the PC's new token off the hub, after registered.
         if renew:
             _spawn(_renew_pc_token, sid, pc_id, auth_token, renew_reason)
+
+        # D17: a station that cannot report is checked for a missed deploy now;
+        # a confirmable one on its first station_status (catch-up loop, off the hub).
+        if settings.DEPLOY_CATCHUP_ENABLED and check.status == PcCheck.OK and not session_confirmable(sid):
+            session["catchup_evaluated"] = True
+            schedule_catchup(sid, pc_id, catchup.AT_REGISTER)
 
     except Exception as e:
         logger.error(f"Error during registration for {sid}: {type(e).__name__}: {e}")
@@ -1183,6 +1209,93 @@ enable_feature(station_protocol.FEATURE_PC_TOKEN)
 
 
 # --------------------------------------------------------------------------- #
+# Catch-up re-push (D17)
+# --------------------------------------------------------------------------- #
+
+CATCHUP_QUEUE_MAX = 1000
+CATCHUP_LOOP_SECONDS = float(os.environ.get("RELAY_CATCHUP_LOOP_SECONDS", "0.5"))
+# pc_id -> (sid, running_config_id, trigger point); one entry per PC, oldest first.
+_catchup_queue: "OrderedDict[str, tuple]" = OrderedDict()
+catchup_breaker = catchup.Breaker()
+_catchup_limiter: Optional[catchup.RateLimiter] = None
+
+
+def _limiter() -> catchup.RateLimiter:
+    global _catchup_limiter
+    if _catchup_limiter is None:
+        _catchup_limiter = catchup.RateLimiter(settings.REDIS_URL)
+    return _catchup_limiter
+
+
+def schedule_catchup(sid: str, pc_id: str, point: str, running_config_id: Optional[str] = None) -> bool:
+    """Queue a catch-up decision for the PC on ``sid`` (D17). Instant and in
+    memory: the work happens in the catch-up loop."""
+    if not settings.DEPLOY_CATCHUP_ENABLED:
+        return False
+    if pc_id not in _catchup_queue and len(_catchup_queue) >= CATCHUP_QUEUE_MAX:
+        dropped, _entry = _catchup_queue.popitem(last=False)
+        logger.warning(f"Catch-up queue full: dropped the check for PC {dropped}")
+    _catchup_queue[pc_id] = (sid, running_config_id, point)
+    relay_counters["catchup_scheduled"] += 1
+    return True
+
+
+def _catchup_work(pc_id: str, running_config_id: Optional[str]):
+    """On a tpool thread: the decision (database), the 10-minute key (Redis)
+    and the task (broker). Raises on any of their errors."""
+    decision = _in_transaction(lambda db: catchup.evaluate_pc(db, pc_id, running_config_id))
+    if not decision.push:
+        return decision, None
+    if not _limiter().acquire(pc_id):
+        return catchup.Decision(False, "rate limited: a catch-up for this PC ran in the last 10 minutes"), None
+    return decision, catchup.enqueue(pc_id, decision.config_id, decision.config_hash)
+
+
+def process_catchup_once(max_items: int = 100) -> int:
+    """Work through queued catch-up checks one at a time (one tpool thread at
+    most, so registrations never wait for a thread). Returns how many."""
+    processed = 0
+    while _catchup_queue and processed < max_items:
+        pc_id, (sid, running, point) = _catchup_queue.popitem(last=False)
+        processed += 1
+        if not settings.DEPLOY_CATCHUP_ENABLED:
+            continue
+        if _registered_pc(sid) != pc_id:
+            logger.info(f"Catch-up check for PC {pc_id} dropped: session {sid} is no longer the PC's")
+            continue
+        if catchup_breaker.is_open():
+            relay_counters["catchup_paused"] += 1
+            logger.info(f"Catch-up for PC {pc_id} skipped: paused after a Redis or broker failure")
+            continue
+        try:
+            decision, task_id = _run_blocking(_catchup_work, pc_id, running)
+        except Exception as exc:
+            catchup_breaker.trip()
+            relay_counters["catchup_errors"] += 1
+            logger.warning(f"Catch-up for PC {pc_id} not queued ({type(exc).__name__}: database, Redis or broker "
+                           f"unavailable); catch-up paused for {catchup_breaker.seconds:g}s")
+            continue
+        if task_id:
+            relay_counters["catchup_queued"] += 1
+            logger.info(f"Catch-up queued for PC {pc_id}: re-push of deploy {decision.config_id} "
+                        f"({decision.reason}; at {point}; task {task_id})")
+        else:
+            relay_counters["catchup_not_needed"] += 1
+            logger.info(f"No catch-up for PC {pc_id}: {decision.reason} (at {point})")
+    return processed
+
+
+def _catchup_loop(interval_seconds: float):
+    """Background task: process queued catch-up checks (D17). Never dies."""
+    while True:
+        sio.sleep(interval_seconds)
+        try:
+            process_catchup_once()
+        except Exception as exc:
+            logger.error(f"Catch-up loop error: {type(exc).__name__}")
+
+
+# --------------------------------------------------------------------------- #
 # Station reports (D15)
 # --------------------------------------------------------------------------- #
 
@@ -1318,6 +1431,12 @@ def station_status(sid, pc_id, data):
         health_buffer.put(pc_id, columns)
         session["status_seen"] = True
         report_ids.add(key)
+        # D17: the first status that says what the wall runs decides catch-up.
+        running = model.wall.running_config_id if model.wall is not None else None
+        if (settings.DEPLOY_CATCHUP_ENABLED and running is not None and not session.get("catchup_evaluated")
+                and session_confirmable(sid)):
+            session["catchup_evaluated"] = True
+            schedule_catchup(sid, pc_id, catchup.AT_STATUS, running)
         return _ack("ok", model.message_id)
     except Exception as exc:
         logger.error(f"Error in station_status from PC {pc_id}: {type(exc).__name__}")
@@ -1529,6 +1648,11 @@ def run_server(host: str = "0.0.0.0", port: int = 8080):
     sio.start_background_task(_deploy_events_loop, DEPLOY_EVENT_RETRY_SECONDS)
     sio.start_background_task(_health_flush_loop, HEALTH_FLUSH_SECONDS)
     sio.start_background_task(_deploy_sweep_loop, DEPLOY_SWEEP_SECONDS)
+    sio.start_background_task(_catchup_loop, CATCHUP_LOOP_SECONDS)
+    logger.info(
+        f"Relay catch-up: enabled={'true' if settings.DEPLOY_CATCHUP_ENABLED else 'false'} "
+        f"rate_limit={catchup.RATE_LIMIT_SECONDS}s retry=false pause_on_failure={catchup.BREAKER_SECONDS:g}s"
+    )
     logger.info(
         f"Relay reports: station_reports={'on' if settings.RELAY_STATION_REPORTS else 'off'} "
         f"health_flush={HEALTH_FLUSH_SECONDS:g}s deploy_sweep={DEPLOY_SWEEP_SECONDS:g}s "
