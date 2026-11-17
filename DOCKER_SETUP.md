@@ -123,6 +123,19 @@ shows the mode (`RELAY_HEALTH_FLUSH_SECONDS` and `RELAY_DEPLOY_SWEEP_SECONDS` ex
 for tests; leave them unset in production). Presence stamps (`last_connected`,
 `last_seen`, `last_applied`) no longer move `pcs.updated_at`.
 
+**Status and history API (D16).** `GET /pcs/status` and `GET /pcs/{id}/status` add,
+per PC, `health` (the latest station status from `pc_health`, with versions, build
+class, stream counts, relay flags and `health_stale` after 180 s without a status) and
+`last_deploy` (the latest `pc_deployments` row: not superseded first, newest, ties by
+id), each `null` when there is none. `GET /pcs/{id}/deployments?limit=&offset=` pages
+a PC's deploys newest first, `GET /pcs/deployments/{config_id}` returns one deploy,
+and `GET /pcs/{id}/health` returns everything `pc_health` holds (`null` if the PC never
+reported). Every logged-in user can read them (OD-22 (a)). Timestamps carry their UTC
+offset; no response carries a layout, a token or a URL. Celery beat runs
+`app.tasks.pc_maintenance.prune_deploy_history` daily at 03:30 UTC: per PC the newest
+50 deploys stay and none older than 90 days (a PC not deployed for 90 days then shows
+`last_deploy: null`).
+
 **Startup self-check.** Each of the four services logs one line at start:
 
 ```

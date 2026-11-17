@@ -7,6 +7,7 @@ from typing import Optional, List, Literal
 from datetime import datetime
 
 from app.schemas.actor import ActorStampsMixin
+from app.schemas.pc_status import DeploymentSummary, PCHealthSummary
 
 
 class PCBase(BaseModel):
@@ -247,7 +248,14 @@ class PCConnectionStatus(BaseModel):
         None, description="Last configuration applied timestamp"
     )
     websocket_connected_at: Optional[str] = Field(
-        None, description="Current WebSocket connection start time (ISO format)"
+        None, description="Current WebSocket connection start time (ISO 8601, UTC offset)"
+    )
+    # D16: the latest station status and the latest deploy, or null.
+    health: Optional[PCHealthSummary] = Field(
+        None, description="Latest station status (pc_health); null when the PC never registered with D15"
+    )
+    last_deploy: Optional[DeploymentSummary] = Field(
+        None, description="Latest deploy (D13 order: not superseded first, newest, ties by id)"
     )
 
     class Config:

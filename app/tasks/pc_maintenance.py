@@ -2,8 +2,9 @@
 PC maintenance tasks (plan 06).
 
 Imported by app/tasks/celery_app.py, so every task here is registered in the
-worker. D28 adds the environment self-check below; D16 (deploy-history
-retention) and D17 (catch-up re-push) add their tasks to this module.
+worker. D28 adds the environment self-check below, D16 the deploy-history
+retention (daily, celery beat ``pc-deploy-history-prune``) and D17 the
+catch-up re-push.
 """
 
 import logging
@@ -28,3 +29,23 @@ def env_self_check() -> Dict[str, Any]:
     report = collect("celery_worker")
     logger.info("env_self_check: %s", report.log_line())
     return report.as_dict()
+
+
+@shared_task(name="app.tasks.pc_maintenance.prune_deploy_history")
+def prune_deploy_history() -> Dict[str, Any]:
+    """OD-22 (a) retention of pc_deployments (D16): per PC the newest 50
+    rows, none older than 90 days. Returns the counts (no ids)."""
+    from app.database import SessionLocal
+    from app.services import pc_status
+
+    db = SessionLocal()
+    try:
+        result = pc_status.prune_deploy_history(db)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+    logger.info("prune_deploy_history: %s", result)
+    return result

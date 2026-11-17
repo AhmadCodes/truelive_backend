@@ -387,7 +387,7 @@ def _new_session(role: str) -> Dict[str, Any]:
     return {
         "pc_id": None,
         "name": None,
-        "connected_at": datetime.utcnow().isoformat(),
+        "connected_at": datetime.now(timezone.utc).isoformat(),  # with its offset (NEW-51, D16)
         "role": role,
         "ever_registered": False,
         "flags": {},

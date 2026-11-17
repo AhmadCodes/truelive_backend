@@ -8,7 +8,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import joinedload
 from typing import List, Optional
 import httpx
-from datetime import datetime
+import time
 
 from app.api.deps import AdminUser, DBSession, CurrentUser, admin_or_scope
 from app.models.pc import PC
@@ -38,6 +38,7 @@ from app.schemas.pc import (
     CopyLayoutResponse,
 )
 from app.schemas.deploy import PCDeployResult
+from app.schemas.pc_status import DeploymentHistory, DeploymentSummary, PCHealthDetail
 from app.services.config_importer import import_config_for_pc, copy_layout_from_pc
 from app.services.actor import (
     principal_to_actor,
@@ -47,7 +48,7 @@ from app.services.actor import (
     attach_actor_stamps,
     attach_actor_stamps_list,
 )
-from app.services import audit_service, pc_tokens
+from app.services import audit_service, pc_status, pc_tokens
 from app.services.audit_service import ResourceType
 import logging
 
@@ -251,6 +252,23 @@ async def get_pc_count(
     }
 
 
+def _connection_status(pc: PC, health, deploy, ws_info: Optional[dict], now: float) -> PCConnectionStatus:
+    """One PC's status (D16): presence from the relay and pcs, the latest
+    station status and the latest deploy. Timestamps are aware UTC (NEW-51)."""
+    is_connected = ws_info is not None
+    return PCConnectionStatus(
+        pc_id=pc.id,
+        pc_name=pc.name,
+        is_connected=is_connected,
+        last_connected=pc_status.utc_from_epoch(pc.last_connected),
+        last_seen=pc_status.utc_from_epoch(pc.last_seen),
+        last_applied=pc_status.utc_from_epoch(pc.last_applied),
+        websocket_connected_at=pc_status.normalize_iso(ws_info.get("connected_at")) if is_connected else None,
+        health=pc_status.health_summary(health, now),
+        last_deploy=pc_status.deployment_summary(deploy),
+    )
+
+
 @router.get("/status", response_model=AllPCsConnectionStatus)
 async def get_all_pcs_connection_status(current_user: CurrentUser, db: DBSession):
     """
@@ -260,50 +278,24 @@ async def get_all_pcs_connection_status(current_user: CurrentUser, db: DBSession
     - Total number of PCs in database
     - Number of currently connected PCs
     - Number of disconnected PCs
-    - List of all PCs with their connection status
+    - List of all PCs with their connection status, their latest station
+      status (``health``, from pc_health) and their latest deploy
+      (``last_deploy``), each null when there is none (D16)
 
     The connection status is determined by querying the WebSocket server
     for real-time connection information and combining it with database
-    information (last_connected, last_applied timestamps).
+    information (last_connected, last_applied timestamps). PCs, health and
+    latest deploys come from one query. Timestamps are UTC with an offset.
     """
-    # Get all PCs from database
-    all_pcs = db.query(PC).all()
+    rows = pc_status.status_rows(db)
 
     # Get currently connected PCs from WebSocket server
     ws_data = await get_websocket_connected_pcs()
     connected_pc_ids = {pc["pc_id"]: pc for pc in ws_data.get("connected_pcs", [])}
 
-    # Build status for each PC
-    pc_statuses = []
-    for pc in all_pcs:
-        is_connected = pc.id in connected_pc_ids
-        ws_info = connected_pc_ids.get(pc.id, {})
-
-        # Convert Unix timestamp to datetime if exists
-        last_connected = None
-        if pc.last_connected:
-            last_connected = datetime.fromtimestamp(pc.last_connected)
-
-        last_seen = None
-        if pc.last_seen:
-            last_seen = datetime.fromtimestamp(pc.last_seen)
-
-        last_applied = None
-        if pc.last_applied:
-            last_applied = datetime.fromtimestamp(pc.last_applied)
-
-        pc_status = PCConnectionStatus(
-            pc_id=pc.id,
-            pc_name=pc.name,
-            is_connected=is_connected,
-            last_connected=last_connected,
-            last_seen=last_seen,
-            last_applied=last_applied,
-            websocket_connected_at=ws_info.get("connected_at")
-            if is_connected
-            else None,
-        )
-        pc_statuses.append(pc_status)
+    now = time.time()
+    pc_statuses = [_connection_status(pc, health, deploy, connected_pc_ids.get(pc.id), now)
+                   for pc, health, deploy in rows]
 
     # Calculate counts
     connected_count = sum(1 for pc in pc_statuses if pc.is_connected)
@@ -315,6 +307,19 @@ async def get_all_pcs_connection_status(current_user: CurrentUser, db: DBSession
         disconnected_count=disconnected_count,
         pcs=pc_statuses,
     )
+
+
+# Declared before every /{pc_id}/... route, so that a config_id such as
+# "status" or "health" never resolves to a PC route (D16).
+@router.get("/deployments/{config_id}", response_model=DeploymentSummary)
+def get_deployment(config_id: str, current_user: CurrentUser, db: DBSession):
+    """One deploy by its config_id (D16). No layout body, token or URL."""
+    from app.models.pc_tracking import PcDeployment
+
+    row = db.query(PcDeployment).filter(PcDeployment.id == config_id).first()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment not found")
+    return pc_status.deployment_summary(row)
 
 
 @router.get("/{pc_id}", response_model=PCDetailResponse)
@@ -971,6 +976,8 @@ async def get_pc_connection_status(
     - Last connection timestamp from database
     - Last configuration applied timestamp
     - Current WebSocket connection start time (if connected)
+    - The latest station status (``health``) and deploy (``last_deploy``),
+      or null (D16)
 
     The connection status is determined by querying the WebSocket server
     for real-time connection information and combining it with database
@@ -978,45 +985,53 @@ async def get_pc_connection_status(
 
     Returns 404 if PC not found in database.
     """
-    # Get PC from database
-    pc = db.query(PC).filter(PC.id == pc_id).first()
+    rows = pc_status.status_rows(db, pc_id)
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"PC with ID '{pc_id}' not found",
+        )
+    pc, health, deploy = rows[0]
 
-    if not pc:
+    # Get currently connected PCs from WebSocket server
+    ws_data = await get_websocket_connected_pcs()
+    connected_pc_ids = {pc["pc_id"]: pc for pc in ws_data.get("connected_pcs", [])}
+    return _connection_status(pc, health, deploy, connected_pc_ids.get(pc_id), time.time())
+
+
+def _require_pc(db, pc_id: str) -> None:
+    if db.query(PC.id).filter(PC.id == pc_id).first() is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"PC with ID '{pc_id}' not found",
         )
 
-    # Get currently connected PCs from WebSocket server
-    ws_data = await get_websocket_connected_pcs()
-    connected_pc_ids = {pc["pc_id"]: pc for pc in ws_data.get("connected_pcs", [])}
 
-    # Check if this PC is connected
-    is_connected = pc_id in connected_pc_ids
-    ws_info = connected_pc_ids.get(pc_id, {})
+@router.get("/{pc_id}/deployments", response_model=DeploymentHistory)
+def get_pc_deployments(
+    pc_id: str,
+    current_user: CurrentUser,
+    db: DBSession,
+    limit: int = Query(pc_status.HISTORY_DEFAULT_LIMIT, ge=1, le=pc_status.HISTORY_MAX_LIMIT),
+    offset: int = Query(0, ge=0),
+):
+    """A PC's deploys, newest first (created_at desc, id desc), paginated
+    (D16). Retention keeps the newest 50 per PC, none older than 90 days."""
+    _require_pc(db, pc_id)
+    total, rows = pc_status.deployment_history(db, pc_id, limit=limit, offset=offset)
+    return DeploymentHistory(pc_id=pc_id, total=total, limit=limit, offset=offset,
+                             items=[pc_status.deployment_summary(row) for row in rows])
 
-    # Convert Unix timestamp to datetime if exists
-    last_connected = None
-    if pc.last_connected:
-        last_connected = datetime.fromtimestamp(pc.last_connected)
 
-    last_seen = None
-    if pc.last_seen:
-        last_seen = datetime.fromtimestamp(pc.last_seen)
+@router.get("/{pc_id}/health", response_model=Optional[PCHealthDetail])
+def get_pc_health(pc_id: str, current_user: CurrentUser, db: DBSession):
+    """Everything the relay keeps about the PC's latest station status (D16).
+    ``null`` when the PC never reported; 404 when there is no such PC."""
+    from app.models.pc_tracking import PcHealth
 
-    last_applied = None
-    if pc.last_applied:
-        last_applied = datetime.fromtimestamp(pc.last_applied)
-
-    return PCConnectionStatus(
-        pc_id=pc.id,
-        pc_name=pc.name,
-        is_connected=is_connected,
-        last_connected=last_connected,
-        last_seen=last_seen,
-        last_applied=last_applied,
-        websocket_connected_at=ws_info.get("connected_at") if is_connected else None,
-    )
+    _require_pc(db, pc_id)
+    row = db.query(PcHealth).filter(PcHealth.pc_id == pc_id).first()
+    return pc_status.health_detail(row)
 
 
 @router.post("/{pc_id}/import-config", response_model=ImportConfigResponse)

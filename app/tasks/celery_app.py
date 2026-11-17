@@ -68,6 +68,11 @@ celery_app.conf.beat_schedule = {
         'task': 'app.tasks.reconcile_smtp_ingest',
         'schedule': 60,  # every minute
     },
+    # D16 / OD-22 (a): keep 50 deploys per PC, none older than 90 days.
+    'pc-deploy-history-prune': {
+        'task': 'app.tasks.pc_maintenance.prune_deploy_history',
+        'schedule': crontab(hour=3, minute=30),  # Daily at 03:30 UTC
+    },
 }
 
 
