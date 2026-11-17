@@ -10,8 +10,10 @@ eventlet on Python 3.11, against a scratch Postgres built by alembic from
 template0, with throwaway secrets, bound to 127.0.0.1.
 
 * test_phase0_with_sender_secret: 1.1.1 PCs register, receive a layout from an
-  authenticated sender (and from the API's own _deploy_config_to_pcs) and
-  ACK it; an unauthenticated session's message is rejected and nobody is
+  authenticated sender (and from the API's own deploy path, D14: the row's
+  config_id at the payload root, the 1.1.1 ACK moves the row to received
+  within 2 s and stamps last_applied) and ACK it; an unauthenticated
+  session's message is rejected and nobody is
   disconnected; a wrong sender secret is refused; PCs never receive
   clients_update; an outdated token is flagged; a deleted PC cannot
   register; the relay log holds no token, secret or layout.
@@ -141,12 +143,13 @@ def fleet(scratch_db):
     tokens["PC_B"] = _mint("PC_B", jwt_secret, exp_delta=4000 * 3600)  # valid, but not the stored one
     tokens["PC_GONE"] = _mint("PC_GONE", jwt_secret)  # valid token, PC deleted
     with psycopg2.connect(scratch_db) as conn, conn.cursor() as cur:
-        cur.execute("DELETE FROM pcs")
-        cur.execute("DELETE FROM teams")
+        for table in ("audit_logs", "pc_deployments", "pcs", "screen_layouts", "teams"):
+            cur.execute(f"DELETE FROM {table}")
         cur.execute("INSERT INTO teams (id, name) VALUES ('TEAM_p0', 'Phase 0')")
+        cur.execute("INSERT INTO screen_layouts (id, name, team_id) VALUES ('LAYOUT_p0', 'Phase 0 wall', 'TEAM_p0')")
         for pc_id, token in (("PC_A", tokens["PC_A"]), ("PC_B", tokens["PC_B_stored"])):
-            cur.execute("INSERT INTO pcs (id, name, role, team_id, auth_token) VALUES (%s, %s, 'controller', "
-                        "'TEAM_p0', %s)", (pc_id, f"{pc_id} wall", token))
+            cur.execute("INSERT INTO pcs (id, name, role, team_id, auth_token, screen_layout_id) VALUES "
+                        "(%s, %s, 'controller', 'TEAM_p0', %s, 'LAYOUT_p0')", (pc_id, f"{pc_id} wall", token))
     return {"db": scratch_db, "jwt_secret": jwt_secret, "tokens": tokens}
 
 
@@ -327,33 +330,56 @@ def test_phase0_with_sender_secret(client_src, fleet, tmp_path, cleanup, monkeyp
     assert sender.got("message_sent") == [{"targetId": "PC_A", "status": "delivered"}]
     assert sender.got("message_ack") == [{"targetId": "PC_A", "status": "received"}]
 
-    # The API's own sender path (pcs._deploy_config_to_pcs) authenticates and delivers.
-    from app.api.v1 import pcs as pcs_api
+    # The API's own deploy path (deploy_service, D14) authenticates and delivers to the 1.1.1 PC.
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
     from app.core.config import settings
+    from app.models.pc import PC
+    from app.models.pc_tracking import PcDeployment
+    from app.services import deploy_service
 
     monkeypatch.setattr(settings, "RELAY_SENDER_SECRET", sender_secret)
     monkeypatch.setattr(settings, "WEBSOCKET_HOST", "127.0.0.1")
     monkeypatch.setattr(settings, "WEBSOCKET_PORT", relay.port)
+    monkeypatch.setattr(settings, "DEPLOY_INJECT_CONFIG_ID", True)
     monkeypatch.setattr("app.services.config_loader.load_pc_config", lambda pc_id, db: {"pc": pc_id})
     monkeypatch.setattr("app.services.config_generator.generate_config", lambda cfg, db: _layout("PC_B"))
+    engine = create_engine(fleet["db"])
+    Session = sessionmaker(bind=engine, autoflush=False)
+    try:
+        with Session() as db:
+            summary = deploy_service.deploy_config_to_pcs([db.get(PC, "PC_B")], db,
+                                                          trigger=deploy_service.TRIGGER_PC_DEPLOY)
+        returned = time.monotonic()
+        assert summary["deployed"] == 1, summary
+        result = summary["results"][0]
+        assert (result["delivery"], result["confirmable"]) == ("delivered", False)  # 1.1.1 cannot confirm
+        # The 1.1.1 Client receives the layout with the deploy's config_id at the root ...
+        assert station_b.wait_event("config")["value"] == dict(_layout("PC_B"), config_id=result["config_id"])
 
-    class _Db:
-        def commit(self):
-            pass
+        # ... and its ACK moves the row to received within 2 s, stamping last_applied.
+        def received():
+            with Session() as db:
+                row = db.get(PcDeployment, result["config_id"])
+                return row.status == "received" and row
 
-    class _Pc:
-        id = "PC_B"
-        screen_layout_id = "LAYOUT_p0"
-        last_applied = None
-
-    summary = pcs_api._deploy_config_to_pcs([_Pc()], _Db())
-    assert summary["deployed"] == 1, summary
-    assert station_b.wait_event("config")["value"] == _layout("PC_B")
-    # ... and with the wrong secret the API cannot connect: the deploy is failed, not "deployed".
-    monkeypatch.setattr(settings, "RELAY_SENDER_SECRET", "wrong-" + secrets.token_hex(16))
-    failed = pcs_api._deploy_config_to_pcs([_Pc()], _Db())
-    assert failed["failed"] == 1 and failed["deployed"] == 0
-    assert station_b.count("config") == 1
+        row = _wait(received, 2.0, "the 1.1.1 ACK did not move the row to received within 2 s")
+        assert time.monotonic() - returned < 2.0
+        with Session() as db:
+            assert db.get(PC, "PC_B").last_applied == row.received_at
+            assert db.get(PC, "PC_A").last_applied is None
+        # ... and with the wrong secret the API cannot connect: the deploy is failed, not "deployed".
+        monkeypatch.setattr(settings, "RELAY_SENDER_SECRET", "wrong-" + secrets.token_hex(16))
+        with Session() as db:
+            failed = deploy_service.deploy_config_to_pcs([db.get(PC, "PC_B")], db,
+                                                         trigger=deploy_service.TRIGGER_PC_DEPLOY)
+        assert failed["failed"] == 1 and failed["deployed"] == 0
+        with Session() as db:
+            assert db.get(PcDeployment, failed["results"][0]["config_id"]).status == "relay_failed"
+        assert station_b.count("config") == 1
+    finally:
+        engine.dispose()
 
     # An unauthenticated session may connect, but its message is rejected and nobody is disconnected.
     intruder = Sender(relay.url)

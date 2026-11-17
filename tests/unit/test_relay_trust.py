@@ -564,40 +564,9 @@ def test_sender_auth_payload_and_secret_compare():
     assert not relay_auth.same_token("t1", None) and not relay_auth.same_token(None, None)
 
 
-def test_api_sender_connects_with_the_secret(monkeypatch):
-    """pcs._deploy_config_to_pcs passes the sender auth on connect (and only
-    there: never in the URL)."""
-    from app.api.v1 import pcs as pcs_api
-    from app.core.config import settings
-
-    secret = "fixture-sender-" + secrets.token_hex(16)
-    monkeypatch.setattr(settings, "RELAY_SENDER_SECRET", secret)
-    monkeypatch.setattr(settings, "WEBSOCKET_HOST", "127.0.0.1")
-    monkeypatch.setattr(settings, "WEBSOCKET_PORT", 9)
-    monkeypatch.setattr("app.services.config_loader.load_pc_config", lambda pc_id, db: {"pc": pc_id})
-    monkeypatch.setattr("app.services.config_generator.generate_config", lambda cfg, db: {"screens": [1]})
-    calls = []
-
-    class FakeClient:
-        def __init__(self, *a, **k):
-            pass
-
-        def connect(self, url, **kwargs):
-            calls.append((url, kwargs))
-
-        def emit(self, *a, **k):
-            pass
-
-        def disconnect(self):
-            pass
-
-    monkeypatch.setattr(socketio, "Client", FakeClient)
-    monkeypatch.setattr("time.sleep", lambda s: None)
-    db = SimpleNamespace(commit=lambda: None)
-    summary = pcs_api._deploy_config_to_pcs([SimpleNamespace(id="PC_A", screen_layout_id="L1", last_applied=None)], db)
-    assert summary["deployed"] == 1
-    assert calls == [("http://127.0.0.1:9", {"auth": {"role": "sender", "secret": secret}})]
-    assert secret not in calls[0][0]
+# The API's sender path (deploy_service.socketio_sender, D14) authenticates with
+# the CONNECT auth payload: test_api_sender_connects_with_the_secret moved to
+# tests/unit/test_deploy_path.py with the function it tests.
 
 
 # --------------------------------------------------------------------------- #

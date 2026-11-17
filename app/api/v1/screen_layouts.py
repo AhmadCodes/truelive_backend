@@ -35,7 +35,8 @@ from app.services.team_enforcement import (
     MSG_PC_LAYOUT_DIFFERENT_TEAM,
     MSG_LAYOUT_MOVE_CAMERAS,
 )
-from app.api.v1.pcs import _deploy_config_to_pcs
+from app.schemas.deploy import LayoutDeployResponse
+from app.services.deploy_service import TRIGGER_LAYOUT_DEPLOY, deploy_config_to_pcs
 from app.services.actor import (
     principal_to_actor,
     stamp_created,
@@ -471,8 +472,8 @@ async def unassign_pcs(
     }
 
 
-@router.post("/{layout_id}/deploy")
-async def deploy_screen_layout(
+@router.post("/{layout_id}/deploy", response_model=LayoutDeployResponse)
+def deploy_screen_layout(
     layout_id: str, request: DeployRequest, current_user: AdminUser, db: DBSession
 ):
     """
@@ -483,6 +484,11 @@ async def deploy_screen_layout(
     layout; if any is not, the request is rejected before anything is sent.
 
     Only admins and super admins can deploy screen layouts.
+
+    Each PC gets its own deploy row and config_id (plan 06 D14); the response
+    reports per PC what was delivered, never the generated configuration. A
+    plain ``def``: the relay calls block, so FastAPI runs this route in its
+    threadpool.
 
     Raises:
         HTTPException 404: If the layout is not found
@@ -515,7 +521,9 @@ async def deploy_screen_layout(
     else:
         targets = assigned
 
-    result = _deploy_config_to_pcs(targets, db)
+    result = deploy_config_to_pcs(
+        targets, db, trigger=TRIGGER_LAYOUT_DEPLOY, actor=principal_to_actor(current_user)
+    )
     result["screen_layout_id"] = layout_id
     if result["total"] == 0:
         result["message"] = "No PCs are assigned to this screen layout"

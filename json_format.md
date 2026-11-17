@@ -50,6 +50,7 @@ The configuration JSON defines:
 | `width` | integer | Display width in pixels | Yes |
 | `height` | integer | Display height in pixels | Yes |
 | `screens` | array | Array of screen objects (one per monitor) | Yes |
+| `config_id` | string | The deploy's id (uuid4, at most 64 characters), minted per PC and per deploy; it is also the `pc_deployments` row id. Added by the backend while `DEPLOY_INJECT_CONFIG_ID` is true (default); stations and Core echo it in their acks and reports (plan 06 D14) | No |
 
 **Example:**
 ```json
@@ -179,11 +180,11 @@ Each camera object represents one camera stream configuration.
 {
   "id": "10538_193628",
   "osd_text": " 13-21 Lexington 132 ( 13-21 Lexington)",
-  "url": "rtsp://admin:Usvirtualguard1@66.108.96.217:8554/Streaming/channels/202",
+  "url": "rtsp://<user>:<password>@203.0.113.10:8554/Streaming/channels/202",
   "osd_color": "0xFFDC42FF",
   "LocationUris": [
-    "rtsp://admin:Usvirtualguard1@66.108.96.217:8554/Streaming/channels/202",
-    "rtsp://admin:Usvirtualguard1@66.108.96.217:8554/Streaming/channels/402"
+    "rtsp://<user>:<password>@203.0.113.10:8554/Streaming/channels/202",
+    "rtsp://<user>:<password>@203.0.113.10:8554/Streaming/channels/402"
   ],
   "use_tcp": false
 }
@@ -223,9 +224,9 @@ Each camera object represents one camera stream configuration.
 - **Format**: `rtsp://username:password@host:port/path`
 - **Processing**: Passwords are URL-encoded via `app/utils/url_processor.py`
 - **Special characters**: Characters like `@`, `:`, `/` in passwords are encoded
-  - Example: Password `12345@ny` becomes `12345%40ny`
+  - Example: Password `p@ss` becomes `p%40ss`
 - **Data source**: `Camera.rtsp_url` from database
-- **Example**: `"rtsp://admin:12345%40ny@110emerson.ddns.net:8554/Streaming/Channels/1302"`
+- **Example**: `"rtsp://admin:p%40ss@camera.example.com:8554/Streaming/Channels/1302"`
 
 #### `osd_color` - OSD Text Color
 
@@ -459,9 +460,10 @@ See `json_format.json` for a real-world example with:
          - LocationUris: Get all cameras for this site
    - Sort and organize into proper grid layout
 
-4. **Send via WebSocket**
-   - Serialize JSON
-   - Send to target PC client via Socket.IO `message` event
+4. **Send via WebSocket** (`app/services/deploy_service.py`, plan 06 D14)
+   - Mint a `config_id` per PC, put it at the payload root, and commit a `pc_deployments` row (status `pending`) before sending
+   - Call the relay's sender event `deploy_config` (with an ACK) over an authenticated sender session; the relay answers `delivered`, `offline` or `error`
+   - The relay forwards the payload to the PC as the Socket.IO `config` event; the PC's ACK moves the row to `received`
    - PC client applies configuration and updates display
 
 ### Configuration Update Flow
@@ -485,8 +487,8 @@ Passwords with special characters are URL-encoded:
 | `?` | `%3F` | Question mark |
 
 **Example:**
-- Original: `rtsp://admin:12345@ny@host:554/stream`
-- Encoded: `rtsp://admin:12345%40ny@host:554/stream`
+- Original: `rtsp://admin:p@ss@host:554/stream`
+- Encoded: `rtsp://admin:p%40ss@host:554/stream`
 
 This encoding is handled by `app/utils/url_processor.py` before generating the JSON.
 

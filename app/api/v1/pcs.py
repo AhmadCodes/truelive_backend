@@ -37,6 +37,7 @@ from app.schemas.pc import (
     ImportConfigResponse,
     CopyLayoutResponse,
 )
+from app.schemas.deploy import PCDeployResult
 from app.services.config_importer import import_config_for_pc, copy_layout_from_pc
 from app.services.actor import (
     principal_to_actor,
@@ -690,139 +691,15 @@ async def preview_pc_config(pc_id: str, current_user: AdminUser, db: DBSession):
         )
 
 
-def _deploy_config_to_pcs(pcs: List[PC], db) -> dict:
-    """
-    Deploy the resolved display configuration to a batch of PCs.
-
-    Opens a SINGLE connection to the display client service, loops emitting one
-    config message per PC (``targetId`` = the PC id), then disconnects once. A
-    PC with no assigned screen layout generates an empty config and is reported
-    as ``skipped`` rather than treated as an error. Config generation or delivery
-    failures for one PC are recorded and the batch continues.
-
-    Args:
-        pcs: PCs to deploy to (already loaded from the session)
-        db: Database session
-
-    Returns:
-        Aggregated result: counts plus a per-PC ``results`` list (input order).
-        Each per-PC entry has ``pc_id``, ``status`` (``deployed`` / ``skipped``
-        / ``failed``), ``message`` and ``screens``; deployed entries also carry
-        the generated ``config``.
-    """
-    from app.services.config_loader import load_pc_config
-    from app.services.config_generator import generate_config
-    import socketio as sio_client
-    from app.core.config import settings
-    from app.services.relay_auth import sender_auth
-    import time
-
-    results: dict = {}
-    configs: dict = {}
-
-    # 1. Generate each PC's config up front; separate no-layout and failures.
-    for pc in pcs:
-        if pc.screen_layout_id is None:
-            results[pc.id] = {
-                "pc_id": pc.id,
-                "status": "skipped",
-                "message": "No screen layout is assigned to this deployment target",
-                "screens": 0,
-            }
-            continue
-        try:
-            logger.info(f"Generating device config for PC {pc.id}")
-            device_config = generate_config(load_pc_config(pc.id, db), db)
-            configs[pc.id] = device_config
-        except Exception as e:
-            logger.error(f"Error generating config for PC {pc.id}: {e}")
-            results[pc.id] = {
-                "pc_id": pc.id,
-                "status": "failed",
-                "message": "Failed to generate the display configuration",
-                "screens": 0,
-            }
-
-    # 2. Deliver over a single connection to the display client service.
-    if configs:
-        sio = sio_client.Client()
-        websocket_host = (
-            "websocket"
-            if settings.WEBSOCKET_HOST == "0.0.0.0"
-            else settings.WEBSOCKET_HOST
-        )
-        websocket_url = f"http://{websocket_host}:{settings.WEBSOCKET_PORT}"
-        connected = False
-        try:
-            logger.info(f"Connecting to display client service at {websocket_url}")
-            # D12: a sender session authenticates with RELAY_SENDER_SECRET in
-            # the CONNECT auth payload (never in the URL).
-            sio.connect(websocket_url, auth=sender_auth(settings.RELAY_SENDER_SECRET))
-            connected = True
-        except Exception as e:
-            logger.error(f"Could not reach display client service: {e}")
-
-        if not connected:
-            for pc in pcs:
-                if pc.id in configs:
-                    results[pc.id] = {
-                        "pc_id": pc.id,
-                        "status": "failed",
-                        "message": "Could not reach the display client to deploy the configuration",
-                        "screens": len(configs[pc.id].get("screens", [])),
-                    }
-        else:
-            for pc in pcs:
-                if pc.id not in configs:
-                    continue
-                device_config = configs[pc.id]
-                try:
-                    sio.emit(
-                        "message",
-                        {"type": "config", "targetId": pc.id, "content": device_config},
-                    )
-                    pc.last_applied = int(time.time())
-                    results[pc.id] = {
-                        "pc_id": pc.id,
-                        "status": "deployed",
-                        "message": f"Configuration deployed to PC {pc.id}",
-                        "screens": len(device_config.get("screens", [])),
-                        "config": device_config,
-                    }
-                except Exception as e:
-                    logger.error(f"Error deploying config to PC {pc.id}: {e}")
-                    results[pc.id] = {
-                        "pc_id": pc.id,
-                        "status": "failed",
-                        "message": "Could not reach the display client to deploy the configuration",
-                        "screens": len(device_config.get("screens", [])),
-                    }
-
-            # Single short settle before tearing the connection down.
-            time.sleep(0.5)
-            try:
-                sio.disconnect()
-            except Exception:
-                pass
-            db.commit()
-
-    ordered = [results[pc.id] for pc in pcs]
-    return {
-        "total": len(pcs),
-        "deployed": sum(1 for r in ordered if r["status"] == "deployed"),
-        "skipped": sum(1 for r in ordered if r["status"] == "skipped"),
-        "failed": sum(1 for r in ordered if r["status"] == "failed"),
-        "results": ordered,
-    }
-
-
-@router.post("/{pc_id}/deploy")
-async def deploy_config(pc_id: str, current_user: AdminUser, db: DBSession):
+@router.post("/{pc_id}/deploy", response_model=PCDeployResult)
+def deploy_config(pc_id: str, current_user: AdminUser, db: DBSession):
     """
     Deploy configuration to a PC via the display client service.
 
-    Generates the device configuration and sends it to the target PC
-    if it's currently connected.
+    Generates the device configuration, records the deploy (``pc_deployments``,
+    committed before the send) and hands it to the relay (plan 06 D14). A
+    plain ``def``: the relay call blocks, so FastAPI runs this route in its
+    threadpool and the event loop keeps serving other requests.
 
     Args:
         pc_id: PC ID
@@ -830,11 +707,16 @@ async def deploy_config(pc_id: str, current_user: AdminUser, db: DBSession):
         db: Database session
 
     Returns:
-        Deployment status
+        ``{pc_id, status, delivery, config_id, confirmable, message, screens}``
+        (never the generated configuration).
 
     Raises:
-        HTTPException: If PC not found, has no layout, or delivery fails
+        HTTPException: 404 if the PC is not found, 409 if it has no layout,
+        502 if the layout was not delivered (offline PC, relay unreachable or
+        no answer).
     """
+    from app.services.deploy_service import TRIGGER_PC_DEPLOY, deploy_config_to_pcs
+
     # Verify PC exists
     pc = db.query(PC).filter(PC.id == pc_id).first()
     if not pc:
@@ -849,7 +731,9 @@ async def deploy_config(pc_id: str, current_user: AdminUser, db: DBSession):
             detail=f"No screen layout is assigned to PC '{pc_id}'; assign a layout before deploying",
         )
 
-    summary = _deploy_config_to_pcs([pc], db)
+    summary = deploy_config_to_pcs(
+        [pc], db, trigger=TRIGGER_PC_DEPLOY, actor=principal_to_actor(current_user)
+    )
     result = summary["results"][0]
 
     if result["status"] == "failed":
@@ -857,13 +741,7 @@ async def deploy_config(pc_id: str, current_user: AdminUser, db: DBSession):
             status_code=status.HTTP_502_BAD_GATEWAY, detail=result["message"]
         )
 
-    return {
-        "pc_id": pc_id,
-        "status": result["status"],
-        "message": result["message"],
-        "screens": result["screens"],
-        "config": result.get("config", {}),
-    }
+    return result
 
 
 @router.post(

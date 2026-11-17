@@ -10,8 +10,9 @@ relay tasks after it (D14, D15, C10, D30).
   under eventlet.
 * ``RelayHarness`` records every emit per recipient sid (rooms are expanded
   from ``enter_room`` calls), serves ``get_db`` from an in-memory SQLite
-  database that holds only the ``pcs`` table, and mints PC tokens with the
-  process's throwaway JWT_SECRET.
+  database that holds only the ``pcs`` table (plus ``pc_deployments`` with
+  ``deploy_tables=True``, D14), runs the relay's background tasks inline,
+  and mints PC tokens with the process's throwaway JWT_SECRET.
 """
 
 import os
@@ -57,7 +58,7 @@ def make_pc_token(pc_id: str, secret: str, *, token_type: Optional[str] = "pc_au
 class RelayHarness:
     """Drives the relay's handlers in-process."""
 
-    def __init__(self, relay, monkeypatch):
+    def __init__(self, relay, monkeypatch, deploy_tables: bool = False):
         self.relay = relay
         self.monkeypatch = monkeypatch
         self.emits: List[Tuple[str, Any, Optional[str], Any]] = []
@@ -73,14 +74,27 @@ class RelayHarness:
         monkeypatch.setattr(relay.sio, "emit", self._emit)
         monkeypatch.setattr(relay.sio, "enter_room", self._enter_room)
         monkeypatch.setattr(relay.sio, "disconnect", lambda sid, *a, **k: self.disconnects.append(sid))
+        # Background tasks (ACK-callback DB writes, D14) run inline.
+        monkeypatch.setattr(relay, "_spawn", lambda fn, *args: fn(*args))
+        relay.pending_deploy_events.clear()
 
         from app.models.pc import PC
+        from app.models.pc_tracking import PcDeployment
 
         self.engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-        table = PC.__table__.to_metadata(MetaData())
-        for constraint in list(table.foreign_key_constraints):
-            table.constraints.discard(constraint)
-        table.create(self.engine)
+        meta = MetaData()
+        models = (PC, PcDeployment) if deploy_tables else (PC,)
+        tables = [model.__table__.to_metadata(meta) for model in models]
+        pcs_table = tables[0]
+        for constraint in list(pcs_table.foreign_key_constraints):
+            pcs_table.constraints.discard(constraint)
+        if deploy_tables:
+            deployments = tables[1]
+            for constraint in list(deployments.foreign_key_constraints):
+                if constraint.elements[0].target_fullname.split(".")[0] != "pcs":
+                    deployments.constraints.discard(constraint)
+        for table in tables:  # one by one: create_all would resolve the dropped foreign keys
+            table.create(self.engine)
         self.Session = sessionmaker(bind=self.engine, autoflush=False)
         self.db_fails = False
         monkeypatch.setattr(relay, "get_db", self._get_db)

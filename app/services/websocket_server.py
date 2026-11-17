@@ -30,12 +30,30 @@ Trust baseline (plan 06 D12, OD-23):
 * Engine.IO / Socket.IO packet logging follows RELAY_DEBUG_LOGGING (off by
   default): packets carry tokens and layouts (NEW-56).
 
+Deploy path (plan 06 D14):
+
+* ``deploy_config`` is a sender event the API calls with an ACK
+  (``{config_id, targetId, content}``). The relay answers
+  ``{status: delivered|offline|error, config_id, confirmable, reason?}`` and,
+  when delivered, forwards ``content`` to the PC as the ``config`` event with
+  a callback. The PC's ACK (Client 1.1.x ACKs every ``config``) moves the
+  ``pc_deployments`` row to ``received``, and for a non-confirmable row
+  (Client 1.1.x, which cannot report results) stamps ``pcs.last_applied``.
+* ``confirmable``: the PC registered with the capability ``deploy_result.v1``,
+  ``registered`` advertised that feature to it, and the payload carries the
+  deploy's config_id at its root. Only then can the station report applied.
+* Database writes from ACK callbacks run off the hub (eventlet.tpool) in a
+  background task. An update that finds no row yet, or hits a database
+  error, is kept in ``pending_deploy_events`` and retried every few seconds
+  until it applies or expires (deploy_tracking.PendingTransitions).
+
 The relay never rotates JWT_SECRET (OD-23: rotation only through D30).
 """
 import functools
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
@@ -47,7 +65,7 @@ from app.core.config import settings
 from app.database import get_db
 from app.models.pc import PC
 from app.schemas import station_protocol
-from app.services import relay_auth
+from app.services import deploy_tracking, relay_auth
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +104,17 @@ MSG_UNKNOWN_PC = "This PC is not registered in the portal"
 MSG_TOKEN_REPLACED = "Authentication token has been replaced; enter the current PC token"
 MSG_SENDER_REGISTER = "Sender sessions cannot register as a PC"
 MSG_NOT_AUTHORIZED = "Not authorized"
+
+# deploy_config (D14): the sender event and its answers.
+DEPLOY_EVENT = "deploy_config"
+DEPLOY_DELIVERED = "delivered"
+DEPLOY_OFFLINE = "offline"
+DEPLOY_ERROR = "error"
+MAX_TARGET_ID_LENGTH = 64
+_CONFIG_ID_RE = re.compile(r"^[\x21-\x7e]{1,%d}$" % station_protocol.MAX_CONFIG_ID_LENGTH)
+_CAPABILITY_RE = re.compile(station_protocol.CAPABILITY_PATTERN)
+# How often deploy events kept for a missing row (or a database error) are retried.
+DEPLOY_EVENT_RETRY_SECONDS = 5
 
 
 def _packet_logger(name: str, debug_logging: bool) -> logging.Logger:
@@ -193,7 +222,14 @@ relay_counters: Dict[str, int] = {
     "duplicate_registrations": 0,
     "rejected_registrations": 0,
     "rejected_messages": 0,
+    "deploys_forwarded": 0,
+    "deploys_offline": 0,
+    "deploys_rejected": 0,
+    "deploy_receipts": 0,
 }
+
+# Deploy events whose row did not exist yet, or whose write failed (D14).
+pending_deploy_events = deploy_tracking.PendingTransitions()
 
 _legacy_open_warned = False
 
@@ -253,13 +289,13 @@ def advertised_features() -> List[str]:
     return features
 
 
-def registered_payload(pc_id: str) -> Dict[str, Any]:
+def registered_payload(pc_id: str, features: Optional[List[str]] = None) -> Dict[str, Any]:
     """The ``registered`` event (RegisteredV1). Client 1.1.x reads only pc_id
     and message; the rest is additive."""
     return {
         "pc_id": pc_id,
         "message": "Successfully registered",
-        "features": advertised_features(),
+        "features": advertised_features() if features is None else list(features),
         "protocol_hash": station_protocol.protocol_hash(),
     }
 
@@ -278,7 +314,36 @@ def _new_session(role: str) -> Dict[str, Any]:
         "ever_registered": False,
         "flags": {},
         "superseded_by": None,
+        # RegisterV1.capabilities as sent, and the features ``registered``
+        # advertised to this session (D14: confirmable deploys).
+        "capabilities": [],
+        "features": [],
     }
+
+
+def parse_capabilities(data: Any) -> List[str]:
+    """RegisterV1.capabilities: at most 16 names of at most 32 characters
+    (D1/E20). A malformed list counts as none, so such a station is never
+    treated as able to confirm deploys."""
+    caps = data.get("capabilities") if isinstance(data, dict) else None
+    if not isinstance(caps, list) or len(caps) > station_protocol.MAX_CAPABILITIES:
+        return []
+    out: List[str] = []
+    for cap in caps:
+        if (not isinstance(cap, str) or not cap or len(cap) > station_protocol.MAX_CAPABILITY_LENGTH
+                or not _CAPABILITY_RE.match(cap)):
+            return []
+        if cap not in out:
+            out.append(cap)
+    return out
+
+
+def session_confirmable(sid: str) -> bool:
+    """The PC on ``sid`` can report deploy results (D14, D15): it declared
+    ``deploy_result.v1`` and ``registered`` advertised it to that session."""
+    session = session_data.get(sid) or {}
+    feature = station_protocol.FEATURE_DEPLOY_RESULT
+    return feature in (session.get("capabilities") or ()) and feature in (session.get("features") or ())
 
 
 def legacy_open() -> bool:
@@ -601,17 +666,20 @@ def register(sid, data):
             del connected_pcs[old_pc]
 
         # Register PC
+        features = advertised_features()
         connected_pcs[pc_id] = sid
         session["pc_id"] = pc_id
         session["name"] = name
         session["ever_registered"] = True
         session["superseded_by"] = None
         session["flags"] = flags
+        session["capabilities"] = parse_capabilities(data)
+        session["features"] = features
 
         logger.info(f"PC registered: {pc_id} (sid: {sid}, name: {name})")
 
         # Confirm registration to client
-        sio.emit("registered", registered_payload(pc_id), room=sid)
+        sio.emit("registered", registered_payload(pc_id, features), room=sid)
 
         # Broadcast updated client list
         broadcast_client_list()
@@ -723,6 +791,157 @@ def message(sid, data):
         sio.emit("error", {"message": "Message routing failed"}, room=sid)
 
 
+# --------------------------------------------------------------------------- #
+# Deploy path (D14)
+# --------------------------------------------------------------------------- #
+
+
+def _run_blocking(fn: Callable, *args) -> Any:
+    """Run a blocking call (psycopg2) without stalling the hub: under eventlet
+    on a real OS thread (eventlet.tpool), else inline."""
+    if ASYNC_MODE == "eventlet":
+        from eventlet import tpool
+
+        return tpool.execute(fn, *args)
+    return fn(*args)
+
+
+def _spawn(fn: Callable, *args) -> None:
+    """Run ``fn`` as a background task (greenlet / thread), so an ACK callback
+    returns at once. Tests replace it with an inline call."""
+    sio.start_background_task(fn, *args)
+
+
+def _open_db():
+    return next(get_db())
+
+
+def _apply_and_commit(apply: Callable) -> deploy_tracking.TransitionResult:
+    db = _open_db()
+    try:
+        result = apply(db)
+        db.commit()
+        return result
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        db.close()
+
+
+def _record_receipt(config_id: str, pc_id: str, confirmable: bool, forwarded_at: int, received_at: int) -> None:
+    """The PC ACKed deploy ``config_id``: mark it received (and, for a
+    non-confirmable row, stamp pcs.last_applied). Kept for retry when the row
+    does not exist yet or the database fails."""
+
+    def apply(db):
+        return deploy_tracking.record_receipt(db, config_id, pc_id, confirmable=confirmable, ts=received_at,
+                                              forwarded_at=forwarded_at)
+
+    try:
+        result = _run_blocking(_apply_and_commit, apply)
+    except Exception as exc:
+        logger.error(f"Could not record receipt of deploy {config_id} by PC {pc_id}: {type(exc).__name__}; "
+                     f"kept for retry")
+        pending_deploy_events.add(config_id, apply, label="received")
+        return
+    if result.outcome == "missing":
+        logger.warning(f"Receipt of deploy {config_id} by PC {pc_id} arrived before its row; kept for retry")
+        pending_deploy_events.add(config_id, apply, label="received")
+    elif result.outcome == "mismatch":
+        logger.warning(f"Receipt of deploy {config_id} from PC {pc_id} does not match the row's PC; ignored")
+    else:
+        relay_counters["deploy_receipts"] += 1
+        logger.info(f"Deploy {config_id} received by PC {pc_id} (status {result.status})")
+
+
+def retry_pending_deploy_events() -> None:
+    """Retry kept deploy events (one session for all of them)."""
+    if not len(pending_deploy_events):
+        return
+    applied, kept = _run_blocking(pending_deploy_events.retry, _open_db)
+    if applied or kept:
+        logger.info(f"Deploy event retry: {applied} applied, {kept} still kept")
+
+
+def _deploy_answer(status: str, config_id: Any = None, *, confirmable: bool = False,
+                   reason: Optional[str] = None) -> Dict[str, Any]:
+    answer: Dict[str, Any] = {"status": status, "config_id": config_id if isinstance(config_id, str) else None,
+                              "confirmable": bool(confirmable)}
+    if reason:
+        answer["reason"] = reason
+    return answer
+
+
+@sio.on(DEPLOY_EVENT)
+def deploy_config(sid, data=None):
+    """
+    Deliver one deploy to a PC (sender sessions only; the API calls it with
+    an ACK, D14).
+
+    Expected data: ``{config_id: str (<= 64 printable), targetId: str,
+    content: dict}``. When ``content`` carries a root ``config_id``, it must
+    equal ``config_id``.
+
+    Returns (the caller's ACK) ``{status, config_id, confirmable, reason?}``:
+    ``delivered`` when the layout was handed to the PC's current session,
+    ``offline`` when the PC has none, ``error`` for a refused request. The
+    layout itself is never logged.
+    """
+    try:
+        if not _is_sender(sid):
+            relay_counters["deploys_rejected"] += 1
+            logger.warning(f"Rejected {DEPLOY_EVENT} from {sid}: not a sender session")
+            return _deploy_answer(DEPLOY_ERROR, reason="not authorized")
+        if session_data.get(sid, {}).get("role") != ROLE_SENDER:
+            _warn_legacy_open_once()
+        if not isinstance(data, dict):
+            relay_counters["deploys_rejected"] += 1
+            return _deploy_answer(DEPLOY_ERROR, reason="invalid request")
+        config_id = data.get("config_id")
+        target_id = data.get("targetId")
+        content = data.get("content")
+        if not isinstance(config_id, str) or not _CONFIG_ID_RE.match(config_id):
+            relay_counters["deploys_rejected"] += 1
+            return _deploy_answer(DEPLOY_ERROR, reason="invalid config_id")
+        if not isinstance(target_id, str) or not target_id or len(target_id) > MAX_TARGET_ID_LENGTH:
+            relay_counters["deploys_rejected"] += 1
+            return _deploy_answer(DEPLOY_ERROR, config_id, reason="invalid targetId")
+        if not isinstance(content, dict):
+            relay_counters["deploys_rejected"] += 1
+            return _deploy_answer(DEPLOY_ERROR, config_id, reason="invalid content")
+        root_id = content.get("config_id")
+        if root_id is not None and root_id != config_id:
+            relay_counters["deploys_rejected"] += 1
+            return _deploy_answer(DEPLOY_ERROR, config_id, reason="config_id mismatch")
+
+        target_sid = connected_pcs.get(target_id)
+        if target_sid is None or _registered_pc(target_sid) != target_id:
+            relay_counters["deploys_offline"] += 1
+            logger.info(f"Deploy {config_id}: PC {target_id} is not connected")
+            return _deploy_answer(DEPLOY_OFFLINE, config_id)
+
+        confirmable = session_confirmable(target_sid) and root_id == config_id
+        forwarded_at = deploy_tracking.now_ts()
+
+        def _on_pc_ack(*_ack):
+            # Any ACK proves the Client's config handler ran (receipt); its
+            # payload, if any, is not trusted for anything else.
+            _spawn(_record_receipt, config_id, target_id, confirmable, forwarded_at, deploy_tracking.now_ts())
+
+        forward_to_pc(target_sid, "config", content, callback=_on_pc_ack)
+        relay_counters["deploys_forwarded"] += 1
+        logger.info(f"Deploy {config_id} forwarded to PC {target_id} (sid: {target_sid}, "
+                    f"confirmable={'yes' if confirmable else 'no'})")
+        return _deploy_answer(DEPLOY_DELIVERED, config_id, confirmable=confirmable)
+    except Exception as e:
+        logger.error(f"Error in {DEPLOY_EVENT} from {sid}: {type(e).__name__}")
+        return _deploy_answer(DEPLOY_ERROR, reason="relay error")
+
+
 @sio.event
 def get_clients(sid, data=None):
     """
@@ -800,6 +1019,16 @@ def _last_seen_sweep(interval_seconds: int):
                 db.close()
 
 
+def _deploy_events_loop(interval_seconds: float):
+    """Background task: retry kept deploy events (D14). Never dies."""
+    while True:
+        sio.sleep(interval_seconds)
+        try:
+            retry_pending_deploy_events()
+        except Exception as exc:
+            logger.error(f"Deploy event retry loop error: {type(exc).__name__}")
+
+
 def run_server(host: str = "0.0.0.0", port: int = 8080):
     """
     Run the WebSocket server.
@@ -831,6 +1060,7 @@ def run_server(host: str = "0.0.0.0", port: int = 8080):
 
     sweep_interval = int(os.environ.get("WS_LAST_SEEN_SWEEP_SECONDS", "30"))
     sio.start_background_task(_last_seen_sweep, sweep_interval)
+    sio.start_background_task(_deploy_events_loop, DEPLOY_EVENT_RETRY_SECONDS)
 
     try:
         eventlet.wsgi.server(eventlet.listen((host, port)), app, log_output=True)
