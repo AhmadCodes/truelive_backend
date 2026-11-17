@@ -363,7 +363,10 @@ def test_reports_only_from_the_current_registered_session(h, case):
 
 
 def test_features_follow_handlers_and_the_reports_switch(h, monkeypatch):
-    handlers = dict(relay.sio.handlers["/"])
+    # Start from a relay without the event-backed handlers (D15 and C10 add
+    # them to the module), so the gating itself is what is tested.
+    handlers = {name: fn for name, fn in relay.sio.handlers["/"].items()
+                if name not in relay.FEATURE_EVENTS.values()}
     monkeypatch.setitem(relay.sio.handlers, "/", handlers)
 
     assert relay.advertised_features() == []

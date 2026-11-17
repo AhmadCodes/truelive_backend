@@ -10,9 +10,10 @@ relay tasks after it (D14, D15, C10, D30).
   under eventlet.
 * ``RelayHarness`` records every emit per recipient sid (rooms are expanded
   from ``enter_room`` calls), serves ``get_db`` from an in-memory SQLite
-  database that holds only the ``pcs`` table (plus ``pc_deployments`` with
-  ``deploy_tables=True``, D14), runs the relay's background tasks inline,
-  and mints PC tokens with the process's throwaway JWT_SECRET.
+  database that holds only the ``pcs`` table (plus ``pc_deployments`` and
+  ``pc_health`` with ``deploy_tables=True``, D14/D15), runs the relay's
+  background tasks inline, empties its report buffers, and mints PC tokens
+  with the process's throwaway JWT_SECRET.
 """
 
 import os
@@ -77,22 +78,23 @@ class RelayHarness:
         # Background tasks (ACK-callback DB writes, D14) run inline.
         monkeypatch.setattr(relay, "_spawn", lambda fn, *args: fn(*args))
         relay.pending_deploy_events.clear()
+        relay.health_buffer.clear()
+        relay.report_ids.clear()
 
         from app.models.pc import PC
-        from app.models.pc_tracking import PcDeployment
+        from app.models.pc_tracking import PcDeployment, PcHealth
 
         self.engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
         meta = MetaData()
-        models = (PC, PcDeployment) if deploy_tables else (PC,)
+        models = (PC, PcDeployment, PcHealth) if deploy_tables else (PC,)
         tables = [model.__table__.to_metadata(meta) for model in models]
         pcs_table = tables[0]
         for constraint in list(pcs_table.foreign_key_constraints):
             pcs_table.constraints.discard(constraint)
-        if deploy_tables:
-            deployments = tables[1]
-            for constraint in list(deployments.foreign_key_constraints):
+        for table in tables[1:]:
+            for constraint in list(table.foreign_key_constraints):
                 if constraint.elements[0].target_fullname.split(".")[0] != "pcs":
-                    deployments.constraints.discard(constraint)
+                    table.constraints.discard(constraint)
         for table in tables:  # one by one: create_all would resolve the dropped foreign keys
             table.create(self.engine)
         self.Session = sessionmaker(bind=self.engine, autoflush=False)

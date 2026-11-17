@@ -100,6 +100,27 @@ require_current_token=... packet_logging=... features=...` shows the active mode
 The HTTP endpoint `/api/connected-pcs` is unchanged and still unauthenticated
 (open question 21); the compose file publishes the relay port on all interfaces.
 
+**Deploy tracking (D14).** Every deploy is a `pc_deployments` row whose id is the
+`config_id` put at the payload root (`DEPLOY_INJECT_CONFIG_ID=false` sends the
+layout unchanged; nothing is then confirmable). The row is committed before the API
+calls the relay's `deploy_config` (answer: delivered, offline or error); the PC's
+Socket.IO ACK makes the relay mark it `received`, and for Client 1.1.x, whose rows
+end there, stamp `pcs.last_applied`. Deploy responses never carry the layout.
+
+**Station reports (D15).** Clients that register with the capability
+`deploy_result.v1` / `station_status.v1` get those features in `registered` and
+report through them; reports are validated (D1, 64 KB, no credentials), deduplicated
+by message_id and answered with an ACK. `RELAY_STATION_REPORTS=off` (kill switch)
+answers every report `disabled` and advertises `station_reports.disabled`; deploys
+keep flowing and end at `received`. Health goes to `pc_health` in one batched upsert
+every 15 s; a relay restart loses at most that much. A timeout sweep every 30 s marks
+pending rows older than 60 s `relay_failed` and confirmable rows not confirmed within
+`DEPLOY_ACK_TIMEOUT_SEC` (accepted rows: twice that) `unconfirmed`. The start line
+`Relay reports: station_reports=... health_flush=15s deploy_sweep=30s ack_timeout=300s`
+shows the mode (`RELAY_HEALTH_FLUSH_SECONDS` and `RELAY_DEPLOY_SWEEP_SECONDS` exist
+for tests; leave them unset in production). Presence stamps (`last_connected`,
+`last_seen`, `last_applied`) no longer move `pcs.updated_at`.
+
 **Startup self-check.** Each of the four services logs one line at start:
 
 ```

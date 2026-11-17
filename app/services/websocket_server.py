@@ -47,6 +47,32 @@ Deploy path (plan 06 D14):
   error, is kept in ``pending_deploy_events`` and retried every few seconds
   until it applies or expires (deploy_tracking.PendingTransitions).
 
+Station reports (plan 06 D15; C23, E20, NEW-44, NEW-52):
+
+* ``deploy_result`` and ``station_status`` are served only to the PC's
+  current registered session (``requires_registered_pc``), and only while
+  RELAY_STATION_REPORTS is on (else every call answers ``disabled``). Each
+  report is bounded (64 KB), validated against D1 (no credentials anywhere),
+  deduplicated by (pc_id, message_id) over the last 10 000, and answered with
+  a ReportAckV1 (ok, duplicate, rejected, disabled).
+* deploy_result moves the deploy's row (deploy_tracking: monotonic, late
+  evidence upgrades unconfirmed, applied may become failed); a row of another
+  PC is rejected. ``applied`` stamps pcs.last_applied. An id with no row
+  updates only the PC's running_config_id (and is kept for retry unless the
+  Client minted it).
+* station_status keeps only the allow-listed pc_health columns
+  (station_reports.health_columns) in ``health_buffer``; register adds the
+  E20 version fields (each checked, invalid ones dropped). One background
+  flush every RELAY_HEALTH_FLUSH_SECONDS (15) writes the buffer with one
+  batched upsert, off the hub. A relay restart loses at most that much health.
+* A timeout sweep every 30 s (deploy_tracking.sweep_timeouts): pending > 60 s
+  becomes relay_failed; confirmable rows delivered or received for more than
+  DEPLOY_ACK_TIMEOUT_SEC, or accepted for twice that, become unconfirmed;
+  Client 1.1.x rows stay received.
+* Every relay database call runs off the hub (``_run_blocking``), and the
+  presence writes (register stamp, last_seen sweep) leave pcs.updated_at
+  alone (NEW-52).
+
 The relay never rotates JWT_SECRET (OD-23: rotation only through D30).
 """
 import functools
@@ -60,12 +86,14 @@ from typing import Any, Callable, Dict, List, Optional
 
 import jwt
 import socketio
+from pydantic import ValidationError
+from sqlalchemy import update
 
 from app.core.config import settings
 from app.database import get_db
 from app.models.pc import PC
 from app.schemas import station_protocol
-from app.services import deploy_tracking, relay_auth
+from app.services import deploy_tracking, relay_auth, station_reports
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +143,12 @@ _CONFIG_ID_RE = re.compile(r"^[\x21-\x7e]{1,%d}$" % station_protocol.MAX_CONFIG_
 _CAPABILITY_RE = re.compile(station_protocol.CAPABILITY_PATTERN)
 # How often deploy events kept for a missing row (or a database error) are retried.
 DEPLOY_EVENT_RETRY_SECONDS = 5
+# Station reports (D15). The intervals can be shortened for tests by env.
+HEALTH_FLUSH_SECONDS = float(os.environ.get("RELAY_HEALTH_FLUSH_SECONDS", "15"))
+DEPLOY_SWEEP_SECONDS = float(os.environ.get("RELAY_DEPLOY_SWEEP_SECONDS", "30"))
+REPORT_DEPLOY_RESULT = station_protocol.EVENT_DEPLOY_RESULT
+REPORT_STATION_STATUS = station_protocol.EVENT_STATION_STATUS
+_SAFE_LOC_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 
 
 def _packet_logger(name: str, debug_logging: bool) -> logging.Logger:
@@ -226,10 +260,21 @@ relay_counters: Dict[str, int] = {
     "deploys_offline": 0,
     "deploys_rejected": 0,
     "deploy_receipts": 0,
+    "reports_ok": 0,
+    "reports_duplicate": 0,
+    "reports_rejected": 0,
+    "reports_disabled": 0,
+    "health_batches": 0,
+    "health_rows": 0,
 }
 
 # Deploy events whose row did not exist yet, or whose write failed (D14).
 pending_deploy_events = deploy_tracking.PendingTransitions()
+
+# Latest pending pc_health columns per PC, flushed in batches (D15).
+health_buffer = station_reports.HealthBuffer()
+# (pc_id, message_id) of the last reports accepted (D15 deduplication).
+report_ids = station_reports.MessageIdLRU()
 
 _legacy_open_warned = False
 
@@ -325,17 +370,7 @@ def parse_capabilities(data: Any) -> List[str]:
     """RegisterV1.capabilities: at most 16 names of at most 32 characters
     (D1/E20). A malformed list counts as none, so such a station is never
     treated as able to confirm deploys."""
-    caps = data.get("capabilities") if isinstance(data, dict) else None
-    if not isinstance(caps, list) or len(caps) > station_protocol.MAX_CAPABILITIES:
-        return []
-    out: List[str] = []
-    for cap in caps:
-        if (not isinstance(cap, str) or not cap or len(cap) > station_protocol.MAX_CAPABILITY_LENGTH
-                or not _CAPABILITY_RE.match(cap)):
-            return []
-        if cap not in out:
-            out.append(cap)
-    return out
+    return station_reports.parse_capabilities(data) or []
 
 
 def session_confirmable(sid: str) -> bool:
@@ -474,17 +509,17 @@ def _authorize_pc(pc_id: str, auth_token: str) -> PcCheck:
     db = None
     try:
         db = next(get_db())
-        pc = db.query(PC).filter(PC.id == pc_id).first()
+        pc = db.query(PC.id, PC.auth_token).filter(PC.id == pc_id).first()
         if pc is None:
             return PcCheck(PcCheck.UNKNOWN_PC)
         current = _token_is_current(pc, auth_token, db)
         if not current and settings.RELAY_REQUIRE_CURRENT_TOKEN:
             return PcCheck(PcCheck.TOKEN_REPLACED, token_current=False)
         now_ts = int(time.time())  # Unix timestamp
-        pc.last_connected = now_ts
-        # Seed last_seen immediately so a freshly-connected PC isn't
-        # up to one sweep-interval stale.
-        pc.last_seen = now_ts
+        # Seed last_seen immediately so a freshly-connected PC isn't up to one
+        # sweep-interval stale. A presence stamp, not an edit: updated_at is
+        # kept (NEW-52).
+        db.execute(_presence_update([pc_id], last_connected=now_ts, last_seen=now_ts))
         db.commit()
         return PcCheck(PcCheck.OK, token_current=current)
     except Exception as db_error:
@@ -498,6 +533,13 @@ def _authorize_pc(pc_id: str, auth_token: str) -> PcCheck:
     finally:
         if db is not None:
             db.close()
+
+
+def _presence_update(pc_ids: List[str], **values):
+    """UPDATE pcs with presence columns only. ``updated_at`` is set to itself,
+    so its onupdate default does not fire (NEW-52: presence is not an edit)."""
+    table = PC.__table__
+    return update(table).where(table.c.id.in_(pc_ids)).values(updated_at=table.c.updated_at, **values)
 
 
 def _refuse_registration(sid: str, message: str, log_reason: str) -> None:
@@ -633,7 +675,7 @@ def register(sid, data):
         # Use token's PC ID as authoritative
         pc_id = token_pc_id
 
-        check = _authorize_pc(pc_id, auth_token)
+        check = _run_blocking(_authorize_pc, pc_id, auth_token)
         if check.status == PcCheck.UNKNOWN_PC:
             _refuse_registration(sid, MSG_UNKNOWN_PC, f"PC {pc_id} not found in database")
             return
@@ -675,6 +717,15 @@ def register(sid, data):
         session["flags"] = flags
         session["capabilities"] = parse_capabilities(data)
         session["features"] = features
+        session["status_seen"] = False  # D17: catch-up is decided on the first station_status
+
+        # E20: the register's version fields, each checked; stored with the
+        # relay flags at the next health flush. pc_id is the session's.
+        columns, dropped = station_reports.register_columns(data, int(time.time()), flags)
+        session["client_version"] = columns.get("client_version")
+        if dropped:
+            logger.warning(f"PC {pc_id} register: ignored invalid field(s) {', '.join(sorted(dropped))}")
+        health_buffer.put(pc_id, columns)
 
         logger.info(f"PC registered: {pc_id} (sid: {sid}, name: {name})")
 
@@ -942,6 +993,203 @@ def deploy_config(sid, data=None):
         return _deploy_answer(DEPLOY_ERROR, reason="relay error")
 
 
+# --------------------------------------------------------------------------- #
+# Station reports (D15)
+# --------------------------------------------------------------------------- #
+
+
+def _ack(status: str, message_id: Any = None, reason: Optional[str] = None) -> Dict[str, Any]:
+    """A ReportAckV1."""
+    ack: Dict[str, Any] = {"status": status}
+    if isinstance(message_id, str) and _CONFIG_ID_RE.match(message_id):
+        ack["message_id"] = message_id
+    if reason:
+        ack["reason"] = reason
+    relay_counters[f"reports_{status}"] = relay_counters.get(f"reports_{status}", 0) + 1
+    return ack
+
+
+def reports_gate(handler: Callable) -> Callable:
+    """RELAY_STATION_REPORTS=off: every report handler answers ``disabled``
+    (checked first, before the session check)."""
+
+    @functools.wraps(handler)
+    def wrapper(sid, data=None):
+        if not settings.RELAY_STATION_REPORTS:
+            return _ack("disabled")
+        return handler(sid, data)
+
+    return wrapper
+
+
+def _validated_report(name: str, pc_id: str, data: Any):
+    """``(model, None)`` or ``(None, rejected_ack)``: size bound, D1
+    validation (no credentials, capped lists), never logging values."""
+    message_id = data.get("message_id") if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        return None, _ack("rejected", reason="report is not an object")
+    if station_reports.report_size(data) > station_protocol.MAX_REPORT_BYTES:
+        logger.warning(f"Rejected {name} from PC {pc_id}: larger than {station_protocol.MAX_REPORT_BYTES} bytes")
+        return None, _ack("rejected", message_id, "report too large")
+    try:
+        return station_protocol.validate(name, data), None
+    except ValidationError as exc:
+        # Field paths only; a part that is not a plain name (a dict key the
+        # station chose) is shown as <key>, so no payload text reaches the log.
+        fields = sorted({".".join(str(p) if isinstance(p, int) or _SAFE_LOC_RE.match(str(p)) else "<key>"
+                                  for p in e["loc"]) or "$"
+                         for e in station_protocol.safe_errors(exc)})
+        logger.warning(f"Rejected {name} from PC {pc_id}: invalid ({', '.join(fields)[:300]})")
+        return None, _ack("rejected", message_id, "invalid report")
+
+
+def _apply_deploy_result(pc_id: str, model, received_at: int, client_version: Optional[str]):
+    """The database half of deploy_result: one conditional transition and,
+    when the row becomes applied, the pcs.last_applied stamp."""
+    to, fields, detail = station_reports.deploy_result_transition(model, client_version)
+
+    def apply(db):
+        result = deploy_tracking.transition(db, model.config_id, to, ts=received_at, pc_id=pc_id, detail=detail,
+                                            fields=fields)
+        if result.changed and to == deploy_tracking.APPLIED:
+            deploy_tracking.stamp_last_applied(db, pc_id, received_at)
+        return result
+
+    return to, apply
+
+
+@sio.on(REPORT_DEPLOY_RESULT)
+@reports_gate
+@requires_registered_pc
+def deploy_result(sid, pc_id, data):
+    """
+    DeployResultV1 from the PC's current session (D15). Answers a ReportAckV1:
+    ``ok`` once the result is applied to its row (or kept for retry),
+    ``duplicate`` for a message_id already accepted, ``rejected`` for an
+    invalid or oversized report or a config_id of another PC.
+    """
+    try:
+        model, rejected = _validated_report("DeployResultV1", pc_id, data)
+        if rejected is not None:
+            return rejected
+        key = (pc_id, model.message_id)
+        if key in report_ids:
+            return _ack("duplicate", model.message_id)
+        received_at = deploy_tracking.now_ts()
+        session = session_data.get(sid) or {}
+        to, apply = _apply_deploy_result(pc_id, model, received_at, session.get("client_version"))
+        try:
+            result = _run_blocking(_apply_and_commit, apply)
+        except Exception as exc:
+            logger.error(f"Could not record deploy_result {model.config_id} of PC {pc_id}: {type(exc).__name__}; "
+                         f"kept for retry")
+            pending_deploy_events.add(model.config_id, apply, label=f"deploy_result.{model.status}")
+            report_ids.add(key)
+            return _ack("ok", model.message_id)
+        if result.outcome == "mismatch":
+            logger.warning(f"Rejected deploy_result from PC {pc_id}: {model.config_id} is another PC's deploy")
+            return _ack("rejected", model.message_id, "config_id belongs to another PC")
+        if result.outcome == "missing":
+            # An unknown id updates only running_config_id (and a backend id is
+            # kept in case its row is still being committed).
+            if not model.config_id.startswith(station_reports.CLIENT_MINTED_PREFIX):
+                pending_deploy_events.add(model.config_id, apply, label=f"deploy_result.{model.status}")
+            logger.info(f"deploy_result {model.status} from PC {pc_id} for unknown deploy {model.config_id}")
+        else:
+            logger.info(f"deploy_result {model.status} from PC {pc_id} for {model.config_id}: "
+                        f"{result.outcome} (status {result.status})")
+        if to == deploy_tracking.APPLIED and result.outcome in ("changed", "missing"):
+            health_buffer.put(pc_id, {"running_config_id": model.config_id})
+        report_ids.add(key)
+        return _ack("ok", model.message_id)
+    except Exception as exc:
+        logger.error(f"Error in deploy_result from PC {pc_id}: {type(exc).__name__}")
+        return _ack("rejected", reason="relay error")
+
+
+@sio.on(REPORT_STATION_STATUS)
+@reports_gate
+@requires_registered_pc
+def station_status(sid, pc_id, data):
+    """
+    StationStatusV1 from the PC's current session (D15). Only the allow-listed
+    pc_health columns are kept (C23), with the relay's own flags for the
+    session; they are written by the next health flush.
+    """
+    try:
+        model, rejected = _validated_report("StationStatusV1", pc_id, data)
+        if rejected is not None:
+            return rejected
+        key = (pc_id, model.message_id)
+        if key in report_ids:
+            return _ack("duplicate", model.message_id)
+        session = session_data.get(sid) or {}
+        columns = station_reports.health_columns(model, deploy_tracking.now_ts())
+        columns["relay_flags"] = dict(session.get("flags") or {})
+        health_buffer.put(pc_id, columns)
+        session["status_seen"] = True
+        report_ids.add(key)
+        return _ack("ok", model.message_id)
+    except Exception as exc:
+        logger.error(f"Error in station_status from PC {pc_id}: {type(exc).__name__}")
+        return _ack("rejected", reason="relay error")
+
+
+# The handlers exist: advertise their features (D12 gates them on the handlers).
+enable_feature(station_protocol.FEATURE_DEPLOY_RESULT)
+enable_feature(station_protocol.FEATURE_STATION_STATUS)
+
+
+def flush_health_once() -> int:
+    """Write the buffered health rows (one batched upsert, off the hub).
+    On a database error the batch goes back into the buffer (newer values
+    win) for the next flush. Returns the number of rows written."""
+    batch = health_buffer.take()
+    if not batch:
+        return 0
+
+    def write():
+        db = _open_db()
+        try:
+            written, dropped = station_reports.upsert_health(db, batch)
+            db.commit()
+            return written, dropped
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            db.close()
+
+    try:
+        written, dropped = _run_blocking(write)
+    except Exception as exc:
+        logger.error(f"Health flush failed ({len(batch)} row(s), kept for the next flush): {type(exc).__name__}")
+        health_buffer.restore(batch)
+        return 0
+    relay_counters["health_batches"] += 1
+    relay_counters["health_rows"] += written
+    if dropped:
+        logger.info(f"Health flush: dropped {dropped} row(s) of PCs that no longer exist")
+    logger.debug(f"Health flush: {written} row(s)")
+    return written
+
+
+def sweep_deploys_once() -> Dict[str, int]:
+    """One timeout sweep of pc_deployments (off the hub)."""
+
+    def sweep(db):
+        return deploy_tracking.sweep_timeouts(db, ack_timeout=settings.DEPLOY_ACK_TIMEOUT_SEC)
+
+    counts = _run_blocking(_apply_and_commit, sweep)
+    moved = {k: v for k, v in counts.items() if v}
+    if moved:
+        logger.info(f"Deploy timeout sweep: {moved}")
+    return counts
+
+
 @sio.event
 def get_clients(sid, data=None):
     """
@@ -996,27 +1244,29 @@ def _last_seen_sweep(interval_seconds: int):
     while True:
         sio.sleep(interval_seconds)
         pc_ids = list(connected_pcs.keys())
-        if not pc_ids:
-            continue
-        db = None
-        try:
-            db = next(get_db())
-            now_ts = int(time.time())
-            db.query(PC).filter(PC.id.in_(pc_ids)).update(
-                {PC.last_seen: now_ts}, synchronize_session=False
-            )
-            db.commit()
-            logger.debug(f"last_seen sweep updated {len(pc_ids)} PC(s)")
-        except Exception as sweep_error:
-            logger.error(f"last_seen sweep failed: {sweep_error}")
-            if db is not None:
-                try:
-                    db.rollback()
-                except Exception:
-                    pass
-        finally:
-            if db is not None:
-                db.close()
+        if pc_ids:
+            _run_blocking(presence_sweep_once, pc_ids)
+
+
+def presence_sweep_once(pc_ids: List[str]) -> None:
+    """One presence tick: ``pcs.last_seen = now`` for ``pc_ids`` in one UPDATE
+    that leaves ``updated_at`` alone (NEW-52). Errors are logged and swallowed."""
+    db = None
+    try:
+        db = next(get_db())
+        db.execute(_presence_update(pc_ids, last_seen=int(time.time())))
+        db.commit()
+        logger.debug(f"last_seen sweep updated {len(pc_ids)} PC(s)")
+    except Exception as sweep_error:
+        logger.error(f"last_seen sweep failed: {type(sweep_error).__name__}")
+        if db is not None:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+    finally:
+        if db is not None:
+            db.close()
 
 
 def _deploy_events_loop(interval_seconds: float):
@@ -1027,6 +1277,26 @@ def _deploy_events_loop(interval_seconds: float):
             retry_pending_deploy_events()
         except Exception as exc:
             logger.error(f"Deploy event retry loop error: {type(exc).__name__}")
+
+
+def _health_flush_loop(interval_seconds: float):
+    """Background task: one health batch per interval (D15). Never dies."""
+    while True:
+        sio.sleep(interval_seconds)
+        try:
+            flush_health_once()
+        except Exception as exc:
+            logger.error(f"Health flush loop error: {type(exc).__name__}")
+
+
+def _deploy_sweep_loop(interval_seconds: float):
+    """Background task: the deploy timeout sweep (D15). Never dies."""
+    while True:
+        sio.sleep(interval_seconds)
+        try:
+            sweep_deploys_once()
+        except Exception as exc:
+            logger.error(f"Deploy timeout sweep error: {type(exc).__name__}")
 
 
 def run_server(host: str = "0.0.0.0", port: int = 8080):
@@ -1061,6 +1331,13 @@ def run_server(host: str = "0.0.0.0", port: int = 8080):
     sweep_interval = int(os.environ.get("WS_LAST_SEEN_SWEEP_SECONDS", "30"))
     sio.start_background_task(_last_seen_sweep, sweep_interval)
     sio.start_background_task(_deploy_events_loop, DEPLOY_EVENT_RETRY_SECONDS)
+    sio.start_background_task(_health_flush_loop, HEALTH_FLUSH_SECONDS)
+    sio.start_background_task(_deploy_sweep_loop, DEPLOY_SWEEP_SECONDS)
+    logger.info(
+        f"Relay reports: station_reports={'on' if settings.RELAY_STATION_REPORTS else 'off'} "
+        f"health_flush={HEALTH_FLUSH_SECONDS:g}s deploy_sweep={DEPLOY_SWEEP_SECONDS:g}s "
+        f"ack_timeout={settings.DEPLOY_ACK_TIMEOUT_SEC}s"
+    )
 
     try:
         eventlet.wsgi.server(eventlet.listen((host, port)), app, log_output=True)

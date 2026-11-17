@@ -284,11 +284,14 @@ def supersede_older(db, pc_id: str, newer_id: str, *, ts: Optional[int] = None) 
 
 def stamp_last_applied(db, pc_id: str, ts: Optional[int] = None) -> None:
     """``pcs.last_applied`` (D14): stamped when a Client 1.1.x row is
-    received, or when a confirmable row is applied (D15). Never at emit time."""
+    received, or when a confirmable row is applied (D15). Never at emit time.
+
+    A status stamp, not an edit of the PC: ``updated_at`` is set to itself so
+    its onupdate default does not fire (NEW-52; the portal shows updated_at
+    next to updated_by as the PC's provenance)."""
     ts = now_ts() if ts is None else int(ts)
-    db.execute(
-        update(PC).where(PC.id == pc_id).values(last_applied=ts).execution_options(synchronize_session=False)
-    )
+    table = PC.__table__
+    db.execute(update(table).where(table.c.id == pc_id).values(last_applied=ts, updated_at=table.c.updated_at))
 
 
 def statuses(db, config_ids: Iterable[str]) -> Dict[str, str]:
@@ -314,6 +317,70 @@ def record_receipt(db, config_id: str, pc_id: str, *, confirmable: bool, ts: Opt
     if result.changed and not confirmable:
         stamp_last_applied(db, pc_id, ts)
     return result
+
+
+# --------------------------------------------------------------------------- #
+# Timeout sweep (D15)
+# --------------------------------------------------------------------------- #
+
+PENDING_TIMEOUT_SEC = 60
+
+
+def sweep_timeouts(db, *, now: Optional[int] = None, ack_timeout: int = 300) -> Dict[str, int]:
+    """The relay's timeout sweep (D15), as conditional bulk UPDATEs:
+
+    * pending for more than 60 s: relay_failed (the API never recorded a relay
+      answer);
+    * confirmable rows delivered or received for more than ``ack_timeout``
+      (DEPLOY_ACK_TIMEOUT_SEC) since delivery: unconfirmed;
+    * confirmable rows accepted for more than twice that since acceptance:
+      unconfirmed;
+    * non-confirmable rows (Client 1.1.x) are left alone: they end at received.
+
+    Late evidence still upgrades the result afterwards (ALLOWED_FROM). Does not
+    commit. Returns the number of rows each rule moved.
+    """
+    now = now_ts() if now is None else int(now)
+    ack_timeout = int(ack_timeout)
+    counts: Dict[str, int] = {}
+
+    result = db.execute(
+        update(PcDeployment)
+        .where(PcDeployment.status == PENDING, PcDeployment.status_changed_at < now - PENDING_TIMEOUT_SEC)
+        .values(status=RELAY_FAILED, status_changed_at=now,
+                status_detail=_detail(f"no relay answer within {PENDING_TIMEOUT_SEC} s"))
+        .execution_options(synchronize_session=False)
+    )
+    counts["pending_to_relay_failed"] = result.rowcount or 0
+
+    since_delivery = func.coalesce(PcDeployment.delivered_at, PcDeployment.status_changed_at)
+    result = db.execute(
+        update(PcDeployment)
+        .where(
+            PcDeployment.confirmable == True,  # noqa: E712
+            PcDeployment.status.in_((DELIVERED, RECEIVED)),
+            since_delivery < now - ack_timeout,
+        )
+        .values(status=UNCONFIRMED, status_changed_at=now, unconfirmed_at=func.coalesce(PcDeployment.unconfirmed_at, now),
+                source="timeout", status_detail=_detail(f"no confirmation within {ack_timeout} s"))
+        .execution_options(synchronize_session=False)
+    )
+    counts["delivered_to_unconfirmed"] = result.rowcount or 0
+
+    since_accepted = func.coalesce(PcDeployment.accepted_at, PcDeployment.status_changed_at)
+    result = db.execute(
+        update(PcDeployment)
+        .where(
+            PcDeployment.confirmable == True,  # noqa: E712
+            PcDeployment.status == ACCEPTED,
+            since_accepted < now - 2 * ack_timeout,
+        )
+        .values(status=UNCONFIRMED, status_changed_at=now, unconfirmed_at=func.coalesce(PcDeployment.unconfirmed_at, now),
+                source="timeout", status_detail=_detail(f"accepted but not applied within {2 * ack_timeout} s"))
+        .execution_options(synchronize_session=False)
+    )
+    counts["accepted_to_unconfirmed"] = result.rowcount or 0
+    return counts
 
 
 # --------------------------------------------------------------------------- #
