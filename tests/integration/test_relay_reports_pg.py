@@ -59,8 +59,9 @@ RELAY_PYTHON = os.environ.get("TRUELIVE_RELAY_PYTHON", sys.executable)
 OLD = datetime(2026, 1, 1, tzinfo=timezone.utc)
 MARKER = "d15-layout-marker-" + secrets.token_hex(4)
 CAPS = [sp.FEATURE_DEPLOY_RESULT, sp.FEATURE_STATION_STATUS]
-# What ``registered`` advertises: the report features plus pc_token.v1 (D30).
-FEATURES = CAPS + [sp.FEATURE_PC_TOKEN]
+# What ``registered`` advertises: the report features, station_config.v1 (C10)
+# and pc_token.v1 (D30).
+FEATURES = CAPS + [sp.FEATURE_STATION_CONFIG, sp.FEATURE_PC_TOKEN]
 VERSIONS = {"client_version": "1.4.0", "client_build": "1.4.0+0000000", "core_running_version": "1.1.0+d53952a",
             "core_build_class": "reports_v1", "delivery_policy": "live_with_fallback"}
 
@@ -394,7 +395,7 @@ def test_relay_lifecycle_over_sockets(pg, monkeypatch):
     assert MARKER not in log and "fixture-user" not in log
     for value in list(tokens.values()) + [jwt_secret, sender_secret]:
         assert value not in log
-    assert "features=deploy_result.v1,station_status.v1,pc_token.v1" in log
+    assert "features=deploy_result.v1,station_status.v1,station_config.v1,pc_token.v1" in log
     assert "Relay reports: station_reports=on health_flush=1s deploy_sweep=1s ack_timeout=300s" in log
 
     # Kill switch: RELAY_STATION_REPORTS=off.
@@ -404,7 +405,8 @@ def test_relay_lifecycle_over_sockets(pg, monkeypatch):
         monkeypatch.setattr(settings, "WEBSOCKET_PORT", relay.port)
         new = Pc(relay.url, "PC_NEW", tokens["PC_NEW"], capabilities=CAPS, versions=VERSIONS)
         stations.append(new)
-        assert new.registered["features"] == [sp.FEATURE_PC_TOKEN, sp.FEATURE_STATION_REPORTS_DISABLED]
+        assert new.registered["features"] == [sp.FEATURE_STATION_CONFIG, sp.FEATURE_PC_TOKEN,
+                                              sp.FEATURE_STATION_REPORTS_DISABLED]
         assert new.call("deploy_result", _result(new_id, "applied")) == {"status": "disabled"}
         assert new.call("station_status", {"message_id": "st-9", "ts": time.time(), "health": "ok"}) == {
             "status": "disabled"}

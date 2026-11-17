@@ -106,6 +106,18 @@ DEPLOY_CATCHUP_ENABLED (off in M2):
   broker failure pauses catch-up for 30 s; the hub and ``registered`` never
   wait for either.
 
+Fleet Core settings (plan 06 C10, X-17; app/services/core_station_config.py):
+
+* ``get_station_config`` answers the PC's current registered session (pc_id
+  from the session, never the payload) with ``{status, revision, values,
+  errors}``: the category ``core`` system settings, decrypted strictly (a key
+  that cannot be decrypted, or any encrypted key while the relay has no valid
+  SETTINGS_ENCRYPTION_KEY, is left out and listed in ``errors``). Other
+  sessions get ``rejected``, a database failure ``error``; neither carries
+  values. One read, off the hub and past the settings cache, serves every
+  call for 60 s (concurrent calls share it). ``registered`` advertises
+  ``station_config.v1`` with the handler.
+
 The relay never rotates JWT_SECRET itself (OD-23): ops rotates it through the
 window above (DOCKER_SETUP.md runbook).
 """
@@ -128,7 +140,7 @@ from app.core.config import settings
 from app.database import get_db
 from app.models.pc import PC
 from app.schemas import station_protocol
-from app.services import catchup, deploy_tracking, pc_tokens, relay_auth, station_reports
+from app.services import catchup, core_station_config, deploy_tracking, pc_tokens, relay_auth, station_reports
 
 logger = logging.getLogger(__name__)
 
@@ -318,6 +330,10 @@ relay_counters: Dict[str, int] = {
     "catchup_not_needed": 0,
     "catchup_paused": 0,
     "catchup_errors": 0,
+    "station_config_served": 0,
+    "station_config_refused": 0,
+    "station_config_errors": 0,
+    "station_config_loads": 0,
 }
 
 # Deploy events whose row did not exist yet, or whose write failed (D14).
@@ -1448,6 +1464,65 @@ enable_feature(station_protocol.FEATURE_DEPLOY_RESULT)
 enable_feature(station_protocol.FEATURE_STATION_STATUS)
 
 
+# --------------------------------------------------------------------------- #
+# Fleet Core settings (C10, X-17)
+# --------------------------------------------------------------------------- #
+
+# Seconds one database read of the fleet keys serves every get_station_config
+# call (the env variable exists for tests; leave it unset in production).
+STATION_CONFIG_CACHE_SECONDS = float(os.environ.get("RELAY_STATION_CONFIG_CACHE_SECONDS", "60"))
+station_config_cache = core_station_config.StationConfigCache(
+    ttl_seconds=STATION_CONFIG_CACHE_SECONDS, event_factory=sio.eio.create_event,
+)
+
+
+def _read_station_config() -> core_station_config.StationConfig:
+    """One read of the fleet keys (runs on a tpool thread under eventlet)."""
+    key_status, decrypt = core_station_config.process_decryptor()
+    db = _open_db()
+    try:
+        return core_station_config.load_station_config(db, key_status=key_status, decrypt=decrypt)
+    finally:
+        db.close()
+
+
+def _load_station_config() -> core_station_config.StationConfig:
+    result = _run_blocking(_read_station_config)
+    relay_counters["station_config_loads"] += 1
+    problems = ",".join(f"{key}:{code}" for key, code in result.errors) or "-"
+    log = logger.warning if result.errors else logger.info
+    log(f"Station config loaded: revision={result.revision[:12]} values={len(result.values)} errors={problems}")
+    return result
+
+
+@sio.event
+def get_station_config(sid, data=None):
+    """
+    The fleet Core settings for the PC's current registered session (C10).
+    ``data`` is ignored (the Client may send its config status; the pc_id is
+    the session's). Answers ``{status: ok, revision, values, errors}``, or
+    ``rejected`` / ``error`` with no values.
+    """
+    pc_id = _registered_pc(sid)
+    if pc_id is None:
+        relay_counters["station_config_refused"] += 1
+        return core_station_config.refusal_ack(core_station_config.STATUS_REJECTED, "not registered")
+    try:
+        result = station_config_cache.get(_load_station_config)
+    except Exception as exc:
+        logger.error(f"Could not read the station config for PC {pc_id}: {type(exc).__name__}")
+        result = None
+    if result is None:
+        relay_counters["station_config_errors"] += 1
+        return core_station_config.refusal_ack(core_station_config.STATUS_ERROR, "unavailable")
+    relay_counters["station_config_served"] += 1
+    logger.debug(f"Station config {result.revision[:12]} served to PC {pc_id}")
+    return result.ack()
+
+
+enable_feature(station_protocol.FEATURE_STATION_CONFIG)
+
+
 def flush_health_once() -> int:
     """Write the buffered health rows (one batched upsert, off the hub).
     On a database error the batch goes back into the buffer (newer values
@@ -1653,6 +1728,7 @@ def run_server(host: str = "0.0.0.0", port: int = 8080):
         f"Relay catch-up: enabled={'true' if settings.DEPLOY_CATCHUP_ENABLED else 'false'} "
         f"rate_limit={catchup.RATE_LIMIT_SECONDS}s retry=false pause_on_failure={catchup.BREAKER_SECONDS:g}s"
     )
+    logger.info(f"Relay station config: cache={STATION_CONFIG_CACHE_SECONDS:g}s")
     logger.info(
         f"Relay reports: station_reports={'on' if settings.RELAY_STATION_REPORTS else 'off'} "
         f"health_flush={HEALTH_FLUSH_SECONDS:g}s deploy_sweep={DEPLOY_SWEEP_SECONDS:g}s "

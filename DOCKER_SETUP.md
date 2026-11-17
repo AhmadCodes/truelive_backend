@@ -157,6 +157,29 @@ time: python-engineio refuses a polling POST with more than 16 packets, and the 
 Socket.IO client polls (no websocket-client in requirements.txt). Before this, a
 deploy to more than 16 PCs at once ended `relay_failed` for all of them.
 
+**Fleet Core settings (C10).** Settings category `core` (seeded empty at API start,
+super-admin only in the portal) holds the values TrueLive Client 1.5.0+ (C12) uses when
+it generates Core's config.json: `core.client_managed_config` (true; the fleet kill
+switch), the encrypted Core addresses `core.notification_address`,
+`core.logs_server_address`, `core.heart_beat_server_address` and `core.ack_address`,
+`core.heartbeat_interval_sec` (0 = unmanaged, else 5-3600) and the encrypted
+`core.client_admin_password_hash` (`pbkdf2_sha256$iterations$salt$hash`, computed by the
+portal). An address is `''` (unmanaged: the station keeps its own), `none` (force empty)
+or a `ws://`/`wss://` URL (at most 2048 characters, no spaces, no `@`) that may use the
+placeholders `{pc_id}` and `{pc_name_urlenc}`; the API refuses anything else with 422 and
+writes nothing. It shows `''` and `none` as they are and masks set values. A registered
+station asks the relay with `get_station_config` (advertised as `station_config.v1`) and
+gets `{status, revision, values, errors}`; the relay reads the keys once per 60 s (one
+query, bypassing the settings cache) and decrypts strictly with SETTINGS_ENCRYPTION_KEY:
+a key it cannot decrypt, or any encrypted key while the relay has no valid key, is left
+out and listed in `errors`, and the relay logs `Station config loaded: revision=...
+errors=<key>:<code>` (WARNING when there are errors). So the relay needs the same
+SETTINGS_ENCRYPTION_KEY as the API (D28). A portal edit reaches each station at its next
+fetch (the Client fetches at register and every 15 min), at most 60 s after the edit.
+`RELAY_STATION_CONFIG_CACHE_SECONDS` exists for tests; leave it unset. The former
+`websocket.*` settings are no longer seeded (the relay reads WEBSOCKET_HOST/PORT from the
+environment); rows already in a database are left alone and do nothing.
+
 **Startup self-check.** Each of the four services logs one line at start:
 
 ```

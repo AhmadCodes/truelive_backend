@@ -412,7 +412,8 @@ def test_unknown_event_regression(h, event):
 
 def test_the_relay_serves_exactly_these_events():
     assert set(relay.sio.handlers["/"]) == {"connect", "disconnect", "register", "message", "get_clients",
-                                             "deploy_config", "deploy_result", "station_status"}
+                                             "deploy_config", "deploy_result", "station_status",
+                                             "get_station_config"}
     assert "*" not in relay.sio.handlers["/"]
 
 

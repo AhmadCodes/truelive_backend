@@ -2,10 +2,21 @@
 System Settings API endpoints for runtime configuration management.
 
 All endpoints require Super Admin access.
+
+Masking: encrypted values are shown as ``********``. The fleet Core keys
+(category ``core``, C10) show ``''`` (unmanaged) and ``none`` (forced empty)
+as they are, so the portal can tell unmanaged from set; a set value is always
+masked, and no response carries ciphertext. ORM rows are never changed to
+mask them.
+
+Validation (C10): writes to the fleet core.* keys follow
+app/services/core_station_config.py (ws/wss URL, placeholders, heartbeat 0 or
+5-3600, true/false, the pbkdf2 admin hash); a refused value answers 422 with
+the key names and reasons (never the value), and a bulk update writes nothing.
 """
 
 from fastapi import APIRouter, HTTPException, status
-from typing import List, Dict
+from typing import List, Dict, Optional
 from datetime import datetime, timezone
 import logging
 import smtplib
@@ -21,13 +32,51 @@ from app.schemas.system_setting import (
     SMTPTestRequest,
     SMTPTestResponse,
 )
+from app.services import core_station_config
 from app.services.system_settings_service import (
     EncryptionKeyUnavailable,
+    InvalidSettingValue,
+    SettingDecryptError,
     system_settings_service,
 )
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+MASK = "********"
+
+
+def _shown_value(setting) -> Optional[str]:
+    """The value a response may carry: plain settings as stored; encrypted ones
+    masked, except a fleet core key whose plaintext is '' or 'none'."""
+    value = setting.value
+    if not setting.is_encrypted or not value:
+        return value
+    if setting.key in core_station_config.SPECS:
+        try:
+            plaintext = system_settings_service.decrypt_strict(value)
+        except SettingDecryptError:
+            return MASK
+        if plaintext in core_station_config.UNMASKED_VALUES:
+            return plaintext
+    return MASK
+
+
+def _response(setting) -> SystemSettingResponse:
+    """A response model with the shown value; the ORM row is not modified."""
+    return SystemSettingResponse.model_validate(setting).model_copy(update={"value": _shown_value(setting)})
+
+
+def _invalid(exc: InvalidSettingValue) -> HTTPException:
+    """422 for fleet core.* values that break their rules (C10). Key names and
+    reasons only, never the value."""
+    logger.warning(f"Refused settings write: invalid {', '.join(exc.problems)}")
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail="Invalid value: " + "; ".join(f"{key} {reason}" for key, reason in exc.problems.items())
+        + ". Nothing was changed.",
+    )
 
 
 def _key_unavailable(exc: EncryptionKeyUnavailable) -> HTTPException:
@@ -51,7 +100,8 @@ async def get_all_settings(
     Get all system settings grouped by category.
 
     Only Super Admins can access settings.
-    Sensitive values (passwords) are masked with asterisks.
+    Sensitive values (passwords) are masked with asterisks (see the module
+    docstring for the fleet core keys).
 
     Args:
         db: Database session
@@ -61,16 +111,13 @@ async def get_all_settings(
         Dictionary with category names as keys and setting lists as values
     """
     settings_grouped = system_settings_service.get_all_settings_grouped(
-        db, mask_sensitive=True
+        db, mask_sensitive=False
     )
 
-    # Convert to response format
+    # Convert to response format (masked here, without touching the ORM rows)
     response = {}
     for category, settings in settings_grouped.items():
-        response[category] = [
-            SystemSettingResponse.model_validate(setting)
-            for setting in settings
-        ]
+        response[category] = [_response(setting) for setting in settings]
 
     return response
 
@@ -96,7 +143,7 @@ async def get_settings_by_category(
         404: If category not found or empty
     """
     settings = system_settings_service.get_settings_by_category(
-        db, category, mask_sensitive=True
+        db, category, mask_sensitive=False
     )
 
     if not settings:
@@ -107,10 +154,7 @@ async def get_settings_by_category(
 
     return SystemSettingsByCategoryResponse(
         category=category,
-        settings=[
-            SystemSettingResponse.model_validate(setting)
-            for setting in settings
-        ]
+        settings=[_response(setting) for setting in settings]
     )
 
 
@@ -132,7 +176,7 @@ async def update_settings_bulk(
         List of updated settings
 
     Raises:
-        400: If validation fails
+        422: If a fleet core.* value breaks its rules (nothing is written)
         503: If the batch holds an encrypted core.* key and SETTINGS_ENCRYPTION_KEY is missing
              (nothing is written)
     """
@@ -141,20 +185,14 @@ async def update_settings_bulk(
             db, data.settings, str(current_user.user_id)
         )
 
-        # Mask sensitive values
-        for setting in updated_settings:
-            if setting.is_encrypted and setting.value:
-                setting.value = "********"
-
         logger.info(
             f"{len(updated_settings)} settings updated by super admin {current_user.username}"
         )
 
-        return [
-            SystemSettingResponse.model_validate(setting)
-            for setting in updated_settings
-        ]
+        return [_response(setting) for setting in updated_settings]
 
+    except InvalidSettingValue as e:
+        raise _invalid(e)
     except EncryptionKeyUnavailable as e:
         raise _key_unavailable(e)
     except Exception as e:
@@ -195,11 +233,7 @@ async def get_setting(
             detail=f"Setting with key '{key}' not found"
         )
 
-    # Mask sensitive value
-    if setting.is_encrypted and setting.value:
-        setting.value = "********"
-
-    return SystemSettingResponse.model_validate(setting)
+    return _response(setting)
 
 
 @router.put("/{key}", response_model=SystemSettingResponse)
@@ -223,7 +257,7 @@ async def update_setting(
 
     Raises:
         404: If setting not found
-        400: If validation fails
+        422: If a fleet core.* value breaks its rules
         503: If the setting is an encrypted core.* key and SETTINGS_ENCRYPTION_KEY is missing
     """
     try:
@@ -231,14 +265,12 @@ async def update_setting(
             db, key, data.value, str(current_user.user_id)
         )
 
-        # Mask sensitive value in response
-        if setting.is_encrypted and setting.value:
-            setting.value = "********"
-
         logger.info(f"Setting '{key}' updated by super admin {current_user.username}")
 
-        return SystemSettingResponse.model_validate(setting)
+        return _response(setting)
 
+    except InvalidSettingValue as e:
+        raise _invalid(e)
     except EncryptionKeyUnavailable as e:
         raise _key_unavailable(e)
     except ValueError as e:

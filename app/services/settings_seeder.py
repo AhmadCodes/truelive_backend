@@ -2,11 +2,20 @@
 Seed default system settings into the database.
 
 This module contains the default settings configuration and seeding logic.
+It is the only seed list: scripts/seed_settings.py imports it (C10).
+
+Only settings that something reads are seeded (NEW-53): the former
+``websocket.*`` seeds were removed because the relay takes its host and port
+from WEBSOCKET_HOST / WEBSOCKET_PORT. Rows already in a database (from these
+seeds or migration 004) are left alone. The ``core`` category (fleet Core
+settings served to stations by the relay's get_station_config, C10) comes
+from app/services/core_station_config.py; every key ships empty (unmanaged).
 """
 
 import logging
 from sqlalchemy.orm import Session
 from app.models.system_setting import SystemSetting
+from app.services import core_station_config
 
 logger = logging.getLogger(__name__)
 
@@ -130,40 +139,6 @@ DEFAULT_SETTINGS = [
         "data_type": "integer"
     },
 
-    # WebSocket Settings
-    {
-        "key": "websocket.host",
-        "value": "0.0.0.0",
-        "category": "websocket",
-        "description": "WebSocket server bind host",
-        "is_encrypted": False,
-        "data_type": "string"
-    },
-    {
-        "key": "websocket.port",
-        "value": "8080",
-        "category": "websocket",
-        "description": "WebSocket server port",
-        "is_encrypted": False,
-        "data_type": "integer"
-    },
-    {
-        "key": "websocket.ping_interval",
-        "value": "25",
-        "category": "websocket",
-        "description": "Ping interval in seconds",
-        "is_encrypted": False,
-        "data_type": "integer"
-    },
-    {
-        "key": "websocket.ping_timeout",
-        "value": "60",
-        "category": "websocket",
-        "description": "Ping timeout in seconds",
-        "is_encrypted": False,
-        "data_type": "integer"
-    },
-
     # Security Settings
     {
         "key": "security.max_login_attempts",
@@ -223,6 +198,10 @@ DEFAULT_SETTINGS = [
         "is_encrypted": False,
         "data_type": "integer"
     },
+
+    # Fleet Core settings (C10): client_managed_config, the four Core
+    # addresses, heartbeat_interval_sec and client_admin_password_hash.
+    *core_station_config.seed_entries(),
 ]
 
 

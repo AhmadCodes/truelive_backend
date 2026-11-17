@@ -367,7 +367,7 @@ def test_secret_rotation_200_pcs(pg, client_src, tmp_path):
     logs.append(relay.proc.text)
     log = "".join(logs)
     assert "Relay tokens: rotation_window=open until=" in logs[0] and "renew_before_days=30" in logs[0]
-    assert "features=deploy_result.v1,station_status.v1,pc_token.v1" in log
+    assert "features=deploy_result.v1,station_status.v1,station_config.v1,pc_token.v1" in log
     assert "token_drop_needed" in log
     for value in [old_secret, new_secret, sender_secret] + list(old_tokens.values()) + list(fleet.held.values()):
         assert value not in log
