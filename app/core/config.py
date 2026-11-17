@@ -3,6 +3,7 @@ Application configuration using Pydantic Settings.
 Loads configuration from environment variables with validation.
 """
 
+from datetime import datetime, timezone
 from typing import List, Optional
 from pydantic import Field, field_validator, PostgresDsn
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -42,6 +43,41 @@ class Settings(BaseSettings):
     # JWT for PC Authentication
     JWT_SECRET: str = Field(..., min_length=16)
     JWT_PC_TOKEN_EXPIRE_HOURS: int = 8760  # 1 year
+    # Dual-secret rotation window (plan 06 D30, OD-23). During a rotation the
+    # relay also verifies PC tokens with JWT_SECRET_PREVIOUS, but only while
+    # the current time is before JWT_ROTATION_GRACE_UNTIL (ISO 8601, a naive
+    # value is UTC; or Unix seconds). Without a window end the previous secret
+    # is never accepted. Both come from .env only, like JWT_SECRET.
+    JWT_SECRET_PREVIOUS: Optional[str] = None
+    JWT_ROTATION_GRACE_UNTIL: Optional[datetime] = None
+    # The relay re-issues a PC token that expires within this many days
+    # (0 turns expiry renewal off; previous-secret renewal is unaffected).
+    PC_TOKEN_RENEW_BEFORE_DAYS: int = Field(30, ge=0, le=365)
+
+    @field_validator("JWT_SECRET_PREVIOUS", mode="before")
+    @classmethod
+    def _blank_previous_secret_is_none(cls, value):
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        if isinstance(value, str) and len(value) < 16:
+            raise ValueError("JWT_SECRET_PREVIOUS must be at least 16 characters (like JWT_SECRET)")
+        return value
+
+    @field_validator("JWT_ROTATION_GRACE_UNTIL", mode="before")
+    @classmethod
+    def _blank_window_is_none(cls, value):
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        if isinstance(value, str) and value.strip().isdigit():
+            return int(value.strip())  # Unix seconds
+        return value
+
+    @field_validator("JWT_ROTATION_GRACE_UNTIL", mode="after")
+    @classmethod
+    def _window_is_utc(cls, value):
+        if value is not None and value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
 
     # Shared relay / deploy environment (plan 06 D28, X-18). docker-compose.yml
     # gives the API, the relay and both Celery services one env block, so all

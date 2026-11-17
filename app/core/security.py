@@ -2,7 +2,7 @@
 Security utilities for JWT tokens and password hashing.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 from jose import jwt, JWTError
 from passlib.context import CryptContext
@@ -96,10 +96,13 @@ def create_pc_auth_token(
     Returns:
         Tuple of (encoded token, expiration timestamp)
     """
+    # Aware UTC: a naive utcnow() would be read as local time by timestamp(),
+    # so on a host that is not on UTC the token expired hours early (D30).
+    now = datetime.now(timezone.utc)
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = now + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(
+        expire = now + timedelta(
             hours=settings.JWT_PC_TOKEN_EXPIRE_HOURS
         )
 

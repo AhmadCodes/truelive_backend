@@ -137,6 +137,12 @@ class StartupReport:
     app_version: str
     flags: Dict[str, Any] = field(default_factory=dict)
     relay_sender_secret: str = "unset"
+    # D30: the rotation window (off, open, closed, no_end, same_as_current),
+    # its end (ISO 8601 UTC or ""), and the previous secret's fingerprint.
+    jwt_rotation_window: str = "off"
+    jwt_rotation_grace_until: str = ""
+    jwt_secret_previous: str = "unset"
+    pc_token_renew_before_days: int = 30
     settings_encryption_key: str = KEY_MISSING
     settings_encryption_key_fp: str = "unset"
     jwt_secret_is_client_constant: bool = False
@@ -156,6 +162,13 @@ class StartupReport:
             key += " " + self.settings_encryption_key_fp
         parts.append(f"settings_encryption_key={key}")
         parts.append(f"jwt_secret_is_client_constant={_flag_text(self.jwt_secret_is_client_constant)}")
+        # D30, after D28's fields (their order is parsed by deploy checks).
+        window = self.jwt_rotation_window
+        if self.jwt_rotation_grace_until:
+            window += f" until {self.jwt_rotation_grace_until}"
+        parts.append(f"jwt_rotation_window={window}")
+        parts.append(f"jwt_secret_previous={self.jwt_secret_previous}")
+        parts.append(f"pc_token_renew_before_days={self.pc_token_renew_before_days}")
         broker = self.broker + (f" ({self.broker_detail})" if self.broker_detail else "")
         parts.append(f"broker={broker}")
         return " ".join(parts)
@@ -205,6 +218,8 @@ def collect(service: str, cfg: Any = None, check_broker_reachable: bool = False)
             "SETTINGS_ENCRYPTION_KEY is not a valid Fernet key (32 url-safe base64 bytes)"
         )
 
+    _rotation_window(report, cfg)
+
     report.jwt_secret_is_client_constant = jwt_secret_is_client_constant(cfg.JWT_SECRET)
     if report.jwt_secret_is_client_constant:
         report.problems["jwt_secret"] = (
@@ -222,9 +237,46 @@ def collect(service: str, cfg: Any = None, check_broker_reachable: bool = False)
     return report
 
 
+def _rotation_window(report: StartupReport, cfg: Any) -> None:
+    """D30: the dual-secret window as this process sees it (never a value)."""
+    from app.services import relay_auth as window
+
+    previous = getattr(cfg, "JWT_SECRET_PREVIOUS", None)
+    report.jwt_secret_previous = fingerprint(previous)
+    report.pc_token_renew_before_days = int(getattr(cfg, "PC_TOKEN_RENEW_BEFORE_DAYS", 30))
+    report.jwt_rotation_window = window.window_state(cfg)
+    until = window.grace_until(cfg)
+    if until is not None:
+        from datetime import datetime, timezone
+
+        report.jwt_rotation_grace_until = datetime.fromtimestamp(until, tz=timezone.utc).isoformat()
+    state = report.jwt_rotation_window
+    if state == window.WINDOW_NO_END:
+        report.problems["jwt_rotation_window_end"] = (
+            "JWT_SECRET_PREVIOUS is set without JWT_ROTATION_GRACE_UNTIL: the previous secret is NOT accepted, "
+            "so stations still on it cannot register. Set the window end (D30 runbook)"
+        )
+    elif state == window.WINDOW_SAME:
+        report.problems["jwt_rotation_window"] = "JWT_SECRET_PREVIOUS equals JWT_SECRET: nothing to rotate; remove it"
+    elif state == window.WINDOW_CLOSED:
+        report.problems["jwt_rotation_window"] = (
+            "The JWT rotation window has ended: tokens signed with JWT_SECRET_PREVIOUS are refused. "
+            "Remove JWT_SECRET_PREVIOUS and JWT_ROTATION_GRACE_UNTIL"
+        )
+    if previous and jwt_secret_is_client_constant(previous) and state == window.WINDOW_OPEN:
+        report.problems["jwt_secret_previous"] = (
+            "JWT_SECRET_PREVIOUS is the signing constant compiled into TrueLive Client (G-1): until the window "
+            "ends, tokens minted with it verify; they register only as outdated and are never renewed. "
+            "Keep the window as short as the fleet allows"
+        )
+
+
 _SEVERITY = {
     "settings_encryption_key": logging.ERROR,
     "jwt_secret": logging.ERROR,
+    "jwt_rotation_window": logging.WARNING,
+    "jwt_rotation_window_end": logging.ERROR,
+    "jwt_secret_previous": logging.WARNING,
     "relay_sender_secret": logging.WARNING,
     "broker": logging.WARNING,
 }

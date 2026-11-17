@@ -47,7 +47,7 @@ from app.services.actor import (
     attach_actor_stamps,
     attach_actor_stamps_list,
 )
-from app.services import audit_service
+from app.services import audit_service, pc_tokens
 from app.services.audit_service import ResourceType
 import logging
 
@@ -888,6 +888,9 @@ async def generate_pc_token(pc_id: str, current_user: AdminUser, db: DBSession):
         # Save token to database
         pc.auth_token = token
         pc.token_expiry = expiry_timestamp
+        # D30: the token an open relay renewal replaced no longer counts as
+        # current once an admin issues a new one.
+        pc_tokens.cancel_open_renewals(db, pc_id, actor)
 
         stamp_updated(pc, actor)
         audit_service.record_update(

@@ -199,7 +199,7 @@ def test_register_rejects_deleted_pcs(h):
 def test_outdated_token_registers_with_flag(h, caplog):
     """OD-23 (a): a valid pc_auth token that differs from pcs.auth_token."""
     h.add_pc("PC_A")  # stores one token ...
-    minted = make_pc_token("PC_A", h.secret, exp_delta=7200)  # ... the station presents another
+    minted = make_pc_token("PC_A", h.secret, exp_delta=4000 * 3600)  # ... the station presents another
     sender = "sender-1"
     h.connect_sender(sender)
     h.connect("pc-a")
@@ -226,7 +226,7 @@ def test_require_current_token_rejects_minted_token(h, monkeypatch):
     registers."""
     monkeypatch.setattr(relay.settings, "RELAY_REQUIRE_CURRENT_TOKEN", True)
     stored = h.add_pc("PC_A")
-    minted = make_pc_token("PC_A", h.secret, exp_delta=7200)
+    minted = make_pc_token("PC_A", h.secret, exp_delta=4000 * 3600)
     assert minted != stored
     h.connect("pc-a")
     h.register("pc-a", "PC_A", minted)

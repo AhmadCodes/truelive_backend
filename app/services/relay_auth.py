@@ -20,10 +20,17 @@ payload, never in the URL:
 
 Station tokens. ``token_digest`` compares PC tokens without keeping or logging
 them: the relay compares sha256 digests in constant time.
+
+Rotation window (D30). ``window_state`` says whether JWT_SECRET_PREVIOUS is
+accepted: only when it is set, differs from JWT_SECRET, and the current time
+is before JWT_ROTATION_GRACE_UNTIL. It is here (no model imports) so the
+startup self-check can report it; app/services/pc_tokens.py uses it.
 """
 
 import hashlib
 import hmac
+import time
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 SENDER_ROLE = "sender"
@@ -65,3 +72,41 @@ def same_token(presented: Optional[str], stored: Optional[str]) -> bool:
     if a is None or b is None:
         return False
     return hmac.compare_digest(a, b)
+
+
+# --------------------------------------------------------------------------- #
+# JWT rotation window (D30)
+# --------------------------------------------------------------------------- #
+
+WINDOW_OFF = "off"  # no previous secret configured
+WINDOW_OPEN = "open"  # the previous secret is accepted until the window end
+WINDOW_CLOSED = "closed"  # the end is in the past: previous-secret tokens are refused
+WINDOW_NO_END = "no_end"  # previous secret set without JWT_ROTATION_GRACE_UNTIL: never accepted
+WINDOW_SAME = "same_as_current"  # JWT_SECRET_PREVIOUS == JWT_SECRET: nothing to accept
+
+
+def grace_until(cfg: Any) -> Optional[int]:
+    """JWT_ROTATION_GRACE_UNTIL as Unix seconds (a naive datetime is UTC), or None."""
+    value = getattr(cfg, "JWT_ROTATION_GRACE_UNTIL", None)
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return int(value.timestamp())
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return int(value)
+    return None
+
+
+def window_state(cfg: Any, now: Optional[float] = None) -> str:
+    """One of the WINDOW_* states for ``cfg`` at ``now`` (default: the clock)."""
+    previous = getattr(cfg, "JWT_SECRET_PREVIOUS", None)
+    if not previous:
+        return WINDOW_OFF
+    if previous == getattr(cfg, "JWT_SECRET", None):
+        return WINDOW_SAME
+    until = grace_until(cfg)
+    if until is None:
+        return WINDOW_NO_END
+    return WINDOW_OPEN if (time.time() if now is None else now) < until else WINDOW_CLOSED

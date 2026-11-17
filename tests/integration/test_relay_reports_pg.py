@@ -59,6 +59,8 @@ RELAY_PYTHON = os.environ.get("TRUELIVE_RELAY_PYTHON", sys.executable)
 OLD = datetime(2026, 1, 1, tzinfo=timezone.utc)
 MARKER = "d15-layout-marker-" + secrets.token_hex(4)
 CAPS = [sp.FEATURE_DEPLOY_RESULT, sp.FEATURE_STATION_STATUS]
+# What ``registered`` advertises: the report features plus pc_token.v1 (D30).
+FEATURES = CAPS + [sp.FEATURE_PC_TOKEN]
 VERSIONS = {"client_version": "1.4.0", "client_build": "1.4.0+0000000", "core_running_version": "1.1.0+d53952a",
             "core_build_class": "reports_v1", "delivery_policy": "live_with_fallback"}
 
@@ -109,7 +111,8 @@ def _seed(Session, pc_ids, tokens=None, updated_at=None):
 
 
 def _mint(pc_id, secret):
-    return jwt.encode({"pc_id": pc_id, "name": f"{pc_id} wall", "exp": int(time.time()) + 3600, "type": "pc_auth"},
+    return jwt.encode({"pc_id": pc_id, "name": f"{pc_id} wall", "exp": int(time.time()) + 8760 * 3600,
+                       "type": "pc_auth"},
                       secret, algorithm="HS256")
 
 
@@ -295,7 +298,7 @@ def test_relay_lifecycle_over_sockets(pg, monkeypatch):
         new = Pc(relay.url, "PC_NEW", tokens["PC_NEW"], capabilities=CAPS, versions=VERSIONS)
         old = Pc(relay.url, "PC_OLD", tokens["PC_OLD"])
         stations += [new, old]
-        assert new.registered["features"] == CAPS and old.registered["features"] == CAPS
+        assert new.registered["features"] == FEATURES and old.registered["features"] == FEATURES
         assert new.registered["protocol_hash"] == sp.protocol_hash()
 
         with Session() as db:
@@ -391,7 +394,7 @@ def test_relay_lifecycle_over_sockets(pg, monkeypatch):
     assert MARKER not in log and "fixture-user" not in log
     for value in list(tokens.values()) + [jwt_secret, sender_secret]:
         assert value not in log
-    assert "features=deploy_result.v1,station_status.v1" in log
+    assert "features=deploy_result.v1,station_status.v1,pc_token.v1" in log
     assert "Relay reports: station_reports=on health_flush=1s deploy_sweep=1s ack_timeout=300s" in log
 
     # Kill switch: RELAY_STATION_REPORTS=off.
@@ -401,7 +404,7 @@ def test_relay_lifecycle_over_sockets(pg, monkeypatch):
         monkeypatch.setattr(settings, "WEBSOCKET_PORT", relay.port)
         new = Pc(relay.url, "PC_NEW", tokens["PC_NEW"], capabilities=CAPS, versions=VERSIONS)
         stations.append(new)
-        assert new.registered["features"] == [sp.FEATURE_STATION_REPORTS_DISABLED]
+        assert new.registered["features"] == [sp.FEATURE_PC_TOKEN, sp.FEATURE_STATION_REPORTS_DISABLED]
         assert new.call("deploy_result", _result(new_id, "applied")) == {"status": "disabled"}
         assert new.call("station_status", {"message_id": "st-9", "ts": time.time(), "health": "ok"}) == {
             "status": "disabled"}
@@ -467,7 +470,7 @@ def test_reconnect_storm(pg):
         elapsed, registered, errors = asyncio.run(storm())
         assert not errors and len(registered) == 200
         assert elapsed < 5.0, f"200 registrations took {elapsed:.2f}s"
-        assert all(data["features"] == CAPS for _, data in registered.values())
+        assert all(data["features"] == FEATURES for _, data in registered.values())
 
         def all_health():
             with Session() as db:

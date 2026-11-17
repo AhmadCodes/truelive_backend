@@ -10,10 +10,11 @@ relay tasks after it (D14, D15, C10, D30).
   under eventlet.
 * ``RelayHarness`` records every emit per recipient sid (rooms are expanded
   from ``enter_room`` calls), serves ``get_db`` from an in-memory SQLite
-  database that holds only the ``pcs`` table (plus ``pc_deployments`` and
-  ``pc_health`` with ``deploy_tables=True``, D14/D15), runs the relay's
-  background tasks inline, empties its report buffers, and mints PC tokens
-  with the process's throwaway JWT_SECRET.
+  database that holds only the ``pcs`` and ``pc_token_renewals`` tables (plus
+  ``pc_deployments`` and ``pc_health`` with ``deploy_tables=True``, D14/D15),
+  runs the relay's background tasks inline, empties its report buffers,
+  records audit entries in ``audits`` (audit_logs needs Postgres, D30), and
+  mints PC tokens with the process's throwaway JWT_SECRET.
 """
 
 import os
@@ -46,7 +47,7 @@ def import_relay():
     return relay
 
 
-def make_pc_token(pc_id: str, secret: str, *, token_type: Optional[str] = "pc_auth", exp_delta: int = 3600,
+def make_pc_token(pc_id: str, secret: str, *, token_type: Optional[str] = "pc_auth", exp_delta: int = 8760 * 3600,
                   extra: Optional[Dict[str, Any]] = None, algorithm: str = "HS256") -> str:
     payload: Dict[str, Any] = {"pc_id": pc_id, "name": f"{pc_id} name", "exp": int(time.time()) + exp_delta}
     if token_type is not None:
@@ -82,11 +83,11 @@ class RelayHarness:
         relay.report_ids.clear()
 
         from app.models.pc import PC
-        from app.models.pc_tracking import PcDeployment, PcHealth
+        from app.models.pc_tracking import PcDeployment, PcHealth, PcTokenRenewal
 
         self.engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
         meta = MetaData()
-        models = (PC, PcDeployment, PcHealth) if deploy_tables else (PC,)
+        models = (PC, PcTokenRenewal, PcDeployment, PcHealth) if deploy_tables else (PC, PcTokenRenewal)
         tables = [model.__table__.to_metadata(meta) for model in models]
         pcs_table = tables[0]
         for constraint in list(pcs_table.foreign_key_constraints):
@@ -101,6 +102,9 @@ class RelayHarness:
         self.db_fails = False
         monkeypatch.setattr(relay, "get_db", self._get_db)
         self.secret = relay.settings.JWT_SECRET
+        # Audit entries written by the relay (D30 renewals); audit_logs is a PG table.
+        self.audits: List[Dict[str, Any]] = []
+        monkeypatch.setattr("app.services.audit_service.record_event", self._record_audit)
 
     # -- fakes ----------------------------------------------------------------
 
@@ -109,6 +113,10 @@ class RelayHarness:
 
     def _enter_room(self, sid, room, namespace=None):
         self.rooms.setdefault(room, set()).add(sid)
+
+    def _record_audit(self, db, *, action, resource_type, resource_id, actor, changes=None, commit=False):
+        self.audits.append({"action": action, "resource_type": resource_type, "resource_id": resource_id,
+                            "actor": actor, "changes": changes})
 
     def _get_db(self):
         if self.db_fails:

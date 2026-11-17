@@ -231,7 +231,8 @@ def test_two_session_race_on_scratch_postgres(pg, monkeypatch):
 
 
 def _mint(pc_id, secret):
-    return jwt.encode({"pc_id": pc_id, "name": f"{pc_id} wall", "exp": int(time.time()) + 3600, "type": "pc_auth"},
+    return jwt.encode({"pc_id": pc_id, "name": f"{pc_id} wall", "exp": int(time.time()) + 8760 * 3600,
+                       "type": "pc_auth"},
                       secret, algorithm="HS256")
 
 

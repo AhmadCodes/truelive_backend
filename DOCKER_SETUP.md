@@ -72,6 +72,8 @@ Celery therefore see the same values.
 | SETTINGS_ENCRYPTION_KEY | `.env` | **Required.** Fernet key shared by every process (NEW-47). Missing: ERROR at start, and writes to encrypted `core.*` settings get 503 |
 | RELAY_SENDER_SECRET | `.env` | Portal -> relay sender auth (D12). Empty: legacy-open relay, WARNING at start |
 | DEPLOY_INJECT_CONFIG_ID (true), RELAY_STATION_REPORTS (on), DEPLOY_CATCHUP_ENABLED (false), DEPLOY_ACK_TIMEOUT_SEC (300), RELAY_DEBUG_LOGGING (false), RELAY_REQUIRE_CURRENT_TOKEN (false) | `x-backend-env` default, overridable from `.env` or the shell | Kill switches and timers of the confirmed-deploy path (D14, D15, D17, D12) |
+| JWT_SECRET_PREVIOUS, JWT_ROTATION_GRACE_UNTIL | `.env` | Empty outside a JWT_SECRET rotation (D30, runbook below). The previous secret is accepted only while the window end is in the future |
+| PC_TOKEN_RENEW_BEFORE_DAYS (30) | `x-backend-env` default, overridable | The relay renews a Client >= 1.4.0's token that expires within this many days; 0 turns expiry renewal off (D30) |
 
 Backend and Celery also read `./secrets/alerting.env`; the relay reads only `.env`.
 
@@ -127,7 +129,8 @@ for tests; leave them unset in production). Presence stamps (`last_connected`,
 startup_check service=websocket version=... deploy_inject_config_id=true relay_station_reports=on
   deploy_catchup_enabled=false deploy_ack_timeout_sec=300 relay_debug_logging=false
   relay_sender_secret=fp:<12 hex> settings_encryption_key=ok fp:<12 hex>
-  jwt_secret_is_client_constant=false broker=reachable (redis:6379)
+  jwt_secret_is_client_constant=false jwt_rotation_window=off jwt_secret_previous=unset
+  pc_token_renew_before_days=30 broker=reachable (redis:6379)
 ```
 
 A secret appears only as `fp:` plus the first 12 hex characters of its sha256
@@ -148,6 +151,61 @@ committed `${VAR:-<default>}` fallbacks for SECRET_KEY and JWT_SECRET):
    and the switch would drop stations off the relay. Follow OD-23 / D30 instead.
 3. After `docker compose up -d`, check that the four `startup_check` lines show the
    same fingerprints, and re-run G-1 against the relay.
+
+### PC token renewal and JWT_SECRET rotation (D30)
+
+PC tokens (`type: pc_auth`, signed with JWT_SECRET) last `JWT_PC_TOKEN_EXPIRE_HOURS`
+(8760 h). The relay verifies them with JWT_SECRET and, during a rotation window, also
+with JWT_SECRET_PREVIOUS. After `registered`, a station whose token was signed with
+the previous secret, or expires within `PC_TOKEN_RENEW_BEFORE_DAYS`, is sent a new
+token (`pc_token_renewed {token, exp}`, on its own session only, with an ACK) when it
+registered with the capability `pc_token.v1` (Client >= 1.4.0). The relay stores the
+new token in `pcs.auth_token` (updated by `system`) and keeps the sha256 of the old one
+in `pc_token_renewals`; until the station confirms (ACK `stored`, or registering with
+the new token), both tokens count as current, also with
+`RELAY_REQUIRE_CURRENT_TOKEN=true`. A station that reconnects with the old token gets
+the same new token again; nothing is minted twice. Every issue, confirmation, refusal
+and cancellation is in `audit_logs` (`pc.token.renewed`, `pc.token.renewal.confirmed`,
+`.refused`, `.cancelled`), without any token. Generating a token in the portal cancels
+the PC's open renewals.
+
+The relay never re-tokens: a Client without `pc_token.v1` (1.1.x to 1.3.x), and a
+station that presents an **outdated** token (one that differs from `pcs.auth_token`).
+Renewing an outdated token would turn a token minted with a leaked previous secret
+into a valid new-secret one. Such stations are flagged `token_drop_needed`
+(`pc_health.relay_flags`, and a WARNING in the relay log) and need B22's token-only
+drop (Client >= 1.3.0) or a technician.
+
+Fleet view, counts and PC ids only (never a token):
+`docker exec truelive_backend python -m app.services.pc_tokens report`. Per PC the
+status is `ok`, `renewal_unconfirmed`, `awaiting_reconnect` (it can take a renewal and
+will get one when it next registers), `needs_drop` or `no_token`; `secrets` counts
+the stored tokens per signing secret.
+
+**Rotation runbook** (OD-23: never rotate at once, only through this window):
+1. Before: run the report. Stations with `needs_drop` must be re-tokened by a token
+   drop or a technician, now or before the window ends.
+2. In `.env`, set `JWT_SECRET_PREVIOUS` to the current JWT_SECRET value, `JWT_SECRET` to
+   a new one (`python -c "import secrets; print(secrets.token_urlsafe(48))"`), and
+   `JWT_ROTATION_GRACE_UNTIL` to the window end, at least 14 days out, in UTC
+   (`2027-01-31T00:00:00Z`).
+3. Restart the four services together (`docker compose up -d backend websocket
+   celery_worker celery_beat`). Every station reconnects with its old token, registers,
+   and (Client >= 1.4.0) gets and confirms a new one.
+4. Check the start lines: all four show `jwt_rotation_window=open until <end>` and the
+   same `jwt_secret_previous=fp:...`, and the relay logs `Relay tokens:
+   rotation_window=open until=<end>`. Without a window end the previous secret is NOT
+   accepted (`jwt_rotation_window=no_end`, an ERROR): fix it at once.
+5. Watch the report's `secrets.previous` count and the relay log (`token renewal ...
+   sent`, `confirmed token renewal`, `token_drop_needed`).
+6. Close the window when `secrets.previous` is 0, or when the stations still on it have
+   been re-tokened by hand: remove `JWT_SECRET_PREVIOUS` and `JWT_ROTATION_GRACE_UNTIL`
+   and restart. If the end passes first, previous-secret tokens are refused from that
+   moment (no restart needed) and the next start logs a WARNING.
+
+Notes: portal user sessions are signed with SECRET_KEY, not JWT_SECRET, so this
+rotation does not log anyone out. How production sets `.env` values is not known
+here (open question 18); these steps assume the compose `.env`.
 
 ### Migration
 - DATABASE_URL, SECRET_KEY, JWT_SECRET (inline, unchanged by D28)

@@ -331,7 +331,7 @@ def test_station_status_caps_failed_ids(h, count, ok):
 
 
 def test_station_status_is_buffered_with_relay_flags(h):
-    outdated = make_pc_token("PC_A", h.secret, exp_delta=7200)
+    outdated = make_pc_token("PC_A", h.secret, exp_delta=4000 * 3600)
     h.add_pc("PC_A")
     _online(h, token=outdated)  # differs from the stored token: token_outdated
     assert relay.session_data["pc-a"]["status_seen"] is False

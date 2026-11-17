@@ -73,7 +73,28 @@ Station reports (plan 06 D15; C23, E20, NEW-44, NEW-52):
   presence writes (register stamp, last_seen sweep) leave pcs.updated_at
   alone (NEW-52).
 
-The relay never rotates JWT_SECRET (OD-23: rotation only through D30).
+PC token renewal and the rotation window (plan 06 D30, relay part; OD-23,
+NEW-77; app/services/pc_tokens.py):
+
+* A token verifies with JWT_SECRET, and while JWT_ROTATION_GRACE_UNTIL is in
+  the future also with JWT_SECRET_PREVIOUS (``token_previous_secret`` flag).
+  After the window, previous-secret tokens are refused like a bad signature.
+* The replaced token of an open renewal counts as current (OD-23 (b) accepts
+  either until the PC confirms); registering with the stored (renewed) token
+  confirms the renewal.
+* After ``registered``, a PC whose token was signed with the previous secret
+  or expires within PC_TOKEN_RENEW_BEFORE_DAYS (``token_expiring``) is sent
+  ``pc_token_renewed {token, exp}`` on its own sid, with an ACK, when it
+  declared the capability ``pc_token.v1`` and ``registered`` advertised it.
+  The mint and the store run off the hub. ``{"status": "stored"}`` confirms
+  the renewal and clears the session's token flags.
+* A PC that needs a new token but cannot take one (no ``pc_token.v1``, or an
+  outdated token, which is never renewed) is flagged ``token_drop_needed``
+  (pc_health.relay_flags; ``python -m app.services.pc_tokens report`` lists
+  them for B22's token drop or a technician).
+
+The relay never rotates JWT_SECRET itself (OD-23): ops rotates it through the
+window above (DOCKER_SETUP.md runbook).
 """
 import functools
 import json
@@ -81,7 +102,7 @@ import logging
 import os
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 import jwt
@@ -93,7 +114,7 @@ from app.core.config import settings
 from app.database import get_db
 from app.models.pc import PC
 from app.schemas import station_protocol
-from app.services import deploy_tracking, relay_auth, station_reports
+from app.services import deploy_tracking, pc_tokens, relay_auth, station_reports
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +143,13 @@ MAX_NAME_LENGTH = 255
 FLAG_TOKEN_OUTDATED = "token_outdated"
 FLAG_DUPLICATE = "duplicate_registration"
 FLAG_DB_UNVERIFIED = "db_unverified"
+# D30: the token was signed with JWT_SECRET_PREVIOUS / expires within
+# PC_TOKEN_RENEW_BEFORE_DAYS / needs a new token the relay cannot give it.
+FLAG_TOKEN_PREVIOUS_SECRET = "token_previous_secret"
+FLAG_TOKEN_EXPIRING = "token_expiring"
+FLAG_TOKEN_DROP_NEEDED = "token_drop_needed"
+# Flags a confirmed renewal clears (the PC now holds the stored token).
+TOKEN_FLAGS = (FLAG_TOKEN_OUTDATED, FLAG_TOKEN_PREVIOUS_SECRET, FLAG_TOKEN_EXPIRING, FLAG_TOKEN_DROP_NEEDED)
 
 # Messages shown to a PC whose registration is refused (Client 1.1.x shows
 # them in a tray notification).
@@ -266,6 +294,11 @@ relay_counters: Dict[str, int] = {
     "reports_disabled": 0,
     "health_batches": 0,
     "health_rows": 0,
+    "token_renewals_issued": 0,
+    "token_renewals_resent": 0,
+    "token_renewals_confirmed": 0,
+    "token_renewals_refused": 0,
+    "token_drop_needed": 0,
 }
 
 # Deploy events whose row did not exist yet, or whose write failed (D14).
@@ -461,28 +494,31 @@ def validate_token(auth_token: str) -> Dict[str, Any]:
     Raises:
         jwt.InvalidTokenError: If token is invalid or expired
     """
+    return verify_token(auth_token)[0]
+
+
+def verify_token(auth_token: str):
+    """``(payload, secret)`` of a PC token: JWT_SECRET, or JWT_SECRET_PREVIOUS
+    while the rotation window is open (D30; ``secret`` is
+    pc_tokens.SECRET_CURRENT or SECRET_PREVIOUS). Raises jwt.InvalidTokenError;
+    the log names the error class only."""
     try:
-        payload = jwt.decode(
-            auth_token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM]
-        )
-        return payload
+        return pc_tokens.verify_pc_token(auth_token, settings)
 
     except jwt.ExpiredSignatureError:
         logger.error("Token has expired")
         raise
 
     except jwt.InvalidTokenError as e:
-        logger.error(f"Invalid token: {e}")
+        logger.error(f"Invalid token: {type(e).__name__}")
         raise
 
 
 def _token_is_current(pc: PC, auth_token: str, db) -> bool:
-    """OD-23: the presented token equals the token stored for the PC.
-
-    D30 extends this to also accept the previous token of an unconfirmed
-    renewal (pc_token_renewals.previous_token_sha256).
-    """
-    return relay_auth.same_token(auth_token, pc.auth_token)
+    """OD-23: the presented token equals the token stored for the PC, or (D30)
+    it is the replaced token of the PC's open renewal: either counts until the
+    PC confirms the renewed token."""
+    return pc_tokens.check_presented_token(db, pc.id, pc.auth_token, auth_token).current
 
 
 class PcCheck:
@@ -493,9 +529,14 @@ class PcCheck:
     TOKEN_REPLACED = "token_replaced"
     DB_ERROR = "db_error"
 
-    def __init__(self, status: str, token_current: Optional[bool] = None):
+    def __init__(self, status: str, token_current: Optional[bool] = None, via_renewal: Optional[int] = None,
+                 renewals_confirmed: Optional[List[int]] = None):
         self.status = status
         self.token_current = token_current
+        # D30: the presented token is the replaced token of this open renewal.
+        self.via_renewal = via_renewal
+        # D30: renewals the presented (stored, renewed) token confirmed.
+        self.renewals_confirmed = list(renewals_confirmed or [])
 
 
 def _authorize_pc(pc_id: str, auth_token: str) -> PcCheck:
@@ -512,8 +553,10 @@ def _authorize_pc(pc_id: str, auth_token: str) -> PcCheck:
         pc = db.query(PC.id, PC.auth_token).filter(PC.id == pc_id).first()
         if pc is None:
             return PcCheck(PcCheck.UNKNOWN_PC)
-        current = _token_is_current(pc, auth_token, db)
+        presented = pc_tokens.check_presented_token(db, pc.id, pc.auth_token, auth_token)
+        current = presented.current
         if not current and settings.RELAY_REQUIRE_CURRENT_TOKEN:
+            db.rollback()
             return PcCheck(PcCheck.TOKEN_REPLACED, token_current=False)
         now_ts = int(time.time())  # Unix timestamp
         # Seed last_seen immediately so a freshly-connected PC isn't up to one
@@ -521,7 +564,8 @@ def _authorize_pc(pc_id: str, auth_token: str) -> PcCheck:
         # kept (NEW-52).
         db.execute(_presence_update([pc_id], last_connected=now_ts, last_seen=now_ts))
         db.commit()
-        return PcCheck(PcCheck.OK, token_current=current)
+        return PcCheck(PcCheck.OK, token_current=current, via_renewal=presented.via_renewal,
+                       renewals_confirmed=presented.confirmed)
     except Exception as db_error:
         logger.error(f"PC lookup failed for {pc_id}: {type(db_error).__name__}")
         if db is not None:
@@ -652,9 +696,9 @@ def register(sid, data):
             _refuse_registration(sid, MSG_INVALID_TOKEN, "token too long")
             return
 
-        # Validate JWT token
+        # Validate JWT token (D30: the previous secret too, while the window is open)
         try:
-            payload = validate_token(auth_token)
+            payload, secret_used = verify_token(auth_token)
         except jwt.InvalidTokenError as e:
             _refuse_registration(sid, MSG_INVALID_TOKEN, f"token validation failed ({type(e).__name__})")
             return
@@ -690,6 +734,17 @@ def register(sid, data):
         elif check.token_current is False:
             flags[FLAG_TOKEN_OUTDATED] = True
             logger.warning(f"PC {pc_id} registered with an outdated token (token_outdated, OD-23)")
+        if check.renewals_confirmed:
+            relay_counters["token_renewals_confirmed"] += len(check.renewals_confirmed)
+            logger.info(f"PC {pc_id} registered with its renewed token: renewal(s) "
+                        f"{', '.join(str(i) for i in check.renewals_confirmed)} confirmed")
+
+        # D30: a token signed with the previous secret, or close to expiry.
+        renew_reason = pc_tokens.renewal_reason(payload, secret_used, settings)
+        if secret_used == pc_tokens.SECRET_PREVIOUS:
+            flags[FLAG_TOKEN_PREVIOUS_SECRET] = True
+        if renew_reason == pc_tokens.REASON_EXPIRING:
+            flags[FLAG_TOKEN_EXPIRING] = True
 
         # NEW-43: a second live registration of this pc_id takes over; the old
         # session stays connected but is no longer this PC.
@@ -707,17 +762,21 @@ def register(sid, data):
         if old_pc and old_pc != pc_id and connected_pcs.get(old_pc) == sid:
             del connected_pcs[old_pc]
 
-        # Register PC
         features = advertised_features()
+        capabilities = parse_capabilities(data)
+        renew = _renewal_decision(pc_id, check, flags, renew_reason, capabilities, features)
+
+        # Register PC
         connected_pcs[pc_id] = sid
         session["pc_id"] = pc_id
         session["name"] = name
         session["ever_registered"] = True
         session["superseded_by"] = None
         session["flags"] = flags
-        session["capabilities"] = parse_capabilities(data)
+        session["capabilities"] = capabilities
         session["features"] = features
         session["status_seen"] = False  # D17: catch-up is decided on the first station_status
+        session["token_renewal_id"] = None  # D30: the renewal sent on this session
 
         # E20: the register's version fields, each checked; stored with the
         # relay flags at the next health flush. pc_id is the session's.
@@ -734,6 +793,10 @@ def register(sid, data):
 
         # Broadcast updated client list
         broadcast_client_list()
+
+        # D30: mint (or resend) the PC's new token off the hub, after registered.
+        if renew:
+            _spawn(_renew_pc_token, sid, pc_id, auth_token, renew_reason)
 
     except Exception as e:
         logger.error(f"Error during registration for {sid}: {type(e).__name__}: {e}")
@@ -991,6 +1054,132 @@ def deploy_config(sid, data=None):
     except Exception as e:
         logger.error(f"Error in {DEPLOY_EVENT} from {sid}: {type(e).__name__}")
         return _deploy_answer(DEPLOY_ERROR, reason="relay error")
+
+
+# --------------------------------------------------------------------------- #
+# PC token renewal (D30)
+# --------------------------------------------------------------------------- #
+
+
+def _renewal_decision(pc_id: str, check: "PcCheck", flags: Dict[str, bool], reason: Optional[str],
+                      capabilities: List[str], features: List[str]) -> bool:
+    """True when this registration should get a new (or resent) token.
+
+    Wanted when the token was signed with the previous secret, expires soon,
+    or is the replaced token of an open renewal (the PC never got, or never
+    stored, the new one). Deferred to the next registration for an
+    unverified or duplicate session. Never for an outdated token or a Client
+    without ``pc_token.v1``: those are flagged ``token_drop_needed``.
+    """
+    if reason is None and check.via_renewal is None:
+        return False
+    if check.status != PcCheck.OK:
+        logger.info(f"PC {pc_id}: token renewal deferred to its next registration (no database check)")
+        return False
+    if flags.get(FLAG_DUPLICATE):
+        logger.info(f"PC {pc_id}: token renewal deferred to its next registration (duplicate registration)")
+        return False
+    why = None
+    if flags.get(FLAG_TOKEN_OUTDATED):
+        why = "its token is outdated, and an outdated token is never renewed"
+    elif not pc_tokens.can_take_renewal(capabilities, features):
+        why = f"the Client does not support {pc_tokens.FEATURE}"
+    if why is not None:
+        flags[FLAG_TOKEN_DROP_NEEDED] = True
+        relay_counters["token_drop_needed"] += 1
+        logger.warning(f"PC {pc_id} needs a new token ({reason or 'renewal pending'}) but cannot get one from the "
+                       f"relay: {why} (token_drop_needed; use a token drop or the portal)")
+        return False
+    return True
+
+
+def _in_transaction(work: Callable) -> Any:
+    db = _open_db()
+    try:
+        result = work(db)
+        db.commit()
+        return result
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        db.close()
+
+
+def _renew_pc_token(sid: str, pc_id: str, presented_token: str, reason: Optional[str]) -> None:
+    """Background task: mint and store (or look up) the PC's new token off the
+    hub, then send it to the PC's current session only, with an ACK."""
+    try:
+        renewal = _run_blocking(_in_transaction,
+                                lambda db: pc_tokens.issue_or_resume(db, pc_id, presented_token, reason))
+    except Exception as exc:
+        logger.error(f"PC {pc_id}: token renewal failed ({type(exc).__name__}); retried at its next registration")
+        return
+    if renewal is None:
+        logger.info(f"PC {pc_id}: no token renewal issued (its token is no longer the stored one)")
+        return
+    relay_counters["token_renewals_issued" if renewal.minted else "token_renewals_resent"] += 1
+    if _registered_pc(sid) != pc_id:
+        logger.info(f"PC {pc_id}: token renewal {renewal.renewal_id} kept for its next registration "
+                    f"(session {sid} is no longer the PC's)")
+        return
+    session_data[sid]["token_renewal_id"] = renewal.renewal_id
+    renewal_id = renewal.renewal_id
+
+    def _on_ack(*ack):
+        _spawn(_renewal_acked, sid, pc_id, renewal_id, ack[0] if ack else None)
+
+    sio.emit(pc_tokens.EVENT_RENEWED, {"token": renewal.token, "exp": renewal.exp}, to=sid, callback=_on_ack)
+    expires = datetime.fromtimestamp(renewal.exp, tz=timezone.utc).date().isoformat()
+    logger.info(f"PC {pc_id}: token renewal {renewal_id} sent ({renewal.reason}, "
+                f"{'new token' if renewal.minted else 'same token again'}, expires {expires})")
+
+
+def _clear_token_flags(sid: str, pc_id: str) -> None:
+    """A confirmed renewal: the PC holds the stored token now."""
+    if _registered_pc(sid) != pc_id:
+        return
+    flags = session_data[sid].setdefault("flags", {})
+    removed = [flags.pop(name) for name in TOKEN_FLAGS if name in flags]
+    if not removed:
+        return
+    health_buffer.put(pc_id, {"relay_flags": dict(flags)})
+    broadcast_client_list()
+
+
+def _renewal_acked(sid: str, pc_id: str, renewal_id: int, ack: Any) -> None:
+    """Background task: the PC answered ``pc_token_renewed``."""
+    status, reason = pc_tokens.parse_renewal_ack(ack)
+    if status == pc_tokens.ACK_STORED:
+        try:
+            confirmed = _run_blocking(_in_transaction,
+                                      lambda db: pc_tokens.confirm_renewal(db, pc_id, renewal_id, via="ack"))
+        except Exception as exc:
+            logger.error(f"PC {pc_id}: could not confirm token renewal {renewal_id} ({type(exc).__name__}); "
+                         f"it is confirmed when the PC registers with the new token")
+            return
+        if confirmed:
+            relay_counters["token_renewals_confirmed"] += 1
+            logger.info(f"PC {pc_id} confirmed token renewal {renewal_id}")
+        else:
+            logger.info(f"PC {pc_id} confirmed token renewal {renewal_id}, which is already closed or cancelled")
+        _clear_token_flags(sid, pc_id)
+    elif status == pc_tokens.ACK_REFUSED:
+        relay_counters["token_renewals_refused"] += 1
+        logger.warning(f"PC {pc_id} refused token renewal {renewal_id} ({reason}); its current token stays valid")
+        try:
+            _run_blocking(_in_transaction, lambda db: pc_tokens.record_refusal(db, pc_id, renewal_id, reason))
+        except Exception as exc:
+            logger.error(f"PC {pc_id}: could not audit the refused renewal {renewal_id} ({type(exc).__name__})")
+    else:
+        logger.warning(f"PC {pc_id} answered token renewal {renewal_id} without a status; not confirmed")
+
+
+# pc_token.v1 is a push (no event handler): advertise it once the push exists.
+enable_feature(station_protocol.FEATURE_PC_TOKEN)
 
 
 # --------------------------------------------------------------------------- #
@@ -1326,6 +1515,13 @@ def run_server(host: str = "0.0.0.0", port: int = 8080):
         f"require_current_token={'true' if settings.RELAY_REQUIRE_CURRENT_TOKEN else 'false'} "
         f"packet_logging={'on' if settings.RELAY_DEBUG_LOGGING else 'off'} "
         f"features={','.join(advertised_features()) or '-'}"
+    )
+    window = pc_tokens.window_state(settings)
+    until = pc_tokens.grace_until(settings)
+    logger.info(
+        f"Relay tokens: rotation_window={window}"
+        + (f" until={datetime.fromtimestamp(until, tz=timezone.utc).isoformat()}" if until is not None else "")
+        + f" renew_before_days={settings.PC_TOKEN_RENEW_BEFORE_DAYS}"
     )
 
     sweep_interval = int(os.environ.get("WS_LAST_SEEN_SWEEP_SECONDS", "30"))

@@ -31,8 +31,11 @@ FLAGS = {
     "DEPLOY_ACK_TIMEOUT_SEC": "300",
     "RELAY_DEBUG_LOGGING": "false",
     "RELAY_REQUIRE_CURRENT_TOKEN": "false",
+    "PC_TOKEN_RENEW_BEFORE_DAYS": "30",  # D30
 }
-FROM_DOTENV = ("SECRET_KEY", "JWT_SECRET", "SETTINGS_ENCRYPTION_KEY", "RELAY_SENDER_SECRET")
+# D30: the rotation pair comes from .env only, like JWT_SECRET.
+FROM_DOTENV = ("SECRET_KEY", "JWT_SECRET", "SETTINGS_ENCRYPTION_KEY", "RELAY_SENDER_SECRET",
+               "JWT_SECRET_PREVIOUS", "JWT_ROTATION_GRACE_UNTIL")
 SHARED_PLAIN = ("DATABASE_URL", "REDIS_URL", "CELERY_BROKER_URL", "CELERY_RESULT_BACKEND")
 _INTERPOLATION = re.compile(r"\$\{([A-Z0-9_]+)(?::-([^}]*))?\}")
 
@@ -85,6 +88,8 @@ def _dotenv():
             "JWT_SECRET": "fixture-jwt-secret-" + "j" * 16,
             "SETTINGS_ENCRYPTION_KEY": "fixture-fernet-key-placeholder",
             "RELAY_SENDER_SECRET": "fixture-sender-secret-" + "s" * 32,
+            "JWT_SECRET_PREVIOUS": "fixture-jwt-previous-" + "p" * 16,
+            "JWT_ROTATION_GRACE_UNTIL": "2027-01-31T00:00:00Z",
         },
         "./secrets/alerting.env": {"MINIO_ACCESS_KEY": "fixture-minio"},
     }
@@ -168,6 +173,7 @@ def test_flag_defaults_match_settings_defaults():
         "DEPLOY_ACK_TIMEOUT_SEC": 300,
         "RELAY_DEBUG_LOGGING": False,
         "RELAY_REQUIRE_CURRENT_TOKEN": False,
+        "PC_TOKEN_RENEW_BEFORE_DAYS": 30,
     }
 
 
@@ -179,5 +185,6 @@ def test_env_example_has_placeholders_and_no_values_for_new_secrets():
             entries[key.strip()] = value.strip()
     assert entries["SETTINGS_ENCRYPTION_KEY"] == ""
     assert entries["RELAY_SENDER_SECRET"] == ""
+    assert entries["JWT_SECRET_PREVIOUS"] == "" and entries["JWT_ROTATION_GRACE_UNTIL"] == ""
     for variable, default in FLAGS.items():
         assert entries[variable] == default, variable
