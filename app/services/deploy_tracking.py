@@ -25,7 +25,12 @@ Rules:
   nothing: terminal.
 * ``unconfirmed`` (D15 sweep) is upgraded by late Core evidence (accepted,
   applied, failed), never by a late Socket.IO ACK (that only stamps
-  ``received_at``, which D17 reads as "it was received").
+  ``received_at``, which D17 reads as "it was received"). The one exception
+  is a non-confirmable row (Client 1.1.x), whose ACK is the only evidence it
+  can ever give: the sweep moves it to ``unconfirmed`` when that ACK does not
+  arrive within DEPLOY_ACK_TIMEOUT_SEC of delivery (the connection dropped
+  after the forward), and a late ACK still makes it ``received``
+  (``record_receipt``).
 * ``applied`` can still become ``failed`` (a late Failed, OD-18 (b)).
 * ``failed`` and ``superseded`` are terminal.
 * A newer deploy to the same PC supersedes the older rows that are still in
@@ -123,6 +128,26 @@ MAX_DETAIL = 500
 def can_transition(current: str, to: str) -> bool:
     """True when a row in ``current`` may move to ``to``."""
     return current in ALLOWED_FROM.get(to, frozenset())
+
+
+def is_data_error(exc: BaseException) -> bool:
+    """True when ``exc`` comes from the data being written, so the same write
+    fails the same way every time: a value PostgreSQL refuses (psycopg2
+    raises ValueError for NUL and UnicodeEncodeError for a lone surrogate
+    before sending; DataError for an over-long or malformed value) or a
+    broken constraint (IntegrityError). Anything else (a lost or refused
+    connection, a lock or statement timeout, a missing table) may clear, so
+    callers keep such writes for a retry."""
+    from sqlalchemy import exc as sa_exc
+
+    if isinstance(exc, (sa_exc.DataError, sa_exc.IntegrityError)):
+        return True
+    if isinstance(exc, sa_exc.DBAPIError):
+        return False
+    if isinstance(exc, sa_exc.StatementError):
+        orig = getattr(exc, "orig", None)
+        return orig is not None and orig is not exc and is_data_error(orig)
+    return isinstance(exc, (ValueError, TypeError))
 
 
 def now_ts() -> int:
@@ -314,6 +339,19 @@ def record_receipt(db, config_id: str, pc_id: str, *, confirmable: bool, ts: Opt
         fields={"confirmable": bool(confirmable)},
         stamps={"delivered_at": forwarded_at},
     )
+    if not confirmable and result.outcome == "stale" and result.status == UNCONFIRMED:
+        # A Client 1.1.x row the sweep gave up on (no ACK within the timeout):
+        # its ACK is the only evidence it can give, so a late one still counts.
+        moved = db.execute(
+            update(PcDeployment)
+            .where(PcDeployment.id == config_id, PcDeployment.pc_id == pc_id, PcDeployment.status == UNCONFIRMED,
+                   PcDeployment.confirmable == False)  # noqa: E712
+            .values(status=RECEIVED, status_changed_at=ts, received_at=func.coalesce(PcDeployment.received_at, ts),
+                    status_detail=_detail("acknowledged after the timeout"))
+            .execution_options(synchronize_session=False)
+        )
+        if moved.rowcount == 1:
+            result = TransitionResult("changed", status=RECEIVED, previous=UNCONFIRMED)
     if result.changed and not confirmable:
         stamp_last_applied(db, pc_id, ts)
     return result
@@ -335,7 +373,11 @@ def sweep_timeouts(db, *, now: Optional[int] = None, ack_timeout: int = 300) -> 
       (DEPLOY_ACK_TIMEOUT_SEC) since delivery: unconfirmed;
     * confirmable rows accepted for more than twice that since acceptance:
       unconfirmed;
-    * non-confirmable rows (Client 1.1.x) are left alone: they end at received.
+    * non-confirmable rows (Client 1.1.x) end at received; one still
+      ``delivered`` with no receipt more than ``ack_timeout`` after delivery
+      (its ACK never came: the connection dropped after the forward, or the
+      relay restarted) becomes unconfirmed, so the portal can tell it from a
+      layout the station acknowledged (M2 review).
 
     Late evidence still upgrades the result afterwards (ALLOWED_FROM). Does not
     commit. Returns the number of rows each rule moved.
@@ -380,6 +422,20 @@ def sweep_timeouts(db, *, now: Optional[int] = None, ack_timeout: int = 300) -> 
         .execution_options(synchronize_session=False)
     )
     counts["accepted_to_unconfirmed"] = result.rowcount or 0
+
+    result = db.execute(
+        update(PcDeployment)
+        .where(
+            PcDeployment.confirmable == False,  # noqa: E712
+            PcDeployment.status == DELIVERED,
+            PcDeployment.received_at.is_(None),
+            since_delivery < now - ack_timeout,
+        )
+        .values(status=UNCONFIRMED, status_changed_at=now, unconfirmed_at=func.coalesce(PcDeployment.unconfirmed_at, now),
+                source="timeout", status_detail=_detail(f"the station did not acknowledge it within {ack_timeout} s"))
+        .execution_options(synchronize_session=False)
+    )
+    counts["unacknowledged_to_unconfirmed"] = result.rowcount or 0
     return counts
 
 
@@ -404,8 +460,11 @@ class PendingTransitions:
 
     Thread-safe and bounded: at most ``max_events`` are kept (the oldest is
     dropped first) and each expires after ``ttl_seconds``. ``retry(open_db)``
-    re-applies every event in one session: ``changed``, ``stale`` and
-    ``mismatch`` events are done, ``missing`` ones stay until they expire.
+    re-applies every event in one session, each inside its own savepoint:
+    ``changed``, ``stale`` and ``mismatch`` events are done, ``missing`` ones
+    stay until they expire, and an event the database refuses for its data
+    (``is_data_error``) is dropped (``refused``) instead of aborting the
+    others. Any other error aborts the retry and keeps every event.
     """
 
     def __init__(self, ttl_seconds: float = 600.0, max_events: int = 10_000,
@@ -417,6 +476,7 @@ class PendingTransitions:
         self._lock = threading.Lock()
         self.dropped = 0
         self.expired = 0
+        self.refused = 0
 
     def __len__(self) -> int:
         with self._lock:
@@ -441,6 +501,7 @@ class PendingTransitions:
             return 0, 0
         now = self._clock()
         keep: List[PendingEvent] = []
+        refused: List[PendingEvent] = []
         done = 0
         db = None
         try:
@@ -452,7 +513,17 @@ class PendingTransitions:
                                    f"its row never appeared")
                     continue
                 event.attempts += 1
-                result = event.apply(db)  # an error aborts the whole retry (below)
+                try:
+                    with db.begin_nested():  # one event's failure must not undo the others
+                        result = event.apply(db)
+                except Exception as exc:
+                    if not is_data_error(exc):
+                        raise  # the database itself failed: abort the whole retry (below)
+                    self.refused += 1
+                    refused.append(event)
+                    logger.error(f"Dropping deploy event {event.label or '?'} for {event.config_id}: "
+                                 f"the database refuses it ({type(exc).__name__})")
+                    continue
                 if result.outcome == "missing":
                     keep.append(event)
                 else:
@@ -467,7 +538,7 @@ class PendingTransitions:
                     db.rollback()
                 except Exception:
                     pass
-            keep = [event for event in events if event.expires_at > now]
+            keep = [event for event in events if event.expires_at > now and event not in refused]
             done = 0
         finally:
             if db is not None:

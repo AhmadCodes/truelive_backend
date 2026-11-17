@@ -186,6 +186,7 @@ def test_reconnect_catch_up(pg, monkeypatch):
         stations.append(old)
         _wait(lambda: old.configs, CATCHUP_LIMIT_S, "PC_OLD never got the missed layout")
         old_after = time.monotonic() - started
+        old_started = started  # PC_OLD's key was set after this moment
         content = old.configs[0]["content"]
         assert content["config_id"] != missed["PC_OLD"]
 
@@ -227,8 +228,14 @@ def test_reconnect_catch_up(pg, monkeypatch):
         time.sleep(2.0)
         assert rl.configs == [] and [r.trigger for r in rows("PC_RL")] == ["layout_deploy"]
         assert [r.trigger for r in rows("PC_OFF")] == ["layout_deploy"]  # never came back
-        for pc in ("PC_OLD", "PC_NEW"):
-            assert 590 <= redis_server.ttl(catchup.rate_key(pc)) <= 600
+        # SET NX EX 600: the TTL left is 600 s minus the time since the key was
+        # set, measured from a moment before it could have been set (the fake
+        # Redis runs in this process on the same monotonic clock), so the check
+        # does not depend on how long the steps above took (it failed under
+        # full-suite load with a fixed 590 s floor).
+        for pc, set_after in (("PC_OLD", old_started), ("PC_NEW", started)):
+            ttl = redis_server.ttl(catchup.rate_key(pc))
+            assert ttl is not None and set_after + 600 - time.monotonic() - 0.5 <= ttl <= 600, (pc, ttl)
 
         # No loops: everyone reconnects after a relay restart; nobody is re-pushed.
         for station in stations:

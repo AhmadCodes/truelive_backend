@@ -19,12 +19,24 @@ NEW-44). Pure logic, no eventlet and no Socket.IO, so it is tested directly.
   (PostgreSQL and SQLite), in one transaction. Rows of PCs that no longer
   exist are dropped.
 * ``MessageIdLRU`` deduplicates reports by (pc_id, message_id), 10 000 kept.
+* Station input is untrusted (M2 review). Free text is cleaned before it is
+  stored (``clean_text``: NUL and the other control characters except tab,
+  newline and carriage return are removed, lone surrogates become U+FFFD),
+  because PostgreSQL text columns refuse NUL and one such row would fail a
+  whole health batch. ``scrub_report_text`` does this, and replaces every URL
+  by ``<url>``, in the report's free-text fields *before* D1 validation, so a
+  Core error message that quotes a camera URL with credentials is stored
+  without them instead of losing the whole report (D15: "userinfo
+  stripped"); a credential anywhere else still rejects the report (D1).
+  Pattern checks use ``fullmatch``: ``$`` would also match before a trailing
+  newline.
 """
 
 import json
 import re
 import threading
 from collections import OrderedDict
+from dataclasses import dataclass, field
 from typing import Any, Dict, Hashable, Iterable, List, Mapping, Optional, Tuple
 
 from sqlalchemy import func, select
@@ -38,11 +50,23 @@ DEDUP_SIZE = 10_000
 UPSERT_CHUNK = 500  # rows per statement (well under PostgreSQL's 65535 parameters)
 
 _URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://\S*")
+# Every pattern below is applied with fullmatch (see the module docstring).
 _VERSION_RE = re.compile(sp.VERSION_PATTERN)
 _SHORT_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.:+-]{1,32}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _CONFIG_ID_OR_EMPTY_RE = re.compile(r"^[\x21-\x7e]{0,%d}$" % sp.MAX_CONFIG_ID_LENGTH)
 _CAPABILITY_RE = re.compile(sp.CAPABILITY_PATTERN)
+# Removed from stored free text: C0 controls except \t \n \r, and DEL.
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_LONE_SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
+
+# The report fields that hold free text (D1 ``_text``), as paths into the
+# payload: a list step is written "[]". Only these are scrubbed before
+# validation; every other field is a pattern-checked token or a number.
+FREE_TEXT_PATHS: Dict[str, Tuple[Tuple[str, ...], ...]] = {
+    "DeployResultV1": (("detail",),),
+    "StationStatusV1": (("config_status", "last_config_error"), ("readiness", "[]", "detail")),
+}
 
 # DeployResultV1.status -> pc_deployments target state.
 REPORT_TARGETS: Dict[str, str] = {
@@ -59,11 +83,59 @@ REPORT_TARGETS: Dict[str, str] = {
 CLIENT_MINTED_PREFIX = "client-"
 
 
+def clean_text(text: str) -> str:
+    """``text`` without the characters PostgreSQL or a log cannot take: NUL
+    and the other control characters except tab, newline and carriage return
+    are removed, and lone surrogates become U+FFFD."""
+    return _LONE_SURROGATE_RE.sub("\ufffd", _CONTROL_RE.sub("", text))
+
+
+def clean_value(value: Any) -> Any:
+    """``value`` with :func:`clean_text` applied to every string in it (dict
+    keys included), so nothing a station sent can make a row unwritable."""
+    if isinstance(value, str):
+        return clean_text(value)
+    if isinstance(value, dict):
+        return {clean_value(k): clean_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [clean_value(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(clean_value(v) for v in value)
+    return value
+
+
 def strip_urls(text: Optional[str], max_length: int) -> Optional[str]:
-    """Free text as stored: every URL replaced by ``<url>``, bounded."""
+    """Free text as stored: cleaned (:func:`clean_text`), every URL replaced
+    by ``<url>``, bounded."""
     if text is None:
         return None
-    return _URL_RE.sub("<url>", str(text))[:max_length]
+    return _URL_RE.sub("<url>", clean_text(str(text)))[:max_length]
+
+
+def _scrub_path(node: Any, path: Tuple[str, ...]) -> Any:
+    if not path:
+        return _URL_RE.sub("<url>", clean_text(node)) if isinstance(node, str) else node
+    step, rest = path[0], path[1:]
+    if step == "[]":
+        return [_scrub_path(item, rest) for item in node] if isinstance(node, list) else node
+    if isinstance(node, dict) and step in node:
+        out = dict(node)
+        out[step] = _scrub_path(node[step], rest)
+        return out
+    return node
+
+
+def scrub_report_text(name: str, data: Any) -> Any:
+    """A copy of report ``data`` (DeployResultV1 / StationStatusV1) whose free
+    text fields are cleaned and have every URL replaced by ``<url>``, so a
+    credential quoted in an error message is never stored and does not get
+    the report rejected (D15). Run before D1 validation; the bounds and
+    every other field are left to the validation."""
+    if not isinstance(data, dict):
+        return data
+    for path in FREE_TEXT_PATHS.get(name, ()):
+        data = _scrub_path(data, path)
+    return data
 
 
 def report_size(data: Any) -> int:
@@ -221,15 +293,15 @@ def health_columns(model: "sp.StationStatusV1", received_at: int) -> Dict[str, A
 
 
 def _version(value):
-    return value if isinstance(value, str) and _VERSION_RE.match(value) else None
+    return value if isinstance(value, str) and _VERSION_RE.fullmatch(value) else None
 
 
 def _short_token(value):
-    return value if isinstance(value, str) and _SHORT_TOKEN_RE.match(value) else None
+    return value if isinstance(value, str) and _SHORT_TOKEN_RE.fullmatch(value) else None
 
 
 def _sha256(value):
-    return value if isinstance(value, str) and _SHA256_RE.match(value) else None
+    return value if isinstance(value, str) and _SHA256_RE.fullmatch(value) else None
 
 
 def _exe_size(value):
@@ -243,7 +315,7 @@ def _one_of(choices):
 
 
 def _config_id_or_empty(value):
-    return value if isinstance(value, str) and _CONFIG_ID_OR_EMPTY_RE.match(value) else None
+    return value if isinstance(value, str) and _CONFIG_ID_OR_EMPTY_RE.fullmatch(value) else None
 
 
 REGISTER_FIELDS = {
@@ -274,7 +346,7 @@ def parse_capabilities(data: Any) -> Optional[List[str]]:
     out: List[str] = []
     for cap in caps:
         if (not isinstance(cap, str) or not cap or len(cap) > sp.MAX_CAPABILITY_LENGTH
-                or not _CAPABILITY_RE.match(cap)):
+                or not _CAPABILITY_RE.fullmatch(cap)):
             return None
         if cap not in out:
             out.append(cap)
@@ -323,8 +395,9 @@ class HealthBuffer:
         unknown = set(columns) - HEALTH_WRITABLE
         if unknown:
             raise ValueError(f"not pc_health columns: {sorted(unknown)}")
+        cleaned = {name: clean_value(value) for name, value in columns.items()}
         with self._lock:
-            self._rows.setdefault(pc_id, {}).update(columns)
+            self._rows.setdefault(pc_id, {}).update(cleaned)
 
     def peek(self, pc_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
@@ -385,6 +458,69 @@ def upsert_health(db, batch: Mapping[str, Mapping[str, Any]]) -> Tuple[int, int]
             db.execute(stmt.on_conflict_do_update(index_elements=[PcHealth.pc_id], set_=update))
             written += len(chunk)
     return written, len(ids) - len([i for i in ids if i in existing])
+
+
+@dataclass
+class HealthWrite:
+    """Outcome of :func:`write_health_batch`."""
+
+    written: int = 0
+    dropped: int = 0  # rows of PCs that no longer exist
+    refused: List[Tuple[str, str]] = field(default_factory=list)  # (pc_id, error class): dropped, never retried
+    restore: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # for the next flush (database unavailable)
+    error: Optional[str] = None  # the error class of the first failure
+
+
+def write_health_batch(open_db, batch: Mapping[str, Mapping[str, Any]]) -> HealthWrite:
+    """Write ``batch`` with :func:`upsert_health` in one transaction.
+
+    If the database refuses the batch for its data (``is_data_error``, e.g.
+    a value PostgreSQL cannot store), the rows are written one PC per
+    transaction, so one PC's bad row cannot keep every other PC's health
+    out: the refused rows are dropped (``refused``), the others written. Any
+    other error (the database is unavailable) leaves the rows not yet
+    written in ``restore`` for the next flush, as before.
+    """
+
+    def write(rows: Mapping[str, Mapping[str, Any]]) -> Tuple[int, int]:
+        db = open_db()
+        try:
+            counts = upsert_health(db, rows)
+            db.commit()
+            return counts
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            db.close()
+
+    out = HealthWrite()
+    if not batch:
+        return out
+    try:
+        out.written, out.dropped = write(batch)
+        return out
+    except Exception as exc:
+        out.error = type(exc).__name__
+        if not dt.is_data_error(exc):
+            out.restore = {pc_id: dict(cols) for pc_id, cols in batch.items()}
+            return out
+    items = sorted(batch.items())
+    for index, (pc_id, columns) in enumerate(items):
+        try:
+            written, dropped = write({pc_id: columns})
+        except Exception as exc:
+            if dt.is_data_error(exc):
+                out.refused.append((pc_id, type(exc).__name__))
+                continue
+            out.restore = {p: dict(c) for p, c in items[index:]}
+            break
+        out.written += written
+        out.dropped += dropped
+    return out
 
 
 def merge_reports(rows: Iterable[Tuple[str, Mapping[str, Any]]]) -> Dict[str, Dict[str, Any]]:

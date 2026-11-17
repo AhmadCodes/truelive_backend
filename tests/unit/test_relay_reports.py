@@ -297,8 +297,8 @@ def _credential():
         (lambda: "not an object", "report is not an object"),
         (lambda: {"config_id": "cfg-1", "status": "applied", "ts": time.time()}, "invalid report"),
         (lambda: _result("cfg-1", "deployed"), "invalid report"),
-        (lambda: _result("cfg-1", "applied", detail="failed at " + _credential()), "invalid report"),
         (lambda: _result("cfg-1", "applied", extra_field={"url": _credential()}), "invalid report"),
+        (lambda: _result("cfg-1", "applied", mode=_credential()), "invalid report"),
         (lambda: _result("cfg-1", "applied", config={"screens": []}), "invalid report"),
         (lambda: _result("cfg-1", "applied", auth_token="x"), "invalid report"),
         (lambda: _result("c" * 65, "applied"), "invalid report"),
@@ -306,7 +306,7 @@ def _credential():
         (lambda: _result("cfg-1", "applied", detail="x" * 501), "invalid report"),
         (lambda: _result("cfg-1", "applied", padding="x" * (64 * 1024)), "report too large"),
     ],
-    ids=["not-dict", "no-message-id", "bad-status", "userinfo-detail", "userinfo-extra", "config-key",
+    ids=["not-dict", "no-message-id", "bad-status", "userinfo-extra", "userinfo-mode", "config-key",
          "token-key", "long-id", "ms-ts", "long-detail", "too-large"],
 )
 def test_invalid_deploy_results_are_rejected(h, caplog, build, reason):
@@ -382,7 +382,8 @@ def test_report_db_work_runs_off_the_hub(h, monkeypatch):
     monkeypatch.setattr(relay.sio, "sleep", one_tick)
     with pytest.raises(Stop):
         relay._last_seen_sweep(30)
-    assert calls == ["_authorize_pc", "_apply_and_commit", "write", "_apply_and_commit", "presence_sweep_once"]
+    assert calls == ["_authorize_pc", "_apply_and_commit", "write_health_batch", "_apply_and_commit",
+                     "presence_sweep_once"]
 
 
 def test_a_reporting_station_is_confirmable(h):
@@ -495,6 +496,25 @@ def test_relay_register_versions(h, caplog):
     assert "ignored invalid field(s)" in caplog.text and "capabilities" in caplog.text
     for value in ("1.4.0 beta", "1.1;rm", "fancy"):
         assert value not in caplog.text  # names only, never values
+    # M2 review: a trailing newline is refused too ("$" also matches before
+    # it; the checks use fullmatch, as D1's RegisterV1 does).
+    newline = {"client_version": "1.4.0\n", "client_build": "1.4.0+0000000\n", "core_version": "1.1.0\n",
+               "core_installed_version": "1.1.0\n", "core_running_version": "1.1.0\n",
+               "core_version_source": "stdout\n", "core_exe_sha256": "b" * 64 + "\n",
+               "running_config_id": "abc\n", "telemetry_mode": "stdout_only\n"}
+    for field, value in newline.items():
+        with pytest.raises(Exception):
+            sp.validate("RegisterV1", {"pc_id": "PC_A", "auth_token": "x.y.z", field: value})
+    h.connect("pc-a3")
+    with caplog.at_level(logging.WARNING):
+        relay.register("pc-a3", {"pc_id": "PC_A", "auth_token": token, "capabilities": ["deploy_result.v1\n"],
+                                 **newline})
+    assert relay._registered_pc("pc-a3") == "PC_A"
+    row = relay.health_buffer.peek("PC_A")
+    for field in newline:
+        assert row[station_reports.REGISTER_FIELDS[field][0]] is None, field
+    assert row["capabilities"] == [] and relay.session_data["pc-a3"]["capabilities"] == []
+    assert station_reports.parse_capabilities({"capabilities": ["deploy_result.v1\n"]}) is None
     # A capability of 33 characters is refused too.
     assert station_reports.parse_capabilities({"capabilities": ["x" * 33]}) is None
     assert station_reports.parse_capabilities({"capabilities": ["x" * 32]}) == ["x" * 32]

@@ -92,9 +92,23 @@ the display client".
 token's pc_id wins. A token that differs from the stored `pcs.auth_token` registers
 with the flag `token_outdated` (OD-23 (a), logged as a WARNING without the token).
 `RELAY_REQUIRE_CURRENT_TOKEN=true` refuses such tokens (OD-23 (b)); switch it on only
-when no station logs `token_outdated` any more. A second registration of the same
-pc_id takes over and is flagged `duplicate_registration`. If the database cannot be
-read during `register`, the PC is registered fail-open with `db_unverified`.
+when no station logs `token_outdated` any more. The relay never re-tokens a station
+whose token is outdated (renewing it would undo an admin's token replacement, and
+would turn a token minted with a leaked secret into a valid one): such stations are
+listed as `needs_drop` (need `outdated`) by `python -m app.services.pc_tokens report`
+and must be re-tokened by B22's token drop, a technician, or a token generated in the
+portal and entered on the station, before (b) or any JWT_SECRET rotation; otherwise
+they drop off the relay at that moment. A second registration of the same pc_id takes
+over and is flagged `duplicate_registration`; a registration whose database check
+finishes after a newer one of the same PC, or whose session closed during the check,
+is dropped. If the database cannot be read during `register`: with (a) the PC is
+registered fail-open with `db_unverified`, gets no fleet Core settings
+(`get_station_config` answers `rejected` / `not verified`) and is checked again every
+15 s, which clears the flag (or unregisters the session if the PC was deleted); with
+(b) the registration is refused with "The portal cannot verify this PC right now; it
+retries automatically" and completes by itself once the database answers. The start
+line `Relay registration: db_error=fail_open|fail_closed reverify=15s
+max_http_buffer=4000000` shows the mode (`RELAY_REVERIFY_SECONDS` is for tests).
 `registered` carries `features` (only for handlers the relay has) and
 `protocol_hash`. Packet logging is off unless `RELAY_DEBUG_LOGGING=true` (packets
 carry tokens and layouts). The relay start line `Relay trust: sender_auth=...
@@ -107,7 +121,9 @@ The HTTP endpoint `/api/connected-pcs` is unchanged and still unauthenticated
 layout unchanged; nothing is then confirmable). The row is committed before the API
 calls the relay's `deploy_config` (answer: delivered, offline or error); the PC's
 Socket.IO ACK makes the relay mark it `received`, and for Client 1.1.x, whose rows
-end there, stamp `pcs.last_applied`. Deploy responses never carry the layout.
+end there, stamp `pcs.last_applied`. Deploy responses never carry the layout; each
+per-PC result carries `ack_timeout_sec` (DEPLOY_ACK_TIMEOUT_SEC), so the portal polls
+a deploy's row as long as this backend's sweep may still move it.
 
 **Station reports (D15).** Clients that register with the capability
 `deploy_result.v1` / `station_status.v1` get those features in `registered` and
@@ -117,7 +133,16 @@ answers every report `disabled` and advertises `station_reports.disabled`; deplo
 keep flowing and end at `received`. Health goes to `pc_health` in one batched upsert
 every 15 s; a relay restart loses at most that much. A timeout sweep every 30 s marks
 pending rows older than 60 s `relay_failed` and confirmable rows not confirmed within
-`DEPLOY_ACK_TIMEOUT_SEC` (accepted rows: twice that) `unconfirmed`. The start line
+`DEPLOY_ACK_TIMEOUT_SEC` (accepted rows: twice that) `unconfirmed`; a Client 1.1.x row
+still `delivered` with no ACK that long after delivery (the connection dropped after
+the forward) becomes `unconfirmed` too, and a late ACK still makes it `received`.
+Station free text (deploy detail, last_config_error, readiness detail) is stored
+without control characters and with every URL replaced by `<url>`, also before
+validation, so an error message quoting a camera URL with its password keeps the
+report and never stores the password; a credential in any other field still rejects
+it. If the database refuses one PC's health row or one deploy event for its data,
+only that one is dropped (logged with the PC id and error class), and a deploy_result
+it refuses is answered `rejected` ("could not be stored"). The start line
 `Relay reports: station_reports=... health_flush=15s deploy_sweep=30s ack_timeout=300s`
 shows the mode (`RELAY_HEALTH_FLUSH_SECONDS` and `RELAY_DEPLOY_SWEEP_SECONDS` exist
 for tests; leave them unset in production). Presence stamps (`last_connected`,
@@ -152,10 +177,16 @@ it with `retry=False` and 1 s socket timeouts from a background task; a Redis or
 failure pauses catch-up for 30 s (a WARNING) and never delays `registered`. Start
 line: `Relay catch-up: enabled=... rate_limit=600s retry=false pause_on_failure=30s`.
 
-**Sender window.** The API sends at most 8 `deploy_config` calls to the relay at a
-time: python-engineio refuses a polling POST with more than 16 packets, and the API's
-Socket.IO client polls (no websocket-client in requirements.txt). Before this, a
-deploy to more than 16 PCs at once ended `relay_failed` for all of them.
+**Sender window.** The API sends `deploy_config` calls to the relay in rounds of at
+most 8 calls and 750 000 encoded bytes (one larger layout goes alone): python-engineio
+refuses a polling POST with more than 16 packets, and one larger than the relay's
+`max_http_buffer_size` with HTTP 400, which ends the sender session, and the API's
+Socket.IO client polls (no websocket-client in requirements.txt), packing everything
+queued into one POST. Before this, a deploy to more than 16 PCs at once, or to about
+5 PCs with production-sized layouts (about 216 KB each), ended `relay_failed` for
+all of them. The relay accepts POSTs and websocket frames up to 4 000 000 bytes; a
+single layout larger than that is not sent (`relay_failed`, "layout too large for
+the relay").
 
 **Fleet Core settings (C10).** Settings category `core` (seeded empty at API start,
 super-admin only in the portal) holds the values TrueLive Client 1.5.0+ (C12) uses when
@@ -229,9 +260,13 @@ the PC's open renewals.
 The relay never re-tokens: a Client without `pc_token.v1` (1.1.x to 1.3.x), and a
 station that presents an **outdated** token (one that differs from `pcs.auth_token`).
 Renewing an outdated token would turn a token minted with a leaked previous secret
-into a valid new-secret one. Such stations are flagged `token_drop_needed`
-(`pc_health.relay_flags`, and a WARNING in the relay log) and need B22's token-only
-drop (Client >= 1.3.0) or a technician.
+into a valid new-secret one, and would undo an admin who replaced the token on
+purpose (the relay cannot tell that from a forgotten one). Such stations are flagged
+`token_drop_needed` (`pc_health.relay_flags`, and a WARNING in the relay log), are
+listed as `needs_drop` by the report, and need B22's token-only drop (Client >=
+1.3.0) or a technician before `RELAY_REQUIRE_CURRENT_TOKEN=true` and before the
+rotation window closes (plan OD-23 says "through D30 or B22's token drop"; this
+backend takes the B22 / technician path; an owner decision is still open).
 
 Fleet view, counts and PC ids only (never a token):
 `docker exec truelive_backend python -m app.services.pc_tokens report`. Per PC the

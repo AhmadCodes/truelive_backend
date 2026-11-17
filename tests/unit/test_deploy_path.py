@@ -59,7 +59,7 @@ from tests.deploy_testkit import (
 )
 
 ACTOR = ("user", "7b3f0a52-0000-4000-8000-0000000000d1", "operator")
-RESULT_KEYS = {"pc_id", "status", "delivery", "config_id", "confirmable", "message", "screens"}
+RESULT_KEYS = {"pc_id", "status", "delivery", "config_id", "confirmable", "message", "screens", "ack_timeout_sec"}
 
 
 @pytest.fixture
@@ -146,6 +146,8 @@ def test_delivered_rows_and_truthful_response(env):
     assert set(result) == RESULT_KEYS
     assert (result["status"], result["delivery"], result["confirmable"], result["screens"]) == (
         "deployed", "delivered", False, 2)
+    # The portal polls on the backend's own timeout (M2 review), not a copy of it.
+    assert result["ack_timeout_sec"] == settings.DEPLOY_ACK_TIMEOUT_SEC
     assert "cannot confirm" in result["message"]
     row = _rows(env)[result["config_id"]]
     assert row.status == "delivered" and row.delivered_at and row.confirmable is False
@@ -559,6 +561,113 @@ def test_sender_keeps_each_polling_post_under_the_engineio_packet_limit(monkeypa
     assert {k: (v or {}).get("status") for k, v in answers.items()} == {f"c{i:02d}": "delivered" for i in range(40)}
     assert [r["config_id"] for r in relay.requests] == [f"c{i:02d}" for i in range(40)]
     assert elapsed < 3.0, elapsed
+
+
+def _sized_request(i: int, size: int) -> dict:
+    """A deploy_config request whose encoded size is about ``size`` bytes
+    (production layouts: 8 KB minimum, 216 KB median, 305 KB maximum)."""
+    request = {"config_id": f"c{i:02d}", "targetId": f"PC_{i:02d}", "content": {"n": i, "filler": ""}}
+    request["content"]["filler"] = "x" * max(0, size - ds.encoded_size(request))
+    return request
+
+
+def test_plan_rounds_by_count_and_bytes():
+    small = [_sized_request(i, 1_000) for i in range(20)]
+    assert [len(r) for r in ds.plan_rounds(small)] == [8, 8, 4]
+    big = [_sized_request(i, 216_000) for i in range(8)]
+    rounds = ds.plan_rounds(big)
+    assert [len(r) for r in rounds] == [3, 3, 2]
+    assert [i for r in rounds for i in r] == list(range(8))  # order kept
+    for r in rounds:
+        assert sum(ds.encoded_size(big[i]) for i in r) <= ds.SENDER_ROUND_BYTES
+    # A request larger than the round budget goes alone; it never blocks the others.
+    mixed = [_sized_request(0, 10_000), _sized_request(1, 900_000), _sized_request(2, 10_000)]
+    assert ds.plan_rounds(mixed) == [[0], [1], [2]]
+    assert ds.plan_rounds([]) == []
+    # The budget stays under python-engineio's default limit, so it also holds
+    # for a relay that still runs with it, and under the relay's own limit.
+    assert ds.SENDER_ROUND_BYTES < 1_000_000 < ds.RELAY_MAX_HTTP_BUFFER_BYTES
+
+
+def test_encoded_size_matches_the_socketio_packet():
+    """encoded_size covers what python-socketio puts on the wire for the
+    event (compact JSON, ASCII escapes for non-ASCII text)."""
+    from socketio import packet
+
+    request = {"config_id": "c1", "targetId": "PC_A", "content": {"name": "Caf\u00e9 \u5899", "n": [1, 2]}}
+    wire = packet.Packet(packet.EVENT, data=[ds.RELAY_EVENT, request], id=123456).encode()
+    assert len(wire.encode("utf-8")) <= ds.encoded_size(request)
+    assert ds.encoded_size(request) - len(wire.encode("utf-8")) <= ds.PACKET_OVERHEAD_BYTES
+
+
+def test_production_sized_layouts_all_get_an_answer(monkeypatch):
+    """M2 review (HIGH): engine.io packs every queued packet into one polling
+    POST and a server refuses a POST over max_http_buffer_size (1 000 000 by
+    default) with 400, closing the sender session. 8 layouts of about 216 KB
+    through a real engine.io server (WSGI, default limit): every one is
+    answered, and no POST is refused (every round stays under 750 000 bytes,
+    test_plan_rounds_by_count_and_bytes). The control: one POST over the
+    limit (a single 1.2 MB request with every sender limit lifted) is lost,
+    and the server never sees it; the reviewer's 8 x 216 KB batch packed into
+    one POST by the count-only window was lost the same way."""
+    from tests.fake_relay import WsgiFakeRelay
+
+    monkeypatch.setattr(settings, "RELAY_SENDER_SECRET", "")
+    requests = [_sized_request(i, 216_000) for i in range(8)]
+    relay = WsgiFakeRelay().start()
+    try:
+        answers = ds.socketio_sender(requests, url=relay.url, timeout=5.0)
+        assert {k: (v or {}).get("status") for k, v in answers.items()} == {
+            f"c{i:02d}": "delivered" for i in range(8)}
+        assert [r["config_id"] for r in relay.requests] == [f"c{i:02d}" for i in range(8)]
+        assert all(len(r["content"]["filler"]) > 200_000 for r in relay.requests)
+        assert 400 not in relay.post_statuses
+    finally:
+        relay.stop()
+
+    control = WsgiFakeRelay().start()
+    try:
+        lost = ds.socketio_sender([_sized_request(9, 1_200_000)], url=control.url, timeout=2.0,
+                                  round_bytes=10 ** 9, max_request_bytes=10 ** 9)
+    finally:
+        control.stop()
+    assert lost == {"c09": None}
+    assert control.requests == []
+
+
+def test_a_request_larger_than_the_relay_accepts_is_not_sent(monkeypatch):
+    """One request over the relay's limit would make the relay drop the whole
+    sender session: it is answered locally as an error, and the other
+    requests of the batch are still delivered."""
+    from tests.fake_relay import WsgiFakeRelay
+
+    monkeypatch.setattr(settings, "RELAY_SENDER_SECRET", "")
+    requests = [_sized_request(0, 5_000), _sized_request(1, 60_000), _sized_request(2, 5_000)]
+    relay = WsgiFakeRelay().start()
+    try:
+        answers = ds.socketio_sender(requests, url=relay.url, timeout=3.0, max_request_bytes=50_000)
+    finally:
+        relay.stop()
+    assert answers["c00"]["status"] == answers["c02"]["status"] == "delivered"
+    assert answers["c01"] == {"status": "error", "config_id": "c01", "confirmable": False,
+                              "reason": ds.REASON_TOO_LARGE}
+    assert [r["config_id"] for r in relay.requests] == ["c00", "c02"]
+    # Only oversized requests: no session is opened at all.
+    assert ds.socketio_sender([_sized_request(3, 60_000)], url="http://127.0.0.1:9",
+                              max_request_bytes=50_000)["c03"]["reason"] == ds.REASON_TOO_LARGE
+
+
+def test_an_oversized_layout_is_reported_as_not_sent(env):
+    def sender(requests):
+        return {r["config_id"]: {"status": "error", "config_id": r["config_id"], "confirmable": False,
+                                 "reason": ds.REASON_TOO_LARGE} for r in requests}
+
+    summary = _deploy(env, "PC_A", sender=sender)
+    result = summary["results"][0]
+    assert (result["status"], result["delivery"]) == ("failed", "error")
+    assert "larger than the display client service accepts" in result["message"]
+    row = _rows(env)[result["config_id"]]
+    assert (row.status, row.status_detail) == ("relay_failed", "relay error: " + ds.REASON_TOO_LARGE)
 
 
 def test_a_silent_relay_still_costs_one_timeout_with_many_requests(monkeypatch):

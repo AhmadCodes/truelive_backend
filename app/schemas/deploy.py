@@ -26,6 +26,13 @@ class PCDeployResult(BaseModel):
     )
     message: str
     screens: int = 0
+    ack_timeout_sec: Optional[int] = Field(
+        None,
+        description=(
+            "DEPLOY_ACK_TIMEOUT_SEC of this backend: how long the relay waits for the station before the row "
+            "becomes unconfirmed (the portal polls the row until this plus 60 s, M2 review)"
+        ),
+    )
 
 
 class DeploySummary(BaseModel):

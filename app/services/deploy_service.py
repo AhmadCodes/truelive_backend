@@ -16,8 +16,9 @@ Deploy path: layouts from the portal to stations, tracked per deploy
    deploys to one PC are serialised and the later one supersedes the earlier.
 3. Rows a concurrent deploy superseded in the meantime are not sent.
 4. One authenticated sender session (D12) emits ``deploy_config`` per PC with
-   an ACK callback (the ``sio.call`` contract, 5 s), all calls in flight at
-   once, so a batch waits at most about 5 s for a slow relay. The relay
+   an ACK callback (the ``sio.call`` contract, 5 s), in rounds of at most 8
+   calls and 750 000 encoded bytes (the relay refuses a larger polling POST),
+   so a silent relay costs one 5 s timeout per batch. The relay
    answers ``delivered`` (with ``confirmable``), ``offline`` or ``error``, and
    forwards the layout to the PC as the ``config`` event; the PC's ACK makes
    the relay mark the row ``received`` (deploy_tracking.record_receipt).
@@ -30,7 +31,7 @@ Client 1.1.x row is received, and D15 when a confirmable row is applied.
 
 The response never carries the generated layout (it holds camera URLs with
 credentials, NEW-45): per PC it is ``{pc_id, status, delivery, config_id,
-confirmable, message, screens}``. ``status`` keeps the old vocabulary
+confirmable, message, screens, ack_timeout_sec}``. ``status`` keeps the old vocabulary
 (deployed, skipped, failed): an offline PC is ``failed`` with
 ``delivery=offline`` (NEW-46).
 
@@ -39,6 +40,7 @@ The two routes that call it are plain ``def``, so FastAPI runs them in its
 threadpool and the event loop stays free (``/health`` keeps answering).
 """
 
+import json
 import logging
 import threading
 import time
@@ -72,6 +74,22 @@ RELAY_CALL_TIMEOUT = 5.0
 # most this many deploy_config calls are in flight at once; found by D17 with
 # 50 PCs (every one ended relay_failed).
 SENDER_WINDOW = 8
+# The window also has a byte budget (M2 review): engine.io packs every queued
+# packet into one polling POST, and the relay refuses a POST larger than its
+# max_http_buffer_size with HTTP 400 and closes the session, so a round of 5
+# production-sized layouts (about 216 KB each) was lost whole. A round holds
+# as many requests as fit in SENDER_ROUND_BYTES (always at least one), which
+# stays under python-engineio's default limit of 1 000 000 bytes, so it holds
+# for a relay that still runs with the default too.
+SENDER_ROUND_BYTES = 750_000
+# The relay's max_http_buffer_size (websocket_server, also the websocket
+# frame limit). One request larger than this is never sent: the relay would
+# drop the whole session. It is answered locally as an error instead.
+RELAY_MAX_HTTP_BUFFER_BYTES = 4_000_000
+# Room for the engine.io / Socket.IO framing of one packet ("42<ack id>" and
+# the record separator).
+PACKET_OVERHEAD_BYTES = 32
+REASON_TOO_LARGE = "layout too large for the relay"
 
 # Relay answers (``delivery`` in the response).
 DELIVERY_DELIVERED = "delivered"
@@ -111,18 +129,67 @@ def relay_url() -> str:
     return f"http://{host}:{settings.WEBSOCKET_PORT}"
 
 
+def encoded_size(request: Mapping[str, Any]) -> int:
+    """Bytes one ``deploy_config`` request takes in a polling POST: the
+    Socket.IO JSON encoding (compact separators, ASCII escapes) plus the
+    framing allowance."""
+    body = json.dumps([RELAY_EVENT, request], separators=(",", ":"), ensure_ascii=True, default=str)
+    return len(body) + PACKET_OVERHEAD_BYTES
+
+
+def plan_rounds(requests: Sequence[Mapping[str, Any]], *, window: int = SENDER_WINDOW,
+                round_bytes: int = SENDER_ROUND_BYTES) -> List[List[int]]:
+    """Indexes of ``requests`` per round: at most ``window`` requests and
+    ``round_bytes`` encoded bytes each, in order, and at least one request
+    per round (a single large request goes alone)."""
+    window = max(1, int(window))
+    rounds: List[List[int]] = []
+    current: List[int] = []
+    used = 0
+    for index, request in enumerate(requests):
+        size = encoded_size(request)
+        if current and (len(current) >= window or used + size > round_bytes):
+            rounds.append(current)
+            current, used = [], 0
+        current.append(index)
+        used += size
+    if current:
+        rounds.append(current)
+    return rounds
+
+
 def socketio_sender(requests: List[Dict[str, Any]], *, url: Optional[str] = None,
-                    timeout: float = RELAY_CALL_TIMEOUT, window: int = SENDER_WINDOW) -> Dict[str, Optional[Any]]:
+                    timeout: float = RELAY_CALL_TIMEOUT, window: int = SENDER_WINDOW,
+                    round_bytes: int = SENDER_ROUND_BYTES,
+                    max_request_bytes: int = RELAY_MAX_HTTP_BUFFER_BYTES) -> Dict[str, Optional[Any]]:
     """Send every request over one authenticated sender session.
 
-    Each ``deploy_config`` is emitted with an ACK callback, ``window`` calls
-    in flight together (SENDER_WINDOW); each round gets ``timeout`` seconds
-    to answer. A round the relay leaves unanswered ends the batch: the
-    requests not sent yet get no answer (relay_failed) instead of one timeout
-    per round. Raises RelayUnreachable when the session cannot be opened
-    (also a wrong RELAY_SENDER_SECRET: the relay refuses the CONNECT).
+    Each ``deploy_config`` is emitted with an ACK callback, in rounds of at
+    most ``window`` calls (SENDER_WINDOW) and ``round_bytes`` encoded bytes
+    (SENDER_ROUND_BYTES); each round gets ``timeout`` seconds to answer. A
+    round the relay leaves unanswered ends the batch: the requests not sent
+    yet get no answer (relay_failed) instead of one timeout per round. A
+    request larger than ``max_request_bytes`` is not sent (the relay would
+    close the session) and is answered locally with ``error`` /
+    REASON_TOO_LARGE. Raises RelayUnreachable when the session cannot be
+    opened (also a wrong RELAY_SENDER_SECRET: the relay refuses the CONNECT).
     """
     import socketio
+
+    answers: Dict[str, Optional[Any]] = {}
+    sendable: List[Dict[str, Any]] = []
+    for request in requests:
+        size = encoded_size(request)
+        if size > max_request_bytes:
+            config_id = request["config_id"]
+            logger.error(f"Deploy {config_id} to PC {request.get('targetId')} not sent: {size} bytes is more than "
+                         f"the relay accepts ({max_request_bytes})")
+            answers[config_id] = {"status": DELIVERY_ERROR, "config_id": config_id, "confirmable": False,
+                                  "reason": REASON_TOO_LARGE}
+        else:
+            sendable.append(request)
+    if not sendable:
+        return {request["config_id"]: answers.get(request["config_id"]) for request in requests}
 
     client = socketio.Client(reconnection=False, logger=False, engineio_logger=False)
     target = url or relay_url()
@@ -134,13 +201,12 @@ def socketio_sender(requests: List[Dict[str, Any]], *, url: Optional[str] = None
         logger.error(f"Could not reach display client service: {type(exc).__name__}")
         raise RelayUnreachable(type(exc).__name__) from exc
 
-    answers: Dict[str, Optional[Any]] = {}
     waits: Dict[str, threading.Event] = {}
-    window = max(1, int(window))
+    rounds = plan_rounds(sendable, window=window, round_bytes=round_bytes)
     try:
-        for start in range(0, len(requests), window):
+        for number, indexes in enumerate(rounds):
             round_waits = []
-            for request in requests[start:start + window]:
+            for request in (sendable[i] for i in indexes):
                 config_id = request["config_id"]
                 done = threading.Event()
                 waits[config_id] = done
@@ -159,7 +225,7 @@ def socketio_sender(requests: List[Dict[str, Any]], *, url: Optional[str] = None
             for done in round_waits:
                 done.wait(max(0.0, deadline - time.monotonic()))
             if not all(done.is_set() for done in round_waits):
-                rest = requests[start + window:]
+                rest = [sendable[i] for later in rounds[number + 1:] for i in later]
                 if rest:
                     logger.error(f"The relay left deploys unanswered; {len(rest)} more not sent")
                 for request in rest:
@@ -170,7 +236,7 @@ def socketio_sender(requests: List[Dict[str, Any]], *, url: Optional[str] = None
             client.disconnect()
         except Exception:
             pass
-    return {config_id: answers.get(config_id) for config_id in waits}
+    return {request["config_id"]: answers.get(request["config_id"]) for request in requests}
 
 
 @dataclass
@@ -195,6 +261,7 @@ def _result(target: _Target, status: str, message: str, *, delivery: Optional[st
         "confirmable": bool(confirmable),
         "message": message,
         "screens": target.screens,
+        "ack_timeout_sec": int(settings.DEPLOY_ACK_TIMEOUT_SEC),
     }
 
 
@@ -376,6 +443,10 @@ def deploy_config_to_pcs(pcs: Sequence[PC], db, *, trigger: str, actor: ActorTri
             else:
                 if unreachable:
                     detail, message = DETAIL_UNREACHABLE, MSG_UNREACHABLE
+                elif answer is not None and answer.get("reason") == REASON_TOO_LARGE:  # never sent
+                    detail = f"relay error: {REASON_TOO_LARGE}"
+                    message = (f"The layout for PC {target.pc_id} is larger than the display client service "
+                               f"accepts; nothing was sent")
                 elif answer is not None:  # the relay refused the request
                     detail = f"relay error: {str(answer.get('reason') or 'unknown')[:200]}"
                     message = f"The display client service refused the deploy to PC {target.pc_id}"

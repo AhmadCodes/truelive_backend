@@ -299,3 +299,110 @@ def test_a_database_error_keeps_every_event(db):
     assert pending.retry(broken) == (0, 1)
     assert pending.retry(_opener(db)) == (1, 0)
     assert _get(db, "cfg").status == "received" and calls == [1]
+
+
+def test_an_event_the_database_refuses_is_dropped_alone(db):
+    """M2 review: an event whose write the database refuses for its data (a
+    NUL in its detail: psycopg2 raises ValueError) used to abort the whole
+    retry every 5 s for its 600 s TTL, so every other kept event stayed
+    unapplied. Now each event runs in its own savepoint: the refused one is
+    dropped, the others commit in the same retry."""
+    pending = dt.PendingTransitions(ttl_seconds=60, clock=_Clock())
+    _row(db, "ok-1")
+    _row(db, "bad")
+    _row(db, "ok-2")
+    db.commit()
+
+    def refused(session):
+        dt.transition(session, "bad", dt.RECEIVED, ts=T0)  # written, then undone with its savepoint
+        raise ValueError("A string literal cannot contain NUL (0x00) characters.")
+
+    pending.add("ok-1", lambda s: dt.transition(s, "ok-1", dt.RECEIVED, ts=T0), label="received")
+    pending.add("bad", refused, label="deploy_result.failed")
+    pending.add("ok-2", lambda s: dt.transition(s, "ok-2", dt.ACCEPTED, ts=T0), label="deploy_result.accepted")
+    pending.add("later", lambda s: dt.transition(s, "later", dt.RECEIVED, ts=T0), label="received")
+    assert pending.retry(_opener(db)) == (2, 1)  # "later" has no row yet: kept
+    assert pending.refused == 1
+    db.expire_all()
+    assert (_get(db, "ok-1").status, _get(db, "bad").status, _get(db, "ok-2").status) == (
+        "received", "pending", "accepted")
+    _row(db, "later")
+    db.commit()
+    assert pending.retry(_opener(db)) == (1, 0)  # the refused event is gone for good
+
+
+def test_a_database_failure_inside_one_event_still_keeps_every_event(db):
+    """An error that is not about the data (the connection dropped) aborts
+    the retry and keeps everything, as before."""
+    from sqlalchemy.exc import OperationalError
+
+    pending = dt.PendingTransitions(ttl_seconds=60, clock=_Clock())
+    _row(db, "a")
+    db.commit()
+    state = {"fail": True}
+
+    def flaky(session):
+        if state["fail"]:
+            raise OperationalError("UPDATE", {}, Exception("server closed the connection unexpectedly"))
+        return dt.transition(session, "a", dt.RECEIVED, ts=T0)
+
+    pending.add("a", flaky)
+    pending.add("b", lambda s: dt.transition(s, "b", dt.RECEIVED, ts=T0))
+    assert pending.retry(_opener(db)) == (0, 2)
+    assert pending.refused == 0
+    state["fail"] = False
+    assert pending.retry(_opener(db)) == (1, 1)
+
+
+@pytest.mark.parametrize("exc,data", [
+    (ValueError("A string literal cannot contain NUL (0x00) characters."), True),
+    (UnicodeEncodeError("utf-8", "\ud800", 0, 1, "surrogates not allowed"), True),
+    (TypeError("can't adapt"), True),
+    (RuntimeError("database unavailable (simulated)"), False),
+    (ConnectionError("refused"), False),
+    (TimeoutError("timed out"), False),
+])
+def test_is_data_error(exc, data):
+    assert dt.is_data_error(exc) is data
+
+
+def test_is_data_error_on_sqlalchemy_errors():
+    from sqlalchemy import exc as sa_exc
+
+    orig = Exception("x")
+    assert dt.is_data_error(sa_exc.DataError("INSERT", {}, orig)) is True
+    assert dt.is_data_error(sa_exc.IntegrityError("INSERT", {}, orig)) is True
+    assert dt.is_data_error(sa_exc.OperationalError("INSERT", {}, orig)) is False  # lost connection, lock timeout
+    assert dt.is_data_error(sa_exc.InterfaceError("INSERT", {}, orig)) is False
+    assert dt.is_data_error(sa_exc.ProgrammingError("INSERT", {}, orig)) is False  # e.g. a missing table
+    assert dt.is_data_error(sa_exc.StatementError("bind", "INSERT", {}, ValueError("NUL"))) is True
+    assert dt.is_data_error(sa_exc.StatementError("bind", "INSERT", {}, RuntimeError("x"))) is False
+
+
+def test_a_refused_event_is_not_kept_when_a_later_one_aborts_the_retry(db):
+    """The refused event is dropped even when a later event's database
+    failure aborts the retry (and keeps the rest for the next one)."""
+    from sqlalchemy.exc import OperationalError
+
+    pending = dt.PendingTransitions(ttl_seconds=60, clock=_Clock())
+    _row(db, "ok")
+    db.commit()
+    state = {"down": True}
+    calls = {"bad": 0}
+
+    def refused(session):
+        calls["bad"] += 1
+        raise ValueError("A string literal cannot contain NUL (0x00) characters.")
+
+    def flaky(session):
+        if state["down"]:
+            raise OperationalError("UPDATE", {}, Exception("server closed the connection unexpectedly"))
+        return dt.transition(session, "ok", dt.RECEIVED, ts=T0)
+
+    pending.add("bad", refused)
+    pending.add("ok", flaky)
+    assert pending.retry(_opener(db)) == (0, 1)  # aborted: only "ok" kept
+    assert (pending.refused, calls["bad"]) == (1, 1)
+    state["down"] = False
+    assert pending.retry(_opener(db)) == (1, 0)
+    assert calls["bad"] == 1  # never tried again

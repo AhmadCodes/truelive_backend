@@ -20,6 +20,14 @@ Trust baseline (plan 06 D12, OD-23):
   RELAY_REQUIRE_CURRENT_TOKEN is true (OD-23 (b)). A second registration of a
   pc_id takes over and is flagged; the old session keeps its connection but no
   longer counts as that PC (``_registered_pc``).
+* The database half of ``register`` runs off the hub, so other events run
+  meanwhile (M2 review): a session that closed during it, or a check that
+  finishes after a newer registration of the same PC succeeded, does not
+  register. A database error registers fail-open with ``db_unverified``
+  under OD-23 (a); such a session gets no fleet config until the re-verify
+  loop (every REVERIFY_SECONDS) has checked it, which clears the flag or
+  unregisters a deleted PC. Under OD-23 (b) the registration is refused and
+  the same loop completes it once the database answers.
 * ``message`` is accepted from sender sessions only, for the types in
   SENDER_MESSAGE_TYPES. A rejected message gets an ``error`` event; nobody is
   disconnected.
@@ -122,6 +130,7 @@ The relay never rotates JWT_SECRET itself (OD-23): ops rotates it through the
 window above (DOCKER_SETUP.md runbook).
 """
 import functools
+import itertools
 import json
 import logging
 import os
@@ -141,6 +150,7 @@ from app.database import get_db
 from app.models.pc import PC
 from app.schemas import station_protocol
 from app.services import catchup, core_station_config, deploy_tracking, pc_tokens, relay_auth, station_reports
+from app.services.deploy_service import RELAY_MAX_HTTP_BUFFER_BYTES
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +196,11 @@ MSG_UNKNOWN_PC = "This PC is not registered in the portal"
 MSG_TOKEN_REPLACED = "Authentication token has been replaced; enter the current PC token"
 MSG_SENDER_REGISTER = "Sender sessions cannot register as a PC"
 MSG_NOT_AUTHORIZED = "Not authorized"
+MSG_DB_UNAVAILABLE = "The portal cannot verify this PC right now; it retries automatically"
+
+# How often sessions whose registration could not be checked against the
+# database are checked again (M2 review; the env variable is for tests).
+REVERIFY_SECONDS = float(os.environ.get("RELAY_REVERIFY_SECONDS", "15"))
 
 # deploy_config (D14): the sender event and its answers.
 DEPLOY_EVENT = "deploy_config"
@@ -194,7 +209,6 @@ DEPLOY_OFFLINE = "offline"
 DEPLOY_ERROR = "error"
 MAX_TARGET_ID_LENGTH = 64
 _CONFIG_ID_RE = re.compile(r"^[\x21-\x7e]{1,%d}$" % station_protocol.MAX_CONFIG_ID_LENGTH)
-_CAPABILITY_RE = re.compile(station_protocol.CAPABILITY_PATTERN)
 # How often deploy events kept for a missing row (or a database error) are retried.
 DEPLOY_EVENT_RETRY_SECONDS = 5
 # Station reports (D15). The intervals can be shortened for tests by env.
@@ -220,7 +234,15 @@ def _packet_logger(name: str, debug_logging: bool) -> logging.Logger:
 def _make_server(debug_logging: bool, async_mode: str) -> socketio.Server:
     """The relay's Socket.IO server. Packet logging (INFO) only with
     RELAY_DEBUG_LOGGING: packets carry tokens and layouts (NEW-56). Warnings
-    and errors are always logged."""
+    and errors are always logged.
+
+    ``max_http_buffer_size`` (a polling POST, and a websocket frame) is raised
+    from python-engineio's 1 000 000 bytes to RELAY_MAX_HTTP_BUFFER_BYTES
+    (4 000 000): a production layout is up to about 300 KB, and a POST over
+    the limit is answered 400 and closes the API's sender session, which lost
+    every deploy of that batch (M2 review). The API also keeps each polling
+    round under 750 000 bytes (deploy_service.SENDER_ROUND_BYTES).
+    """
     return socketio.Server(
         async_mode=async_mode,
         cors_allowed_origins="*",
@@ -228,6 +250,7 @@ def _make_server(debug_logging: bool, async_mode: str) -> socketio.Server:
         engineio_logger=_packet_logger("engineio.server", debug_logging),
         ping_timeout=60,
         ping_interval=25,
+        max_http_buffer_size=RELAY_MAX_HTTP_BUFFER_BYTES,
     )
 
 
@@ -309,6 +332,9 @@ session_data: Dict[str, Dict[str, Any]] = {}
 relay_counters: Dict[str, int] = {
     "duplicate_registrations": 0,
     "rejected_registrations": 0,
+    "stale_registrations": 0,
+    "deferred_registrations": 0,
+    "reverified_registrations": 0,
     "rejected_messages": 0,
     "deploys_forwarded": 0,
     "deploys_offline": 0,
@@ -320,6 +346,7 @@ relay_counters: Dict[str, int] = {
     "reports_disabled": 0,
     "health_batches": 0,
     "health_rows": 0,
+    "health_rows_refused": 0,
     "token_renewals_issued": 0,
     "token_renewals_resent": 0,
     "token_renewals_confirmed": 0,
@@ -345,6 +372,11 @@ health_buffer = station_reports.HealthBuffer()
 report_ids = station_reports.MessageIdLRU()
 
 _legacy_open_warned = False
+
+# Every register that reaches its database check takes the next number; a
+# check that finishes after a newer registration of the same PC succeeded
+# does not take over (M2 review).
+_register_seq = itertools.count(1)
 
 
 # --------------------------------------------------------------------------- #
@@ -705,11 +737,29 @@ def register(sid, data):
         sid: Session ID
         data: Registration data dict
     """
+    _register(sid, data, retry=False)
+
+
+def _register(sid, data, retry: bool = False):
+    """The body of ``register``. ``retry`` is the re-verify loop completing a
+    registration refused while the database was unavailable (OD-23 (b)): it
+    does not repeat that refusal to the station.
+
+    The database check runs off the hub (NEW-44), so other events, this
+    session's disconnect among them, can run during it (M2 review). After it,
+    the registration goes ahead only if the session is still the one that
+    asked, and only if no newer registration of the same PC (one that started
+    its check later) has already finished: a register that loses that race
+    leaves the session connected and unregistered, like a duplicate the
+    takeover rule replaced.
+    """
     try:
         session = session_data.get(sid)
         if session is None:
             logger.warning(f"register from unknown session {sid}")
             return
+        # Any registration attempt replaces a retry still pending for this session.
+        session.pop("register_retry", None)
         if session.get("role") == ROLE_SENDER:
             _refuse_registration(sid, MSG_SENDER_REGISTER, "sender session")
             return
@@ -754,18 +804,52 @@ def register(sid, data):
         # Use token's PC ID as authoritative
         pc_id = token_pc_id
 
+        seq = next(_register_seq)
         check = _run_blocking(_authorize_pc, pc_id, auth_token)
+        if session_data.get(sid) is not session:
+            relay_counters["stale_registrations"] += 1
+            logger.info(f"PC {pc_id}: session {sid} closed while its registration was checked; not registered")
+            return
+        session.pop("register_retry", None)
         if check.status == PcCheck.UNKNOWN_PC:
             _refuse_registration(sid, MSG_UNKNOWN_PC, f"PC {pc_id} not found in database")
             return
         if check.status == PcCheck.TOKEN_REPLACED:
             _refuse_registration(sid, MSG_TOKEN_REPLACED, f"PC {pc_id} token differs from the stored token")
             return
+        if check.status == PcCheck.DB_ERROR and settings.RELAY_REQUIRE_CURRENT_TOKEN:
+            # OD-23 (b) accepts only a token it compared with pcs.auth_token:
+            # fail closed, and let the re-verify loop finish the registration
+            # once the database answers (the payload stays in memory only).
+            session["register_retry"] = data
+            relay_counters["deferred_registrations"] += 1
+            if retry:
+                logger.info(f"PC {pc_id}: database still unavailable; registration retried later")
+            else:
+                _refuse_registration(sid, MSG_DB_UNAVAILABLE, f"PC {pc_id} could not be checked against the "
+                                                              f"database (require_current_token); retried later")
+            return
+
+        current_sid = connected_pcs.get(pc_id)
+        if retry and current_sid is not None and current_sid != sid and current_sid in session_data:
+            # The PC registered on another session while this one waited for the
+            # database (the station reconnected, say): the old attempt yields.
+            relay_counters["stale_registrations"] += 1
+            logger.info(f"PC {pc_id}: registered meanwhile on session {current_sid}; the deferred registration "
+                        f"of session {sid} is dropped")
+            return
+        if (current_sid is not None and current_sid != sid and current_sid in session_data
+                and session_data[current_sid].get("register_seq", 0) > seq):
+            relay_counters["stale_registrations"] += 1
+            logger.warning(f"PC {pc_id}: a newer registration (session {current_sid}) finished first; "
+                           f"session {sid} is not registered")
+            return
 
         flags: Dict[str, bool] = {}
         if check.status == PcCheck.DB_ERROR:
             flags[FLAG_DB_UNVERIFIED] = True
-            logger.warning(f"PC {pc_id} registered without a database check (db_unverified)")
+            logger.warning(f"PC {pc_id} registered without a database check (db_unverified); checked again "
+                           f"every {REVERIFY_SECONDS:g}s")
         elif check.token_current is False:
             flags[FLAG_TOKEN_OUTDATED] = True
             logger.warning(f"PC {pc_id} registered with an outdated token (token_outdated, OD-23)")
@@ -813,6 +897,12 @@ def register(sid, data):
         session["status_seen"] = False  # D17: catch-up is decided on the first station_status
         session["token_renewal_id"] = None  # D30: the renewal sent on this session
         session["catchup_evaluated"] = False  # D17: decided once per session
+        session["register_seq"] = seq  # M2 review: the order of registrations of this PC
+        # A registration the database could not check is checked again by the
+        # re-verify loop (the token stays in memory only, never logged).
+        session["reverify"] = (
+            {"auth_token": auth_token, "renew_reason": renew_reason} if check.status == PcCheck.DB_ERROR else None
+        )
 
         # E20: the register's version fields, each checked; stored with the
         # relay flags at the next health flush. pc_id is the session's.
@@ -1000,6 +1090,10 @@ def _record_receipt(config_id: str, pc_id: str, confirmable: bool, forwarded_at:
     try:
         result = _run_blocking(_apply_and_commit, apply)
     except Exception as exc:
+        if deploy_tracking.is_data_error(exc):
+            logger.error(f"Could not record receipt of deploy {config_id} by PC {pc_id}: {type(exc).__name__}; "
+                         f"the database refuses it")
+            return
         logger.error(f"Could not record receipt of deploy {config_id} by PC {pc_id}: {type(exc).__name__}; "
                      f"kept for retry")
         pending_deploy_events.add(config_id, apply, label="received")
@@ -1060,7 +1154,7 @@ def deploy_config(sid, data=None):
         config_id = data.get("config_id")
         target_id = data.get("targetId")
         content = data.get("content")
-        if not isinstance(config_id, str) or not _CONFIG_ID_RE.match(config_id):
+        if not isinstance(config_id, str) or not _CONFIG_ID_RE.fullmatch(config_id):
             relay_counters["deploys_rejected"] += 1
             return _deploy_answer(DEPLOY_ERROR, reason="invalid config_id")
         if not isinstance(target_id, str) or not target_id or len(target_id) > MAX_TARGET_ID_LENGTH:
@@ -1225,6 +1319,99 @@ enable_feature(station_protocol.FEATURE_PC_TOKEN)
 
 
 # --------------------------------------------------------------------------- #
+# Registrations the database could not check (M2 review; D12, OD-23)
+# --------------------------------------------------------------------------- #
+
+
+def _unregister(sid: str, pc_id: str) -> None:
+    """The session stops being the PC (it stays connected, like a replaced
+    duplicate): a later check found the PC deleted or its token refused."""
+    session = session_data.get(sid)
+    if session is not None:
+        session["pc_id"] = None
+    if connected_pcs.get(pc_id) == sid:
+        del connected_pcs[pc_id]
+        broadcast_client_list()
+
+
+def _reverify_registered(sid: str, session: Dict[str, Any]) -> Optional[str]:
+    """Check a session registered with ``db_unverified`` (OD-23 (a),
+    fail-open) against the database now. Returns the PcCheck status, or None
+    when the session is no longer the PC's."""
+    pending = session.get("reverify") or {}
+    pc_id = _registered_pc(sid)
+    if pc_id is None or not pending.get("auth_token"):
+        session["reverify"] = None
+        return None
+    check = _run_blocking(_authorize_pc, pc_id, pending["auth_token"])
+    if session_data.get(sid) is not session or _registered_pc(sid) != pc_id:
+        return None  # closed or replaced while the check ran
+    if check.status == PcCheck.DB_ERROR:
+        return check.status
+    session["reverify"] = None
+    relay_counters["reverified_registrations"] += 1
+    if check.status in (PcCheck.UNKNOWN_PC, PcCheck.TOKEN_REPLACED):
+        _unregister(sid, pc_id)
+        message = MSG_UNKNOWN_PC if check.status == PcCheck.UNKNOWN_PC else MSG_TOKEN_REPLACED
+        _refuse_registration(sid, message, f"PC {pc_id} failed the database check it missed at register "
+                                           f"({check.status}); unregistered")
+        return check.status
+    flags = session.setdefault("flags", {})
+    flags.pop(FLAG_DB_UNVERIFIED, None)
+    if check.token_current is False:
+        flags[FLAG_TOKEN_OUTDATED] = True
+        logger.warning(f"PC {pc_id} registered with an outdated token (token_outdated, OD-23)")
+    logger.info(f"PC {pc_id} checked against the database after registering without a check")
+    health_buffer.put(pc_id, {"relay_flags": dict(flags)})
+    broadcast_client_list()
+    # What register deferred for an unverified session (D30, D17) happens now.
+    reason = pending.get("renew_reason")
+    if _renewal_decision(pc_id, check, flags, reason, session.get("capabilities") or [],
+                         session.get("features") or []):
+        _spawn(_renew_pc_token, sid, pc_id, pending["auth_token"], reason)
+    if settings.DEPLOY_CATCHUP_ENABLED and not session.get("catchup_evaluated") and not session_confirmable(sid):
+        session["catchup_evaluated"] = True
+        schedule_catchup(sid, pc_id, catchup.AT_REGISTER)
+    return check.status
+
+
+def reverify_sessions_once() -> int:
+    """One pass over the sessions whose registration the database could not
+    check: a ``db_unverified`` session (fail-open, OD-23 (a)) is checked again
+    and keeps its registration, loses it (PC deleted, or token refused under
+    (b)), or stays unverified; a registration refused for it under OD-23 (b)
+    is run again. The pass stops at the first database error (the database
+    is still unavailable). Returns how many sessions were settled."""
+    settled = 0
+    for sid, session in list(session_data.items()):
+        if session_data.get(sid) is not session:
+            continue
+        if session.get("register_retry") is not None and session.get("pc_id") is None:
+            _register(sid, session["register_retry"], retry=True)
+            if session.get("register_retry") is not None:
+                break  # still unavailable
+            settled += 1
+            continue
+        if session.get("reverify"):
+            status = _reverify_registered(sid, session)
+            if status == PcCheck.DB_ERROR:
+                break
+            if status is not None:
+                settled += 1
+    return settled
+
+
+def _reverify_loop(interval_seconds: float):
+    """Background task: re-check unverified registrations (M2 review). Never dies."""
+    while True:
+        sio.sleep(interval_seconds)
+        try:
+            reverify_sessions_once()
+        except Exception as exc:
+            logger.error(f"Re-verify loop error: {type(exc).__name__}")
+
+
+# --------------------------------------------------------------------------- #
 # Catch-up re-push (D17)
 # --------------------------------------------------------------------------- #
 
@@ -1319,7 +1506,7 @@ def _catchup_loop(interval_seconds: float):
 def _ack(status: str, message_id: Any = None, reason: Optional[str] = None) -> Dict[str, Any]:
     """A ReportAckV1."""
     ack: Dict[str, Any] = {"status": status}
-    if isinstance(message_id, str) and _CONFIG_ID_RE.match(message_id):
+    if isinstance(message_id, str) and _CONFIG_ID_RE.fullmatch(message_id):
         ack["message_id"] = message_id
     if reason:
         ack["reason"] = reason
@@ -1349,12 +1536,17 @@ def _validated_report(name: str, pc_id: str, data: Any):
     if station_reports.report_size(data) > station_protocol.MAX_REPORT_BYTES:
         logger.warning(f"Rejected {name} from PC {pc_id}: larger than {station_protocol.MAX_REPORT_BYTES} bytes")
         return None, _ack("rejected", message_id, "report too large")
+    # Free text is cleaned and its URLs (credentials included) replaced before
+    # validation, so a Core error that quotes a camera URL is kept without it
+    # (D15 "userinfo stripped"); a credential in any other field still
+    # rejects the report (D1).
+    data = station_reports.scrub_report_text(name, data)
     try:
         return station_protocol.validate(name, data), None
     except ValidationError as exc:
         # Field paths only; a part that is not a plain name (a dict key the
         # station chose) is shown as <key>, so no payload text reaches the log.
-        fields = sorted({".".join(str(p) if isinstance(p, int) or _SAFE_LOC_RE.match(str(p)) else "<key>"
+        fields = sorted({".".join(str(p) if isinstance(p, int) or _SAFE_LOC_RE.fullmatch(str(p)) else "<key>"
                                   for p in e["loc"]) or "$"
                          for e in station_protocol.safe_errors(exc)})
         logger.warning(f"Rejected {name} from PC {pc_id}: invalid ({', '.join(fields)[:300]})")
@@ -1399,6 +1591,12 @@ def deploy_result(sid, pc_id, data):
         try:
             result = _run_blocking(_apply_and_commit, apply)
         except Exception as exc:
+            if deploy_tracking.is_data_error(exc):
+                # It would fail the same way on every retry (and used to block
+                # the other kept events): say so instead of "ok" (M2 review).
+                logger.error(f"Could not record deploy_result {model.config_id} of PC {pc_id}: "
+                             f"{type(exc).__name__}; the database refuses it")
+                return _ack("rejected", model.message_id, "could not be stored")
             logger.error(f"Could not record deploy_result {model.config_id} of PC {pc_id}: {type(exc).__name__}; "
                          f"kept for retry")
             pending_deploy_events.add(model.config_id, apply, label=f"deploy_result.{model.status}")
@@ -1507,6 +1705,12 @@ def get_station_config(sid, data=None):
     if pc_id is None:
         relay_counters["station_config_refused"] += 1
         return core_station_config.refusal_ack(core_station_config.STATUS_REJECTED, "not registered")
+    if (session_data.get(sid) or {}).get("flags", {}).get(FLAG_DB_UNVERIFIED):
+        # Registered fail-open while the database was down (it may be a
+        # deleted PC's token): no fleet values until the re-verify loop has
+        # checked it (M2 review). The Client keeps its cache on a refusal.
+        relay_counters["station_config_refused"] += 1
+        return core_station_config.refusal_ack(core_station_config.STATUS_REJECTED, "not verified")
     try:
         result = station_config_cache.get(_load_station_config)
     except Exception as exc:
@@ -1525,39 +1729,35 @@ enable_feature(station_protocol.FEATURE_STATION_CONFIG)
 
 def flush_health_once() -> int:
     """Write the buffered health rows (one batched upsert, off the hub).
-    On a database error the batch goes back into the buffer (newer values
-    win) for the next flush. Returns the number of rows written."""
+    When the database is unavailable the rows go back into the buffer (newer
+    values win) for the next flush. When it refuses the batch for its data,
+    the rows are written one PC at a time and only the refused PC's row is
+    dropped (M2 review: one station's text must not keep every PC's health
+    out). Returns the number of rows written."""
     batch = health_buffer.take()
     if not batch:
         return 0
-
-    def write():
-        db = _open_db()
-        try:
-            written, dropped = station_reports.upsert_health(db, batch)
-            db.commit()
-            return written, dropped
-        except Exception:
-            try:
-                db.rollback()
-            except Exception:
-                pass
-            raise
-        finally:
-            db.close()
-
     try:
-        written, dropped = _run_blocking(write)
+        outcome = _run_blocking(station_reports.write_health_batch, _open_db, batch)
     except Exception as exc:
         logger.error(f"Health flush failed ({len(batch)} row(s), kept for the next flush): {type(exc).__name__}")
         health_buffer.restore(batch)
         return 0
-    relay_counters["health_batches"] += 1
-    relay_counters["health_rows"] += written
-    if dropped:
-        logger.info(f"Health flush: dropped {dropped} row(s) of PCs that no longer exist")
-    logger.debug(f"Health flush: {written} row(s)")
-    return written
+    if outcome.restore:
+        logger.error(f"Health flush failed ({len(outcome.restore)} row(s), kept for the next flush): "
+                     f"{outcome.error}")
+        health_buffer.restore(outcome.restore)
+    if outcome.refused:
+        relay_counters["health_rows_refused"] += len(outcome.refused)
+        logger.error("Health flush: the database refused the row(s) of PC(s) "
+                     + ", ".join(f"{pc_id} ({error})" for pc_id, error in outcome.refused) + "; dropped")
+    if outcome.error is None or outcome.written:
+        relay_counters["health_batches"] += 1
+        relay_counters["health_rows"] += outcome.written
+    if outcome.dropped:
+        logger.info(f"Health flush: dropped {outcome.dropped} row(s) of PCs that no longer exist")
+    logger.debug(f"Health flush: {outcome.written} row(s)")
+    return outcome.written
 
 
 def sweep_deploys_once() -> Dict[str, int]:
@@ -1724,6 +1924,11 @@ def run_server(host: str = "0.0.0.0", port: int = 8080):
     sio.start_background_task(_health_flush_loop, HEALTH_FLUSH_SECONDS)
     sio.start_background_task(_deploy_sweep_loop, DEPLOY_SWEEP_SECONDS)
     sio.start_background_task(_catchup_loop, CATCHUP_LOOP_SECONDS)
+    sio.start_background_task(_reverify_loop, REVERIFY_SECONDS)
+    logger.info(
+        f"Relay registration: db_error={'fail_closed' if settings.RELAY_REQUIRE_CURRENT_TOKEN else 'fail_open'} "
+        f"reverify={REVERIFY_SECONDS:g}s max_http_buffer={RELAY_MAX_HTTP_BUFFER_BYTES}"
+    )
     logger.info(
         f"Relay catch-up: enabled={'true' if settings.DEPLOY_CATCHUP_ENABLED else 'false'} "
         f"rate_limit={catchup.RATE_LIMIT_SECONDS}s retry=false pause_on_failure={catchup.BREAKER_SECONDS:g}s"

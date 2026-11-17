@@ -713,7 +713,8 @@ def deploy_config(pc_id: str, current_user: AdminUser, db: DBSession):
         db: Database session
 
     Returns:
-        ``{pc_id, status, delivery, config_id, confirmable, message, screens}``
+        ``{pc_id, status, delivery, config_id, confirmable, message, screens,
+        ack_timeout_sec}``
         (never the generated configuration).
 
     Raises:
