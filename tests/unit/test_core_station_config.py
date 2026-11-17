@@ -700,13 +700,14 @@ INVALID = {
         "None", "NONE", "http://198.51.100.7/x", "ws:/x", "ws://", "WSS://x", "wss://a b", "wss://x/\t",
         " wss://x", "wss://x ", "wss://x/\x00", "wss://x/{name}", "wss://x/{pc_id", "wss://x/pc_id}", "wss://x/{}",
         "wss://fixture-user:fixture-pass@198.51.100.7/x", "wss://x/@", "wss://x/" + "a" * 2041, "********",
-        "rtsp://198.51.100.7/x", "{pc_id}",
+        "rtsp://198.51.100.7/x", "{pc_id}", "wss://x\n", "wss://x/\x85",
     ],
+    # "5\n" and "0\n" passed before C11 (a "$" anchor matches before a trailing newline).
     csc.KEY_HEARTBEAT_INTERVAL_SEC: ["1", "4", "3601", "-1", " 5", "5 ", "05", "abc", "", "1e3", "5.0", "00",
-                                     "99999", "********"],
-    csc.KEY_CLIENT_MANAGED_CONFIG: ["True", "FALSE", "yes", "1", "0", "", "on", "********"],
+                                     "99999", "********", "5\n", "0\n", "٥"],
+    csc.KEY_CLIENT_MANAGED_CONFIG: ["True", "FALSE", "yes", "1", "0", "", "on", "********", "true\n"],
     csc.KEY_CLIENT_ADMIN_PASSWORD_HASH: [
-        "none", "fixture-plain-password", "********",
+        "none", "fixture-plain-password", "********", _admin_hash() + "\n",
         csc.make_admin_password_hash("x", salt="abcdEFGH", iterations=99_999),
         csc.make_admin_password_hash("x", salt="abcdEFGH", iterations=10_000_001),
         "pbkdf2_sha256$200000$short$" + base64.b64encode(b"\0" * 32).decode(),

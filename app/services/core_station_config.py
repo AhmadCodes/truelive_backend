@@ -119,12 +119,15 @@ STATUS_OK = "ok"
 STATUS_REJECTED = "rejected"
 STATUS_ERROR = "error"
 
-_ADDRESS_RE = re.compile(r"^wss?://\S+$")
+# Matched with fullmatch: a "$" anchor also matches before a trailing newline,
+# which let a heartbeat of 5 plus a newline, and a hash plus a newline, through
+# (found by C11's parity cases against the portal's copy of these rules).
+_ADDRESS_RE = re.compile(r"wss?://\S+")
 _PLACEHOLDER_RE = re.compile(r"\{([^{}]*)\}")
 _PLACEHOLDER_SAMPLES = {"pc_id": "PC_1", "pc_name_urlenc": "Wall%201"}
-_INTERVAL_RE = re.compile(r"^(0|[1-9][0-9]{0,3})$")
+_INTERVAL_RE = re.compile(r"(0|[1-9][0-9]{0,3})")
 _ADMIN_HASH_RE = re.compile(
-    r"^pbkdf2_sha256\$([1-9][0-9]{0,8})\$([A-Za-z0-9+/=._-]{8,128})\$([A-Za-z0-9+/]{43}=)$"
+    r"pbkdf2_sha256\$([1-9][0-9]{0,8})\$([A-Za-z0-9+/=._-]{8,128})\$([A-Za-z0-9+/]{43}=)"
 )
 _SALT_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
@@ -199,7 +202,7 @@ def _check_address(value: str) -> Optional[str]:
     if "{" in rest or "}" in rest:
         return "has an unmatched { or }"
     sample = _PLACEHOLDER_RE.sub(lambda m: _PLACEHOLDER_SAMPLES[m.group(1)], value)
-    if not _ADDRESS_RE.match(sample):
+    if not _ADDRESS_RE.fullmatch(sample):
         return "must be a ws:// or wss:// URL without spaces, empty (unmanaged) or none (force empty)"
     if "@" in sample:
         return "must not contain '@' (no credentials in the URL)"
@@ -207,7 +210,7 @@ def _check_address(value: str) -> Optional[str]:
 
 
 def _check_interval(value: str) -> Optional[str]:
-    if _INTERVAL_RE.match(value):
+    if _INTERVAL_RE.fullmatch(value):
         number = int(value)
         if number == 0 or HEARTBEAT_MIN_SEC <= number <= HEARTBEAT_MAX_SEC:
             return None
@@ -222,7 +225,7 @@ def _check_admin_hash(value: str) -> Optional[str]:
     if value == UNMANAGED:
         return None
     # The pattern fixes the digest at 43 base64 characters plus one "=": 32 bytes.
-    match = _ADMIN_HASH_RE.match(value)
+    match = _ADMIN_HASH_RE.fullmatch(value)
     if not match:
         return (f"must be empty or {ADMIN_HASH_ALGORITHM}$<iterations>$<salt>$<hash> as computed by the portal "
                 "(never the password itself)")
