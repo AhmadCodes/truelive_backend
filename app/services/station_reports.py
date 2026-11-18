@@ -50,6 +50,11 @@ DEDUP_SIZE = 10_000
 UPSERT_CHUNK = 500  # rows per statement (well under PostgreSQL's 65535 parameters)
 
 _URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://\S*")
+# The query or fragment of an http(s) URL (an HLS camera URL keeps its token
+# there), unless it is already exactly "?<redacted>".
+_HTTP_QUERY_RE = re.compile(
+    r"(?i)(https?://[^\s?#\"'<>]*)[?#](?!<redacted>(?:[\s\"'<>]|$))(?:<redacted>|[^\s\"'<>])*"
+)
 # Every pattern below is applied with fullmatch (see the module docstring).
 _VERSION_RE = re.compile(sp.VERSION_PATTERN)
 _SHORT_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.:+-]{1,32}$")
@@ -101,6 +106,20 @@ def clean_value(value: Any) -> Any:
         return [clean_value(v) for v in value]
     if isinstance(value, tuple):
         return tuple(clean_value(v) for v in value)
+    return value
+
+
+def mask_http_queries(value: Any) -> Any:
+    """``value`` with the query of every http(s) URL, in every string and dict
+    key, replaced by ``?<redacted>``: the token of an HLS camera URL is a
+    credential like RTSP user:pass, and D1's userinfo guard does not see it.
+    Masked, not rejected, so the report is kept. RTSP URLs are not touched."""
+    if isinstance(value, str):
+        return _HTTP_QUERY_RE.sub(r"\1?<redacted>", value) if "://" in value else value
+    if isinstance(value, dict):
+        return {mask_http_queries(k): mask_http_queries(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [mask_http_queries(v) for v in value]
     return value
 
 

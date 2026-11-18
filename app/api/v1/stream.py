@@ -20,16 +20,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from contextlib import asynccontextmanager, suppress
-from typing import Optional
+from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 
+from app.api.deps import user_or_scope
 from app.core.security import decode_token
 from app.database import SessionLocal, get_db
 from app.models.camera import Camera
-from app.utils.url_processor import is_hls_url
+from app.utils.url_processor import is_hls_url, redact_camera_url
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +146,16 @@ def _input_opts(url: str) -> list[str]:
     """FFmpeg input options for a camera URL. -rtsp_transport belongs to the RTSP
     demuxer: on an HLS (http/https) input ffmpeg rejects it as an unknown option."""
     return [] if is_hls_url(url) else ["-rtsp_transport", "tcp"]
+
+
+_ANY_URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s'\"]+")
+
+
+def _scrub_urls(text: str, url: str) -> str:
+    """Tool output that is safe to return: the camera URL, and any other URL in
+    it, with userinfo and query (RTSP password, HLS token) masked."""
+    text = text.replace(url, redact_camera_url(url))
+    return _ANY_URL.sub(lambda m: redact_camera_url(m.group(0)), text)
 
 
 def _build_mpeg1_cmd(rtsp_url: str) -> list[str]:
@@ -462,10 +474,14 @@ async def stream_camera_jpeg(
 @router.get("/test/{camera_id}", tags=["Streaming"])
 async def test_camera_stream(
     camera_id: str,
+    _auth: Annotated[object, Depends(user_or_scope("cameras:read", "cameras:manage"))],
     db: Session = Depends(get_db),
 ):
     """
     Test camera RTSP connectivity and return diagnostic information.
+
+    Needs the same authentication as reading a camera. The stream URL in the
+    response and in tool output is masked (RTSP password, HLS token).
 
     Same defect class as the WebSocket handlers used to have: this
     endpoint used subprocess.run() and cv2.VideoCapture directly on the
@@ -483,7 +499,7 @@ async def test_camera_stream(
     result: dict = {
         "camera_id": camera_id,
         "camera_name": camera.name,
-        "rtsp_url": rtsp_url,
+        "rtsp_url": redact_camera_url(rtsp_url),
         "tests": {},
     }
 
@@ -510,12 +526,12 @@ async def test_camera_stream(
                 result["tests"]["ffmpeg"] = {
                     "status": "failed",
                     "exit_code": proc.returncode,
-                    "error": "\n".join(error_lines),
+                    "error": _scrub_urls("\n".join(error_lines), rtsp_url),
                 }
     except FileNotFoundError:
         result["tests"]["ffmpeg"] = {"status": "error", "message": "ffprobe binary not found on PATH"}
     except Exception as exc:
-        result["tests"]["ffmpeg"] = {"status": "error", "message": str(exc)}
+        result["tests"]["ffmpeg"] = {"status": "error", "message": _scrub_urls(str(exc), rtsp_url)}
 
     # Test 2: OpenCV via to_thread (non-blocking)
     try:
@@ -540,7 +556,7 @@ async def test_camera_stream(
     except ImportError:
         result["tests"]["opencv"] = {"status": "error", "message": "opencv-python not installed"}
     except Exception as exc:
-        result["tests"]["opencv"] = {"status": "error", "message": str(exc)}
+        result["tests"]["opencv"] = {"status": "error", "message": _scrub_urls(str(exc), rtsp_url)}
 
     all_passed = all(t.get("status") == "success" for t in result["tests"].values())
     result["overall_status"] = "ready" if all_passed else "failed"

@@ -1541,6 +1541,9 @@ def _validated_report(name: str, pc_id: str, data: Any):
     # (D15 "userinfo stripped"); a credential in any other field still
     # rejects the report (D1).
     data = station_reports.scrub_report_text(name, data)
+    # An HLS camera URL's query is its token: masked in every field, so it is
+    # never stored or served (the D1 guard only knows userinfo).
+    data = station_reports.mask_http_queries(data)
     try:
         return station_protocol.validate(name, data), None
     except ValidationError as exc:
