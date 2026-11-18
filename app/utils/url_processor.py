@@ -5,8 +5,49 @@ This module provides functions for encoding RTSP URLs with special characters in
 """
 from urllib.parse import quote
 import logging
+import re
 
 logger = logging.getLogger(__name__)
+
+# HLS camera URLs (http/https). Core picks the HLS path by scheme, so these must
+# reach the layout byte for byte: the query string carries the stream token.
+_HLS_SCHEMES = ("http", "https")
+_QUERY_START = re.compile(r"[?#]")
+
+
+def is_hls_url(url: str) -> bool:
+    """True for an http:// or https:// camera URL (scheme compared trimmed, case-insensitively)."""
+    if not isinstance(url, str):
+        return False
+    scheme, sep, _ = url.strip().partition("://")
+    return bool(sep) and scheme.lower() in _HLS_SCHEMES
+
+
+def redact_camera_url(url: str) -> str:
+    """A camera URL that is safe to log: userinfo and the query string are masked.
+
+    RTSP: user:pass (which may contain / ? # @) is masked, then any query.
+    HLS: the query (the token) is cut first, so an "@" inside it is not taken for userinfo.
+    """
+    if not url or not isinstance(url, str):
+        return ""
+    scheme, sep, rest = url.strip().partition("://")
+    if not sep:
+        return "<redacted>"
+    hls = scheme.lower() in _HLS_SCHEMES
+    had_query = False
+    if hls:
+        rest, had_query = _cut_query(rest)
+    if "@" in rest:
+        rest = "<redacted>@" + rest.rsplit("@", 1)[1]
+    if not hls:
+        rest, had_query = _cut_query(rest)
+    return f"{scheme}://{rest}" + ("?<redacted>" if had_query else "")
+
+
+def _cut_query(rest: str):
+    m = _QUERY_START.search(rest)
+    return (rest[: m.start()], True) if m else (rest, False)
 
 
 def encode_rtsp_password(rtsp_url: str) -> str:
@@ -39,6 +80,11 @@ def encode_rtsp_password(rtsp_url: str) -> str:
             raise ValueError("Invalid RTSP URL format - missing protocol")
 
         prefix, rest = rtsp_url.split('://', 1)
+
+        # HLS (http/https): never rewritten. An "@" or ":" in its query string is
+        # token data, not user:pass, and encoding it would break the stream URL.
+        if prefix.strip().lower() in _HLS_SCHEMES:
+            return rtsp_url
 
         # Split at @ to separate user_info from host_info
         if '@' not in rest:

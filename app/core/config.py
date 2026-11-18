@@ -14,7 +14,7 @@ class Settings(BaseSettings):
 
     # Application
     APP_NAME: str = "TrueLive Portal API"
-    APP_VERSION: str = "1.1.0"  # M2: deploy tracking, station reports, relay trust (plan 06 4.1)
+    APP_VERSION: str = "1.1.1"  # 1.1.0 = M2 (plan 06 4.1); 1.1.1 = HLS camera URLs pass through unchanged
     DEBUG: bool = False
     ENVIRONMENT: str = "production"
 

@@ -15,6 +15,7 @@ import threading
 from app.models.camera import Camera
 from app.models.snapshot import Snapshot
 from app.models.device import Device
+from app.utils.url_processor import redact_camera_url
 
 logger = logging.getLogger(__name__)
 
@@ -58,17 +59,17 @@ def get_camera_snapshot(rtsp_url: str, timeout: int = 10) -> Optional[np.ndarray
 
             if ret and frame is not None and frame.size > 0:
                 # Successfully captured a frame
-                logger.info(f"Snapshot captured from {rtsp_url[:50]}...")
+                logger.info(f"Snapshot captured from {redact_camera_url(rtsp_url)}")
                 return frame
 
             # Small delay to avoid maxing out CPU
             time.sleep(0.1)
 
-        logger.warning(f"Timeout while capturing snapshot from {rtsp_url[:50]}...")
+        logger.warning(f"Timeout while capturing snapshot from {redact_camera_url(rtsp_url)}")
         return None
 
     except Exception as e:
-        logger.error(f"Error capturing snapshot from {rtsp_url[:50]}...: {e}")
+        logger.error(f"Error capturing snapshot from {redact_camera_url(rtsp_url)}: {e}")
         return None
 
     finally:
@@ -280,7 +281,7 @@ def capture_snapshot(rtsp_url: str) -> bytes:
     frame = get_camera_snapshot(rtsp_url, timeout=10)
 
     if frame is None:
-        raise ValueError(f"Failed to capture snapshot from {rtsp_url}")
+        raise ValueError(f"Failed to capture snapshot from {redact_camera_url(rtsp_url)}")
 
     # Encode as JPEG
     success, buffer = cv2.imencode('.jpg', frame)

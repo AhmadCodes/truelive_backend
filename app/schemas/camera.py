@@ -13,7 +13,7 @@ class CameraBase(BaseModel):
     """Base schema with common camera fields."""
 
     name: str = Field(..., min_length=1, max_length=255, description="Display name of the camera")
-    rtsp_url: str = Field(..., description="RTSP URL for camera streaming")
+    rtsp_url: str = Field(..., description="Camera stream URL: rtsp(s):// or an HLS http(s):// playlist URL (stored and deployed unchanged)")
     main_stream_url: Optional[str] = Field(None, description="Main stream URL for camera (optional)")
     new: bool = Field(True, description="Flag indicating if this is a newly added camera")
     use_tcp: Optional[bool] = Field(None, description="Force RTSP over TCP; null to inherit from device")
@@ -30,7 +30,7 @@ class CameraUpdate(BaseModel):
     """Schema for updating an existing camera. All fields are optional."""
 
     name: Optional[str] = Field(None, min_length=1, max_length=255, description="Display name of the camera")
-    rtsp_url: Optional[str] = Field(None, description="RTSP URL for camera streaming")
+    rtsp_url: Optional[str] = Field(None, description="Camera stream URL: rtsp(s):// or an HLS http(s):// playlist URL (stored and deployed unchanged)")
     main_stream_url: Optional[str] = Field(None, description="Main stream URL for camera")
     new: Optional[bool] = Field(None, description="Flag indicating if this is a newly added camera")
     use_tcp: Optional[bool] = Field(

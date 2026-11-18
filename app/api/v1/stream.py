@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 from app.core.security import decode_token
 from app.database import SessionLocal, get_db
 from app.models.camera import Camera
+from app.utils.url_processor import is_hls_url
 
 logger = logging.getLogger(__name__)
 
@@ -139,11 +140,17 @@ async def _resolve_camera_rtsp(camera_id: str) -> Optional[str]:
         return camera.rtsp_url or None
 
 
+def _input_opts(url: str) -> list[str]:
+    """FFmpeg input options for a camera URL. -rtsp_transport belongs to the RTSP
+    demuxer: on an HLS (http/https) input ffmpeg rejects it as an unknown option."""
+    return [] if is_hls_url(url) else ["-rtsp_transport", "tcp"]
+
+
 def _build_mpeg1_cmd(rtsp_url: str) -> list[str]:
     """FFmpeg command for MPEG1-TS output over WebSocket (JSMpeg player)."""
     return [
         "ffmpeg",
-        "-rtsp_transport", "tcp",
+        *_input_opts(rtsp_url),
         "-i", rtsp_url,
         "-f", "mpegts",
         "-codec:v", "mpeg1video",
@@ -161,7 +168,7 @@ def _build_h264_cmd(rtsp_url: str) -> list[str]:
     """FFmpeg command for fragmented-MP4 H.264 output (browser MSE)."""
     return [
         "ffmpeg",
-        "-rtsp_transport", "tcp",
+        *_input_opts(rtsp_url),
         "-fflags", "nobuffer",
         "-flags", "low_delay",
         "-i", rtsp_url,
@@ -483,7 +490,7 @@ async def test_camera_stream(
     # Test 1: ffprobe via async subprocess (non-blocking)
     try:
         proc = await asyncio.create_subprocess_exec(
-            "ffprobe", "-rtsp_transport", "tcp", rtsp_url,
+            "ffprobe", *_input_opts(rtsp_url), rtsp_url,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         try:
