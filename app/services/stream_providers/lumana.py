@@ -11,12 +11,11 @@ from typing import Optional
 
 import httpx
 
-from app.services.stream_providers.base import (AUTH, LIMIT, NOT_FOUND, UNAVAILABLE, Address, ProviderError,
+from app.services.stream_providers.base import (AUTH, NOT_FOUND, UNAVAILABLE, Address, ProviderError,
                                                 ProviderField, StreamProvider)
 
 DEFAULT_BASE_URL = "https://access.lumana.ai"
 CHECK_CAMERA_ID = "000000000000000000000000"  # never a real camera: the start answers 400 when the key works
-SESSION_LIMIT = 10  # documented: concurrent sessions per edge
 
 
 def jwt_exp(token: str) -> Optional[float]:
@@ -65,9 +64,12 @@ class LumanaProvider(StreamProvider):
             raise ProviderError(NOT_FOUND, "Lumana does not know this camera id")
         if status == 503:
             raise ProviderError(UNAVAILABLE, "The camera's Lumana edge device is not connected")
-        if isinstance(sessions, int) and sessions >= SESSION_LIMIT - 1:
-            raise ProviderError(LIMIT, f"Lumana refused a new session; the limit of {SESSION_LIMIT} live sessions "
-                                       f"per edge is probably reached")
+        # What Lumana answers at its session limit is not known (the limit is per Lumana Core:
+        # 5 per camera, at least 12, and its own apps count too), so no status is called "limit":
+        # the operator gets the status and the last session count.
+        if isinstance(sessions, int):
+            raise ProviderError(UNAVAILABLE, f"Lumana answered HTTP {status}; {sessions} live session(s) were open "
+                                             f"at the last count")
         raise ProviderError(UNAVAILABLE, f"Lumana answered HTTP {status}")
 
     def check(self, settings: dict, http: httpx.Client) -> str:
@@ -90,7 +92,7 @@ class LumanaProvider(StreamProvider):
             url=f"{url}?token={token}",
             expires_at=jwt_exp(token),
             handle={"session_id": data.get("sessionId") or session_id},
-            info={"sessions": data.get("currentSessions"), "limit": SESSION_LIMIT},
+            info={"sessions": data.get("currentSessions")},
         )
 
     def release(self, settings: dict, camera_id: str, address: Address, http: httpx.Client) -> None:

@@ -34,12 +34,13 @@ On the camera tables, under the camera's provider and ID:
 
 | Status | Meaning |
 |---|---|
-| Address valid until *time* | A station plays it; it is renewed well before that time. |
-| Not in use | No connected station shows this camera, so no address is held. |
+| Address valid until *time* | The camera is a cell on a station's wall; the address is renewed well before that time. |
+| Not in use | The camera is a cell on no station's wall, so no address (and no vendor session) is held. |
+| The provider gave an address, but it does not play | The vendor accepts the camera, but its stream does not answer: the camera or its recorder is probably offline at the site. Stations keep the address they have; the server asks again after 30 s, then doubling up to 15 minutes, and the status clears by itself when the stream is back. |
 | Key refused | The vendor refused the provider's key. Enter a valid key on the Stream providers page. |
 | Camera unknown | The vendor does not know this camera ID. |
-| Session limit | The vendor refused a new session (see Limits). |
-| Provider not answering | The vendor did not answer. Stations keep the address they have until it expires; the server keeps trying (after 30 s, then doubling up to 15 minutes). |
+| Session limit | The vendor said its session limit is reached (only provider types that can tell; Lumana cannot, see Limits). |
+| Provider not answering | The vendor did not answer, or answered with an error; the message names the HTTP status and, for Lumana, how many live sessions were open at the last count. Stations keep the address they have until it expires; the server keeps trying (after 30 s, then doubling up to 15 minutes). |
 | Address expiring | The vendor has not given a fresh address and the current one ends within 30 minutes. |
 
 On a PC's health panel, **Provider cameras**: when stream addresses were last sent, whether the station acknowledged them, when the next renewal is due, and every camera that is not playable with its reason. "The layout changed since the last deploy" means the server lost its copy of what the station runs and the layout was edited since: deploy to that PC. Renewals are not deploys and do not appear in the deploy history.
@@ -48,8 +49,12 @@ A provider cell that cannot be resolved fails alone; the rest of the layout depl
 
 ### Limits
 
-- **Lumana allows 10 live sessions per edge device.** One camera uses one session, shared by all stations and by the portal's test stream. The Stream providers page shows the count and warns from 8. More than 10 cameras of one edge cannot be live at once.
-- A session nobody uses is given back after 5 minutes.
+- **Lumana limits the live sessions per Lumana Core** (the recorder at the site): 5 per camera on that Core, at least 12 (Lumana support, 2026-11-20; the "10" in Lumana's API reference is out of date). Every session on the Core counts, also people watching in Lumana's own apps. TrueLive uses one session per camera, shared by all stations and by the portal's test stream and live view. The Stream providers page shows the number of live sessions Lumana reported last. Lumana does not say when the limit is the reason for a refusal: the camera then shows "Lumana answered HTTP *status*; *n* live session(s) were open at the last count".
+- **Only cameras that are a cell on the wall get an address.** A layout also lists every camera of a cell's site for the location window. A provider camera in that list plays there only if it is a cell somewhere on the same station's wall (any screen, any view); the others stay dark in the location window. Otherwise every camera of a site would hold a vendor session for every wall that shows one of them.
+- A session is given back (the vendor's stop call) 5 minutes after the camera left every wall, and 5 minutes after the last portal test or live view of a camera that is on no wall. A station that is switched off or cannot reach the server keeps its sessions until its addresses expire: it may still be playing, and it gets the same addresses back when it returns.
+- **A station with cameras of two providers gets one automatic delivery per provider at each renewal** (addresses are renewed per provider), each with the Client's balloon. Two automatic deliveries to one station are at least 60 seconds apart.
+- A camera whose stream does not answer although the vendor gives an address is not delivered again and again: the station keeps its address and plays as soon as the stream is back (TrueLive Live retries by itself every 30 seconds).
+- **A typed-in HLS address whose query selects the stream** (for example `.../live.m3u8?cam=1`): TrueLive Live 1.3.1 treats a change of the query alone as a renewed token and keeps the running stream. After changing only the query of such a camera, restart TrueLive Live on the station (or change the address before the `?` as well).
 - Camera snapshots are taken from a provider camera only while a station is using it.
 - A station that cannot reach the TrueLive server for longer than an address lives (Lumana: 5 hours) loses its provider cells until it reconnects.
 - `STREAM_PROVIDERS_ENABLED=false` in `.env` turns the feature off: provider cells are not resolved and nothing is renewed.
@@ -63,9 +68,9 @@ Portal, **Settings**, **Stream providers** (super admins). Changes apply within 
 | `stream_providers.renew_fraction` | 0.5 | renew at this fraction of the address lifetime (0.05 to 0.95) |
 | `stream_providers.renew_min_margin_sec` | 1800 | never later than this before the expiry |
 | `stream_providers.watch_interval_sec` | 60 | how often the server checks each address in use; 0 turns the check off |
-| `stream_providers.release_after_sec` | 300 | give back an address no connected station uses |
+| `stream_providers.release_after_sec` | 300 | give back an address that is on no wall and was not used for this long |
 | `stream_providers.deploy_resolve_budget_sec` | 6 | longest a deploy waits for providers |
-| `stream_providers.request_timeout_sec` | 8 | timeout of every request to a provider |
+| `stream_providers.request_timeout_sec` | 8 | timeout of every request to a provider (1 to 10; a larger value counts as 10) |
 | `stream_providers.pc_refresh_min_interval_sec` | 60 | at most one automatic delivery per station in this time |
 
 ### Upgrade
@@ -77,11 +82,12 @@ Run `alembic upgrade head` (migration `016_stream_providers`: one new table, one
 ### How it works
 
 - A provider camera is stored as `cameras.rtsp_url = provider://<provider id>/<camera id, percent-encoded>` (`app/utils/url_processor.py`). The reference holds no secret and never reaches a station.
-- `app/services/stream_providers/engine.py` knows no vendor. At deploy it resolves the references of all targets in one bounded, parallel pass and replaces them in a copy of the layout (`url` and every `LocationUris` entry); the deploy's content hash stays the one of the unresolved layout. What cannot be resolved becomes `http://127.0.0.1:9/stream-unavailable/<code>`, which Core fails for that cell only.
+- `app/services/stream_providers/engine.py` knows no vendor. At deploy it resolves the references of all targets in one bounded, parallel pass and replaces them in a copy of the layout (`url` and every `LocationUris` entry); the deploy's content hash stays the one of the unresolved layout. Only a reference that is a cell (`url`) of that layout is resolved; one that is merely listed in `LocationUris` becomes the placeholder with the code `not-on-wall` and causes no vendor call. What cannot be resolved becomes `http://127.0.0.1:9/stream-unavailable?code=<code>`, which Core fails for that cell only. The code is in the query, so a change of code is a query-only change that Core 1.3.1 adopts without rebuilding the view.
 - Redis (`truelive:sp:*`) holds the minted address per camera and, per PC, the unresolved layout as deployed plus a fingerprint of what was sent. Everything there is encrypted with the settings Fernet and can be lost: it is rebuilt from the database, and a PC's layout only when it still hashes to the PC's latest deploy.
-- Celery beat runs `stream_provider_tasks.tick` every 30 s: renew all in-use addresses of a provider when the first is due, probe addresses in use and ask again for ones that stopped answering, deliver to stations whose addresses or acknowledgement are behind, release unused addresses.
+- Celery beat runs `stream_provider_tasks.tick` every 30 s: renew all in-use addresses of a provider when the first is due, probe addresses in use and ask again for ones that stopped answering, deliver to stations whose addresses or acknowledgement are behind, release addresses that are on no wall. An address that was asked for again and still does not play keeps its place (no delivery) and backs off like a failed request.
+- A layout is sent to a PC under the Redis lock `truelive:sp:lock:pc:<pc id>`: a deploy holds it from before its send until its answers are recorded (only when provider cameras exist), a renewal takes it, reads the PC's record again and gives up when a deploy came meanwhile. So a renewal never follows a deploy with the layout the deploy replaced, and two renewals never both deliver.
 - A renewal is delivered through the relay's sender event `refresh_config`: the same layout with the same root `config_id`, forwarded as the `config` event, with no `pc_deployments` row and no audit entry. The station's ACK is written to `truelive:sp:ack:<pc id>`.
-- The relay queues `refresh_pc` when a station registers and `station_failed` when a `station_status` lists failed cells (once per minute per PC).
+- The relay queues `refresh_pc` when a station registers and `station_failed` when a `station_status` lists failed cells (once per minute per PC). A connect check does not repeat the probe of an address that answered within the last 10 seconds, so many stations connecting at once ask the vendor once per camera.
 - Nothing logs a URL, a token or a key. httpx's logger is raised to WARNING because it logs request URLs.
 
 ### Add a provider type
@@ -90,18 +96,19 @@ One module and its tests; the engine, the API and the portal do not change.
 
 1. `app/services/stream_providers/<vendor>.py`: subclass `StreamProvider` (`base.py`).
    - `type_id`, `label`, and `fields`: `ProviderField(name, label, kind, required, default, help)` with `kind` one of `text`, `url`, `secret`, `int`. The portal builds its form from these; `secret` fields are stored encrypted and never returned.
-   - `mint(settings, camera_id, previous, http, last_info)` returns `Address(url, expires_at, handle, info)`. `settings` is the stored fields with the secrets decrypted. `previous` is the address minted before: renew it if the vendor can (the engine keeps `handle` for that). `expires_at` is Unix time or `None`. `info` is non-secret and shown to operators; `sessions` and `limit` in it give the session count on the Stream providers page.
+   - `mint(settings, camera_id, previous, http, last_info)` returns `Address(url, expires_at, handle, info)`. `settings` is the stored fields with the secrets decrypted. `previous` is the address minted before: renew it if the vendor can (the engine keeps `handle` for that). `expires_at` is Unix time or `None`. `info` is non-secret and shown to operators; `sessions` in it (and `limit`, when the vendor has a fixed one) gives the session count on the Stream providers page.
    - `check(settings, http)` proves the settings work without opening a stream and returns a short text.
    - `release(...)` gives an address back, if the vendor has such a call. `probe(address, http)` defaults to "the playlist answers 200 and starts with `#EXTM3U`".
    - Raise `ProviderError(code, message)` with code `auth`, `not_found`, `limit`, `unavailable` or `invalid`. The message is shown to operators: plain words, no URL, no secret. Use the given `http` client (it carries the timeout) and do not retry: the engine backs off.
 2. Register it in `app/services/stream_providers/__init__.py`: `registry.register(<Vendor>Provider())`.
 3. Tests against a local fake of the vendor on 127.0.0.1 (see `tests/fake_lumana.py`, `tests/unit/test_stream_providers_unit.py`). `tests/stream_provider_testkit.py` has `FixedProvider`, a second type that exists only in the tests and runs through the same engine.
 
-If the vendor's renewed address keeps its path and changes only the query string, Core 1.3.1 adopts it without restarting the picture. A vendor whose renewed address has a new path restarts the cell at each renewal.
+If the vendor's renewed address keeps its path and changes only the query string, Core 1.3.1 adopts it without restarting the picture. A vendor whose renewed address has a new path makes Core rebuild the whole view at each renewal: every cell of that view restarts, its RTSP cells included, and so does every view that lists the camera in `LocationUris`.
 
 ### Tests
 
 ```
 python -m pytest tests/unit/test_stream_providers_unit.py tests/unit/test_stream_providers_engine.py \
-    tests/unit/test_stream_providers_api.py tests/unit/test_relay_stream_providers.py -o addopts='' -p no:cacheprovider
+    tests/unit/test_stream_providers_api.py tests/unit/test_relay_stream_providers.py \
+    tests/unit/test_stream_providers_review.py -o addopts='' -p no:cacheprovider
 ```

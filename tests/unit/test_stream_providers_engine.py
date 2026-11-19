@@ -121,7 +121,7 @@ def test_slow_provider_does_not_block_the_deploy(rig):
     assert [u["code"] for u in result["provider_streams"]["unresolved"]] == ["pending", "pending"]
     assert "2 provider camera(s) are not available" in result["message"]
     urls = cell_urls(rig.station.deploys[0]["content"])
-    assert urls["src-0"] == "http://127.0.0.1:9/stream-unavailable/pending" and urls["src-rtsp"] == camera_url()
+    assert urls["src-0"] == "http://127.0.0.1:9/stream-unavailable?code=pending" and urls["src-rtsp"] == camera_url()
     assert rig.queued == [(deploy_service.REFRESH_TASK, ["PC_A", "deploy"], 10)]
     # The mints finish in the background; the follow-up delivers them (not rate-limited).
     assert _wait(lambda: rig.lumana.count("start") == 2 and all(rig.addr(r) for r in engine.layout_refs(
@@ -337,7 +337,8 @@ def test_lumana_down_then_back(rig):
     with rig.db() as db:
         assert engine.resolve_refs(db, refs)[refs[0]].url == before["src-0"]
         status = engine.status_for_cameras(refs)[refs[0]]
-        assert (status["state"], status["message"]) == ("error", "Lumana answered HTTP 502")
+        assert (status["state"], status["message"]) == (
+            "error", "Lumana answered HTTP 502; 2 live session(s) were open at the last count")
         assert status["valid_until"] == rig.clock.t - 9001 + 18000
         assert engine.provider_status(provider_id)["state"] == "error"
     # 30 minutes before the expiry with no fresh address: "expiring".
@@ -361,7 +362,7 @@ def test_expired_address_with_the_vendor_down_fails_the_cell_alone(rig):
     rig.clock.advance(18001)
     rig.tick()
     urls = cell_urls(rig.station.last("PC_A"))
-    assert urls["src-0"] == "http://127.0.0.1:9/stream-unavailable/provider-unavailable"
+    assert urls["src-0"] == "http://127.0.0.1:9/stream-unavailable?code=provider-unavailable"
     assert urls["src-rtsp"] == camera_url()
 
 
@@ -376,14 +377,14 @@ def test_limit_reached(rig):
     result = rig.deploy("PC_A")["results"][0]
     assert result["status"] == "deployed"  # the rest of the layout deploys
     unresolved = result["provider_streams"]["unresolved"]
-    assert [(u["camera_id"], u["code"]) for u in unresolved] == [("CAM_1", "limit-reached")]
-    assert unresolved[0]["message"] == ("Lumana main: Lumana refused a new session; the limit of 10 live sessions "
-                                        "per edge is probably reached")
+    assert [(u["camera_id"], u["code"]) for u in unresolved] == [("CAM_1", "provider-unavailable")]
+    assert unresolved[0]["message"] == ("Lumana main: Lumana answered HTTP 500; 9 live session(s) were open at the "
+                                        "last count")
     urls = cell_urls(rig.station.last("PC_A"))
-    assert "?token=" in urls["src-0"] and urls["src-1"].endswith("/stream-unavailable/limit-reached")
+    assert "?token=" in urls["src-0"] and urls["src-1"].endswith("/stream-unavailable?code=provider-unavailable")
     with rig.db() as db:
         status = engine.status_for_pc(db, "PC_A")
-    assert [(u["camera_name"], u["code"]) for u in status["unresolved"]] == [("Camera 1", "limit-reached")]
+    assert [(u["camera_name"], u["code"]) for u in status["unresolved"]] == [("Camera 1", "provider-unavailable")]
 
 
 def test_bad_key(rig):
@@ -394,7 +395,7 @@ def test_bad_key(rig):
     assert result["message"].endswith("2 provider camera(s) are not available: Lumana main: Lumana refused the "
                                       "API key")
     urls = cell_urls(rig.station.last("PC_A"))
-    assert urls["src-0"] == "http://127.0.0.1:9/stream-unavailable/key-refused" and urls["src-rtsp"] == camera_url()
+    assert urls["src-0"] == engine.PLACEHOLDER + "key-refused" and urls["src-rtsp"] == camera_url()
     status = engine.status_for_cameras(refs)[refs[0]]
     assert (status["state"], status["code"], status["message"]) == ("error", "key-refused",
                                                                     "Lumana refused the API key")
@@ -435,7 +436,7 @@ def test_provider_removed(rig):
     rig.clock.advance(61)
     assert rig.tick()["delivered"] == 1
     urls = cell_urls(rig.station.last("PC_A"))
-    assert urls["src-0"].endswith("/stream-unavailable/provider-removed") and urls["src-rtsp"] == camera_url()
+    assert urls["src-0"].endswith("/stream-unavailable?code=provider-removed") and urls["src-rtsp"] == camera_url()
     with rig.db() as db:
         assert {u["code"] for u in engine.status_for_pc(db, "PC_A")["unresolved"]} == {"provider-removed"}
 
@@ -534,18 +535,23 @@ def test_newer_deploy_that_missed_the_station_does_not_stop_renewals(rig):
 
 
 def test_release_after_five_minutes_unused(rig):
-    _pid, refs = _wall(rig)
-    rig.deploy("PC_A")
-    rig.connected.clear()  # the station went away
+    """An address no wall holds (here: the portal's test stream minted it) is
+    given back after 5 minutes. What a station's wall holds is kept while the
+    station is away: tests/unit/test_stream_providers_review.py."""
+    provider_id = rig.add_provider()
+    rig.add_pc("PC_A")
+    refs = [ref(provider_id, 1), ref(provider_id, 2)]
+    with rig.db() as db:
+        engine.resolve_refs(db, refs)
     rig.clock.advance(299)
     assert rig.tick()["released"] == 0 and rig.lumana.open_sessions() == 2
     rig.clock.advance(2)
     assert rig.tick()["released"] == 2
     assert rig.lumana.count("stop") == 2 and rig.lumana.open_sessions() == 0
     assert rig.addr(refs[0]) is None and rig.redis.keys(engine.PREFIX + "addr:*") == []
-    # Back again: fresh sessions, delivered.
-    rig.connected.append("PC_A")
-    assert rig.tick()["delivered"] == 1 and rig.lumana.open_sessions() == 2
+    # Put on a wall: fresh sessions, delivered with the deploy.
+    rig.set_layout("PC_A", refs)
+    assert rig.deploy("PC_A")["deployed"] == 1 and rig.lumana.open_sessions() == 2
 
 
 def test_tick_is_idle_without_provider_cameras(rig):
@@ -593,7 +599,7 @@ def test_old_core_gets_the_placeholder_and_the_reason(rig):
     assert "not confirmed to run TrueLive Live 1.3.0 or later" in result["message"]
     content = rig.station.last("PC_A")
     urls = cell_urls(content)
-    assert urls["src-0"] == "http://127.0.0.1:9/stream-unavailable/core-too-old" and urls["src-rtsp"] == camera_url()
+    assert urls["src-0"] == engine.PLACEHOLDER + "core-too-old" and urls["src-rtsp"] == camera_url()
     assert "token=" not in json.dumps(content) and rig.lumana.log == []  # no session is opened for it
     rig.clock.advance(61)
     out = rig.tick()

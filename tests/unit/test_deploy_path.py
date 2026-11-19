@@ -60,6 +60,8 @@ from tests.deploy_testkit import (
 
 ACTOR = ("user", "7b3f0a52-0000-4000-8000-0000000000d1", "operator")
 RESULT_KEYS = {"pc_id", "status", "delivery", "config_id", "confirmable", "message", "screens", "ack_timeout_sec"}
+# The route answers also carry provider_streams (null without provider cameras; LUM review).
+ROUTE_RESULT_KEYS = RESULT_KEYS | {"provider_streams"}
 
 
 @pytest.fixture
@@ -401,7 +403,7 @@ def test_pc_deploy_route_response(api, env):
     response = api.client.post("/api/v1/pcs/PC_A/deploy")
     assert response.status_code == 200, response.text
     body = response.json()
-    assert set(body) == RESULT_KEYS
+    assert set(body) == ROUTE_RESULT_KEYS
     assert (body["pc_id"], body["status"], body["delivery"]) == ("PC_A", "deployed", "delivered")
     _assert_no_layout_in(response)
     assert _rows(env)[body["config_id"]].trigger == "pc_deploy"
@@ -419,7 +421,7 @@ def test_pc_deploy_route_offline_is_502_and_recorded(api, env):
     # A string detail (what older portals show) plus the per-PC result (D18).
     assert set(body) == {"detail", "result"}
     assert isinstance(body["detail"], str) and "not connected" in body["detail"]
-    assert set(body["result"]) == RESULT_KEYS
+    assert set(body["result"]) == ROUTE_RESULT_KEYS
     assert (body["result"]["pc_id"], body["result"]["status"], body["result"]["delivery"]) == (
         "PC_A", "failed", "offline")
     assert body["result"]["message"] == body["detail"]
@@ -440,7 +442,7 @@ def test_pc_deploy_route_relay_failure_is_502_with_result(api, env, answer):
     assert response.status_code == 502
     body = response.json()
     assert set(body) == {"detail", "result"} and isinstance(body["detail"], str)
-    assert set(body["result"]) == RESULT_KEYS
+    assert set(body["result"]) == ROUTE_RESULT_KEYS
     assert (body["result"]["status"], body["result"]["delivery"]) == ("failed", "error")
     assert _rows(env)[body["result"]["config_id"]].status == "relay_failed"
     _assert_no_layout_in(response)
@@ -454,7 +456,7 @@ def test_layout_deploy_route_response(api, env):
     assert set(body) == {"total", "deployed", "skipped", "failed", "results", "screen_layout_id", "message"}
     assert (body["total"], body["deployed"], body["failed"]) == (3, 2, 1)
     for result in body["results"]:
-        assert set(result) == RESULT_KEYS
+        assert set(result) == ROUTE_RESULT_KEYS
     assert {r["pc_id"]: r["status"] for r in body["results"]} == {"PC_A": "deployed", "PC_B": "failed",
                                                                   "PC_C": "deployed"}
     _assert_no_layout_in(response)

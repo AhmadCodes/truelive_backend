@@ -146,6 +146,39 @@ async def _resolve_camera_rtsp(camera_id: str) -> Optional[str]:
         return url
 
 
+LIVE_VIEW_USE_INTERVAL_SEC = 60.0
+
+
+@asynccontextmanager
+async def _provider_address_in_use(camera_id: str):
+    """While a live view plays a provider camera, keep noting its address as
+    in use, so the stream providers tick does not give the vendor session
+    back (it releases what nobody used for 5 minutes). Does nothing for any
+    other camera."""
+    async def note() -> None:
+        from app.services.stream_providers import engine
+
+        while True:
+            try:
+                async with _db_session_scope() as db:
+                    camera = db.query(Camera).filter(Camera.id == camera_id).first()
+                    ref = camera.rtsp_url if camera is not None else None
+                if not is_provider_ref(ref):
+                    return
+                await asyncio.to_thread(engine.touch, ref)
+            except Exception as exc:
+                logger.warning("live view use not noted camera=%s: %s", camera_id, type(exc).__name__)
+            await asyncio.sleep(LIVE_VIEW_USE_INTERVAL_SEC)
+
+    task = asyncio.create_task(note())
+    try:
+        yield
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError, Exception):
+            await task
+
+
 def _provider_address(db, ref: str):
     """Resolve a provider camera reference (blocking: Redis and the provider)."""
     from app.services.stream_providers import engine
@@ -364,7 +397,7 @@ async def _run_stream(
             await websocket.close(code=1013, reason="Too many concurrent streams; try again shortly")
             return
 
-        async with _stream_semaphore:
+        async with _stream_semaphore, _provider_address_in_use(camera_id):
             logger.info("stream starting camera=%s label=%s", camera_id, label)
             async with _ffmpeg_proc(build_cmd(rtsp_url)) as proc:
                 await _pump_ffmpeg_to_ws(
@@ -446,7 +479,7 @@ async def stream_camera_jpeg(
             await websocket.close(code=1013, reason="Too many concurrent streams; try again shortly")
             return
 
-        async with _stream_semaphore:
+        async with _stream_semaphore, _provider_address_in_use(camera_id):
             logger.info("stream starting camera=%s label=jpeg", camera_id)
             frame_count = 0
             try:

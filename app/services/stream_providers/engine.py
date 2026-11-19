@@ -6,8 +6,10 @@ layout when its addresses changed. Written against base.StreamProvider only.
 A camera of a provider is stored as ``provider://<provider id>/<camera id>``
 (the *reference*). Stations never see a reference: the deploy path
 (deploy_service) and ``refresh_pc`` replace it with the minted address, or
-with ``http://127.0.0.1:9/stream-unavailable/<code>`` so the cell fails alone
-with a reason.
+with ``http://127.0.0.1:9/stream-unavailable?code=<code>`` so the cell fails
+alone with a reason. Only cameras that are a cell of the station's wall get an
+address; a camera that is merely listed in ``LocationUris`` gets the
+placeholder (code ``not-on-wall``) and costs no vendor session.
 
 Redis (prefix ``truelive:sp:``); every key can be lost and is rebuilt:
 
@@ -16,6 +18,8 @@ Redis (prefix ``truelive:sp:``); every key can be lost and is rebuilt:
   ``mint:`` lock; TTL 7 days)
 * ``use:`` / ``probe:<provider>:<camera>``  when a connected station last
   needed the address; the server-side check's bookkeeping
+* ``lock:pc:<pc id>``  held while a layout is sent to the PC (a deploy or a
+  refresh), so the two never cross
 * ``pinfo:<provider>``  ``info`` of the provider's latest mint
 * ``pc:<pc id>``  the unresolved layout as last deployed with what was sent
   (encrypted), or a marker that the deploy has no provider camera, or
@@ -53,7 +57,8 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 PREFIX = "truelive:sp:"
-PLACEHOLDER = "http://127.0.0.1:9/stream-unavailable/"
+# The code is in the query: Core 1.3.1 adopts a query-only change without rebuilding the view.
+PLACEHOLDER = "http://127.0.0.1:9/stream-unavailable?code="
 
 OK = "ok"
 CODE_REMOVED = "provider-removed"
@@ -63,6 +68,7 @@ CODE_LIMIT = "limit-reached"
 CODE_UNAVAILABLE = "provider-unavailable"
 CODE_OLD_CORE = "core-too-old"
 CODE_PENDING = "pending"
+CODE_NOT_ON_WALL = "not-on-wall"
 ERROR_CODES = {AUTH: CODE_KEY, NOT_FOUND: CODE_CAMERA, LIMIT: CODE_LIMIT, UNAVAILABLE: CODE_UNAVAILABLE,
                INVALID: CODE_UNAVAILABLE}
 
@@ -70,6 +76,7 @@ MSG_REMOVED = "The stream provider of this camera was removed."
 MSG_OLD_CORE = ("This station is not confirmed to run TrueLive Live 1.3.0 or later; provider cameras are not "
                 "sent to it.")
 MSG_PENDING = "The provider has not answered yet; the address follows when it does."
+MSG_NOT_PLAYING = "The provider gave an address, but it does not play (is the camera online?)"
 MSG_DISABLED = "Stream providers are turned off on this server."
 MSG_BLOCKED = "The layout changed since the last deploy; deploy to this PC to keep its provider cameras renewed."
 MSG_KEY_UNREADABLE = "The provider's key cannot be read with this server's SETTINGS_ENCRYPTION_KEY; enter it again."
@@ -86,7 +93,10 @@ DEFAULTS: Dict[str, float] = {
 SETTINGS_CATEGORY = "stream_providers"
 
 ADDR_TTL_SEC = 7 * 86400
-MINT_LOCK_SEC = 30
+MINT_LOCK_SEC = 60         # more than a mint and two probes at the largest request timeout
+PC_LOCK_SEC = 30
+PC_LOCK_WAIT_SEC = 8.0
+MAX_REQUEST_TIMEOUT_SEC = 10.0
 MINT_WAIT_SEC = 3.0
 TICK_LOCK_SEC = 120
 POOL_SIZE = 8
@@ -96,6 +106,7 @@ EXPIRY_GUARD_SEC = 30      # an address this close to its expiry is not handed o
 EXPIRING_SEC = 1800        # status "expiring" from here on when no fresh address came
 NO_EXPIRY_LIFE_SEC = 3600  # renewal rhythm of an address whose provider gives no expiry
 REFRESH_BUDGET_SEC = 10
+IMMEDIATE_PROBE_MIN_SEC = 10  # a connect check does not repeat a probe that just answered
 RENEW_BUDGET_SEC = 30
 ACK_RETRIES = 2            # re-deliveries of unchanged addresses to a station that does not acknowledge
 MIN_CORE = (1, 3, 0)
@@ -155,6 +166,47 @@ def _get_text(key: str) -> Optional[str]:
     return raw.decode("utf-8", "replace") if raw else None
 
 
+def _lock(name: str, ttl: int) -> Optional[str]:
+    """Take the lock ``name``; the returned value proves ownership to ``_unlock``."""
+    owner = uuid.uuid4().hex
+    return owner if redis_client().set(PREFIX + name, owner, nx=True, ex=ttl) else None
+
+
+def _unlock(name: str, owner: Optional[str]) -> None:
+    """Release the lock only when it is still ours (it may have expired and
+    been taken by another worker)."""
+    # shortcut: get-then-delete is not atomic; use a Lua compare-and-delete if work ever outlives the TTL often.
+    client = redis_client()
+    if owner and (client.get(PREFIX + name) or b"").decode("ascii", "replace") == owner:
+        client.delete(PREFIX + name)
+
+
+def lock_pcs(pc_ids: Iterable[str], wait_sec: float = PC_LOCK_WAIT_SEC) -> Dict[str, str]:
+    """Take the send lock of each PC, waiting at most ``wait_sec`` in total
+    for refreshes that are sending right now. A deploy holds these from before
+    its send until its answers are recorded; a lock that could not be taken
+    is left out (the deploy goes on)."""
+    deadline = time.monotonic() + wait_sec
+    held: Dict[str, str] = {}
+    for pc_id in sorted(set(pc_ids)):
+        while True:
+            owner = _lock(f"lock:pc:{pc_id}", PC_LOCK_SEC)
+            if owner or time.monotonic() >= deadline:
+                break
+            time.sleep(0.05)
+        if owner:
+            held[pc_id] = owner
+    return held
+
+
+def unlock_pcs(held: Dict[str, str]) -> None:
+    for pc_id, owner in held.items():
+        try:
+            _unlock(f"lock:pc:{pc_id}", owner)
+        except Exception:
+            pass  # it expires by itself
+
+
 def _camera_key(kind: str, provider_id: str, camera_id: str) -> str:
     return f"{kind}:{provider_id}:{quote(camera_id, safe='')}"
 
@@ -188,7 +240,7 @@ def config(db) -> Dict[str, float]:
     except Exception as exc:
         logger.warning(f"Stream provider settings not readable ({type(exc).__name__}); using the defaults")
     out["renew_fraction"] = min(0.95, max(0.05, out["renew_fraction"]))
-    out["request_timeout_sec"] = max(1.0, out["request_timeout_sec"])
+    out["request_timeout_sec"] = min(MAX_REQUEST_TIMEOUT_SEC, max(1.0, out["request_timeout_sec"]))
     return out
 
 
@@ -320,18 +372,34 @@ def layout_index(payload: dict) -> Tuple[Dict[str, str], Dict[str, dict]]:
 
 
 def layout_refs(payload: dict) -> List[str]:
+    """Every reference of the layout, LocationUris included."""
     return sorted(layout_index(payload)[1])
+
+
+def wall_refs(payload: dict) -> List[str]:
+    """The references that are a cell of the wall: the only ones that get an
+    address (and so a vendor session)."""
+    return sorted(set(layout_index(payload)[0].values()))
+
+
+def _record_refs(rec: dict) -> List[str]:
+    return sorted(set((rec.get("refs") or {}).values()))
 
 
 def resolve_layout(payload: dict, resolved: Dict[str, Resolved], core_ok: bool = True):
     """``(copy with every reference replaced, {source id: reference},
-    [{ref, camera_id, camera_name, code, message}] of what is not playable)``.
-    The input is not changed."""
+    [{ref, camera_id, camera_name, code, message}] of the cells that are not
+    playable)``. A reference that is no cell of this wall (only listed in
+    ``LocationUris``) becomes the ``not-on-wall`` placeholder and is not
+    reported. The input is not changed."""
     cells, cameras = layout_index(payload)
+    wall = set(cells.values())
     out = copy.deepcopy(payload)
     unresolved: Dict[str, dict] = {}
 
     def swap(ref, _source, _item):
+        if ref not in wall:
+            return PLACEHOLDER + CODE_NOT_ON_WALL
         result = (resolved.get(ref) or Resolved(None, CODE_PENDING, MSG_PENDING)) if core_ok else Resolved(
             None, CODE_OLD_CORE, MSG_OLD_CORE)
         if result.url:
@@ -385,14 +453,18 @@ def _mint_one(entry: _Provider, camera_id: str, cfg: Dict[str, float], revive: b
     ``revive``: the address stopped answering. When the provider gives the
     same address path back and the stored one is not due for renewal and
     answers again, the stored one is kept, so no station needs a delivery.
+    When neither the stored nor the fresh address plays, the stored one is
+    kept as well and the attempt counts as a failure (error text, backoff):
+    a camera that is down at the site is not minted and delivered for ever.
     """
     key = _camera_key("addr", entry.id, camera_id)
-    lock = PREFIX + _camera_key("mint", entry.id, camera_id)
+    lock = _camera_key("mint", entry.id, camera_id)
     client = redis_client()
-    if not client.set(lock, "1", nx=True, ex=MINT_LOCK_SEC):
+    owner = _lock(lock, MINT_LOCK_SEC)
+    if not owner:
         # Another worker mints this camera: wait for its result.
         deadline = time.monotonic() + MINT_WAIT_SEC
-        while time.monotonic() < deadline and client.exists(lock):
+        while time.monotonic() < deadline and client.exists(PREFIX + lock):
             time.sleep(0.05)
         rec = _load(key) or {}
         if _usable(rec, now()):
@@ -405,13 +477,20 @@ def _mint_one(entry: _Provider, camera_id: str, cfg: Dict[str, float], revive: b
         timeout = cfg["request_timeout_sec"]
         error: Optional[ProviderError] = None
         address: Optional[Address] = None
-        keep = False
+        keep = dead = False
         try:
             with httpx.Client(timeout=timeout) as http:
                 address = entry.impl.mint(entry.settings, camera_id, previous, http, last_info)
-                if (revive and previous and _usable(rec, now()) and _same_path(previous.url, address.url)
-                        and now() < (rec.get("renew_at") or 0)):
-                    keep = entry.impl.probe(previous, http)
+                if revive:
+                    held = bool(previous) and _usable(rec, now())
+                    keep = (held and _same_path(previous.url, address.url)
+                            and now() < (rec.get("renew_at") or 0) and _plays(entry, previous, http))
+                    # The fresh address does not play either (camera or edge down): the stations
+                    # keep the one they have, so a dead camera costs no delivery, and the backoff applies.
+                    dead = not keep and not _plays(entry, address, http)
+                    if dead and held:
+                        address = previous
+                        keep = True
         except ProviderError as exc:
             error = exc
         except Exception as exc:
@@ -420,6 +499,7 @@ def _mint_one(entry: _Provider, camera_id: str, cfg: Dict[str, float], revive: b
         if error is not None:
             failures = int(rec.get("failures") or 0) + 1
             rec.update(last_error=error.message, last_error_code=error.code, last_error_at=t, failures=failures,
+                       not_playing=False,
                        next_try_at=t + min(BACKOFF_FIRST_SEC * 2 ** (failures - 1), BACKOFF_MAX_SEC))
             _save(key, rec, ADDR_TTL_SEC)
             logger.warning(f"Stream provider {entry.name}: no address for a camera ({error.code}: {error.message}); "
@@ -428,15 +508,56 @@ def _mint_one(entry: _Provider, camera_id: str, cfg: Dict[str, float], revive: b
         if not keep:
             rec.update(url=address.url, expires_at=address.expires_at, minted_at=t,
                        renew_at=renew_at(t, address.expires_at, cfg["renew_fraction"], cfg["renew_min_margin_sec"]))
-        rec.update(handle=address.handle, info=address.info, last_error=None, last_error_code=None,
-                   last_error_at=None, failures=0, next_try_at=None)
+        rec.update(handle=address.handle, info=address.info)
+        if dead:
+            failures = int(rec.get("failures") or 0) + 1
+            rec.update(last_error=MSG_NOT_PLAYING, last_error_code=UNAVAILABLE, last_error_at=t, failures=failures,
+                       not_playing=True,
+                       next_try_at=t + min(BACKOFF_FIRST_SEC * 2 ** (failures - 1), BACKOFF_MAX_SEC))
+            logger.warning(f"Stream provider {entry.name}: a camera's address does not play; "
+                           f"next try in {int(rec['next_try_at'] - t)} s")
+        else:
+            rec.update(last_error=None, last_error_code=None, last_error_at=None, failures=0, next_try_at=None,
+                       not_playing=False)
+            _save(f"pinfo:{entry.id}", {"info": address.info, "at": t}, ADDR_TTL_SEC)
+            client.delete(PREFIX + _camera_key("probe", entry.id, camera_id))
         _save(key, rec, ADDR_TTL_SEC)
-        _save(f"pinfo:{entry.id}", {"info": address.info, "at": t}, ADDR_TTL_SEC)
         client.set(PREFIX + _camera_key("use", entry.id, camera_id), str(t), ex=ADDR_TTL_SEC)
-        client.delete(PREFIX + _camera_key("probe", entry.id, camera_id))
         return Resolved(rec["url"], OK, "")
     finally:
-        client.delete(lock)
+        _unlock(lock, owner)
+
+
+def _plays(entry: _Provider, address: Address, http) -> bool:
+    try:
+        return bool(entry.impl.probe(address, http))
+    except Exception:  # a probe that raises is a probe that failed, never a failed mint
+        return False
+
+
+def _plays_again(entry: _Provider, camera_id: str) -> None:
+    """An address that did not play answers again: drop that error."""
+    key = _camera_key("addr", entry.id, camera_id)
+    lock = _camera_key("mint", entry.id, camera_id)
+    owner = _lock(lock, MINT_LOCK_SEC)
+    if not owner:
+        return  # a mint is running; the next check does it
+    try:
+        rec = _load(key)
+        if rec and rec.get("not_playing"):
+            rec.update(last_error=None, last_error_code=None, last_error_at=None, failures=0, next_try_at=None,
+                       not_playing=False)
+            _save(key, rec, ADDR_TTL_SEC)
+    finally:
+        _unlock(lock, owner)
+
+
+def touch(ref: str) -> None:
+    """Note that the address of ``ref`` is in use right now (the portal's
+    live view calls this while it plays), so the tick does not give it back."""
+    key = _ref_key("use", ref)
+    if key and settings.STREAM_PROVIDERS_ENABLED:
+        redis_client().set(PREFIX + key, str(now()), ex=ADDR_TTL_SEC)
 
 
 def resolve_refs(db, refs: Iterable[str], *, budget_sec: Optional[float] = None, allow_mint: bool = True,
@@ -564,11 +685,8 @@ def _probe_one(entry: _Provider, camera_id: str, cfg: Dict[str, float], immediat
     rec = _load(_camera_key("addr", entry.id, camera_id))
     if not rec or not rec.get("url"):
         return
-    try:
-        with httpx.Client(timeout=cfg["request_timeout_sec"]) as http:
-            healthy = bool(entry.impl.probe(_address(rec), http))
-    except Exception:
-        healthy = False
+    with httpx.Client(timeout=cfg["request_timeout_sec"]) as http:
+        healthy = _plays(entry, _address(rec), http)
     t = now()
     probe_key = _camera_key("probe", entry.id, camera_id)
     state = _load(probe_key) or {}
@@ -577,15 +695,19 @@ def _probe_one(entry: _Provider, camera_id: str, cfg: Dict[str, float], immediat
     if healthy:
         state["ok_at"] = t
     _save(probe_key, state, ADDR_TTL_SEC)
+    if healthy and rec.get("not_playing"):
+        _plays_again(entry, camera_id)
     if healthy or not (immediate or state["failures"] >= 2) or (rec.get("next_try_at") or 0) > t:
         return
     logger.info(f"Stream provider {entry.name}: an address in use stopped answering; asking for it again")
     _mint_one(entry, camera_id, cfg, revive=True)
 
 
-def check_addresses(db, refs: Iterable[str], cfg: Dict[str, float], immediate: bool = False) -> int:
-    """Probe cached addresses (each at most once per ``watch_interval_sec``
-    unless ``immediate``). One that fails twice in a row (once when
+def check_addresses(db, refs: Iterable[str], cfg: Dict[str, float], immediate: bool = False,
+                    skip_recent: bool = False) -> int:
+    """Probe cached addresses (each at most once per ``watch_interval_sec``;
+    with ``immediate`` now, and with ``skip_recent`` not when it answered
+    within the last IMMEDIATE_PROBE_MIN_SEC). One that fails twice in a row (once when
     ``immediate``) is minted again with its kept handle."""
     parsed = [p for p in (parse_provider_ref(ref) for ref in dict.fromkeys(refs)) if p]
     providers = load_providers(db, [p[0] for p in parsed])
@@ -595,10 +717,14 @@ def check_addresses(db, refs: Iterable[str], cfg: Dict[str, float], immediate: b
         entry = providers.get(provider_id)
         if entry is None or entry.error:
             continue
-        if not immediate:
-            state = _load(_camera_key("probe", provider_id, camera_id)) or {}
-            if t - (state.get("at") or 0) < cfg["watch_interval_sec"]:
-                continue
+        state = _load(_camera_key("probe", provider_id, camera_id)) or {}
+        age = t - (state.get("at") or 0)
+        if not immediate and age < cfg["watch_interval_sec"]:
+            continue
+        # Stations share addresses: when many (re)connect at once, or one flaps, an address that
+        # just answered is not asked again for each of them.
+        if skip_recent and age < IMMEDIATE_PROBE_MIN_SEC and not state.get("failures"):
+            continue
         jobs.append((entry, camera_id))
     if jobs:
         with ThreadPoolExecutor(max_workers=POOL_SIZE, thread_name_prefix="sp-probe") as pool:
@@ -707,8 +833,6 @@ def refresh_pc(db, pc_id: str, reason: str, sender=None, *, cfg: Optional[Dict[s
     pending; not rate-limited), ``connect`` and ``failure`` (the PC's
     addresses, or ``check_refs``, are probed first), ``tick``.
     """
-    from app.services import deploy_service
-
     if not settings.STREAM_PROVIDERS_ENABLED:
         return {"status": "disabled"}
     rec = pc_record(db, pc_id)
@@ -724,12 +848,35 @@ def refresh_pc(db, pc_id: str, reason: str, sender=None, *, cfg: Optional[Dict[s
         redis_client().delete(f"{PREFIX}pc:{pc_id}")
         return {"status": "no_pc"}
     core_ok = core_supports_hls(pc, health)
-    refs = sorted(rec.get("cameras") or {})
+    refs = _record_refs(rec)
     if core_ok and reason in ("connect", "failure"):
-        check_addresses(db, refs if check_refs is None else check_refs, cfg, immediate=True)
+        # A station's failure report is always checked; a connect check trusts a fresh answer.
+        check_addresses(db, refs if check_refs is None else check_refs, cfg, immediate=True,
+                        skip_recent=reason == "connect")
     resolved = resolve_refs(db, refs, budget_sec=REFRESH_BUDGET_SEC, cfg=cfg) if core_ok else {}
-    payload, _cells, unresolved = resolve_layout(rec["layout"], resolved, core_ok)
     current = fingerprint(refs, resolved, core_ok)
+    # Probing and resolving took seconds. From here to the saved record the PC's send lock is
+    # held (a deploy holds it too) and the record is read again: a deploy that came meanwhile
+    # is never followed by the layout it replaced, and two refreshes never both deliver.
+    lock = f"lock:pc:{pc_id}"
+    owner = _lock(lock, PC_LOCK_SEC)
+    if not owner:
+        return {"status": "busy"}
+    try:
+        config_id = rec.get("config_id")
+        rec = pc_record(db, pc_id)
+        if not rec or rec.get("config_id") != config_id or rec.get("none") or rec.get("blocked"):
+            return {"status": "superseded"}
+        return _send_refresh(pc_id, reason, sender, cfg, rec, refs, resolved, core_ok, current)
+    finally:
+        _unlock(lock, owner)
+
+
+def _send_refresh(pc_id: str, reason: str, sender, cfg: Dict[str, float], rec: dict, refs: List[str],
+                  resolved: Dict[str, Resolved], core_ok: bool, current: str) -> Dict[str, Any]:
+    from app.services import deploy_service
+
+    payload, _cells, unresolved = resolve_layout(rec["layout"], resolved, core_ok)
     same = current == rec.get("sent_fingerprint")
     if same and rec.get("sent_id") and _get_text(f"ack:{pc_id}") == rec["sent_id"]:
         return {"status": "current"}
@@ -788,13 +935,13 @@ def connected_pcs() -> Optional[List[str]]:
 def tick(db, sender=None) -> Dict[str, Any]:
     if not settings.STREAM_PROVIDERS_ENABLED:
         return {"status": "disabled"}
-    client = redis_client()
-    if not client.set(PREFIX + "tick", "1", nx=True, ex=TICK_LOCK_SEC):
+    owner = _lock("tick", TICK_LOCK_SEC)
+    if not owner:
         return {"status": "busy"}
     try:
         return _tick(db, sender)
     finally:
-        client.delete(PREFIX + "tick")
+        _unlock("tick", owner)
 
 
 def _tick(db, sender) -> Dict[str, Any]:
@@ -824,7 +971,7 @@ def _tick(db, sender) -> Dict[str, Any]:
             continue
         records[pc_id] = rec
         if core_supports_hls(pcs[pc_id], healths.get(pc_id)):
-            in_use.update(rec.get("cameras") or {})
+            in_use.update(_record_refs(rec))
     for ref in in_use:
         client.set(PREFIX + _ref_key("use", ref), str(t), ex=ADDR_TTL_SEC)
 
@@ -853,15 +1000,25 @@ def _tick(db, sender) -> Dict[str, Any]:
         except Exception as exc:
             logger.error(f"Stream providers: refresh of PC {pc_id} failed ({type(exc).__name__})")
 
-    # f. Give back addresses no connected station used for a while.
+    # f. Give back addresses nobody used for a while. An address on the wall of a station that
+    #    is not connected right now is kept while it is valid: the station may still play it
+    #    (it lost only its link to the relay), and it gets the same address back when it returns.
+    held = set(in_use)
+    for raw in client.keys(PREFIX + "pc:*"):
+        pc_id = raw.decode("utf-8")[len(PREFIX) + 3:]
+        if pc_id not in records:
+            held.update(_record_refs(_load(f"pc:{pc_id}") or {}))
     released = 0
     stale = []
     for key in addr_keys:
         _kind, provider_id, quoted = key.split(":", 2)
         camera_id = unquote(quoted)
-        if make_provider_ref(provider_id, camera_id) in in_use:
+        ref = make_provider_ref(provider_id, camera_id)
+        if ref in in_use:
             continue
         rec = _load(key) or {}
+        if ref in held and _usable(rec, t):
+            continue
         used = max(float(_get_text(_camera_key("use", provider_id, camera_id)) or 0), rec.get("minted_at") or 0,
                    rec.get("last_error_at") or 0)
         if t - used >= cfg["release_after_sec"]:
@@ -921,8 +1078,8 @@ def status_for_cameras(refs: Iterable[str]) -> Dict[str, dict]:
 
 def provider_status(provider_id: str) -> dict:
     """One line for the Stream providers page."""
-    out = {"state": "unused", "message": None, "sessions": None, "session_limit": None, "checked_at": None,
-           "addresses": 0}
+    out = {"state": "unused", "message": None, "code": None, "sessions": None, "session_limit": None,
+           "checked_at": None, "addresses": 0}
     try:
         t = now()
         info = _load(f"pinfo:{provider_id}") or {}
@@ -935,7 +1092,7 @@ def provider_status(provider_id: str) -> dict:
             status = _camera_status(make_provider_ref(provider_id, unquote(quoted)), t)
             out["addresses"] += 1 if status["valid_until"] or status["state"] == "ok" else 0
             if rank[status["state"]] > rank[out["state"]]:
-                out["state"], out["message"] = status["state"], status["message"]
+                out["state"], out["message"], out["code"] = status["state"], status["message"], status["code"]
     except Exception as exc:
         logger.warning(f"Stream provider status not available ({type(exc).__name__})")
     return out
@@ -953,7 +1110,7 @@ def status_for_pc(db, pc_id: str) -> Optional[dict]:
                "next_renewal_at": None, "blocked": rec.get("blocked")}
         if rec.get("blocked"):
             return out
-        cameras = rec.get("cameras") or {}
+        cameras = {ref: (rec.get("cameras") or {}).get(ref) or {} for ref in _record_refs(rec)}  # wall cells
         pc, health = _pc_and_health(db, pc_id)
         core_ok = core_supports_hls(pc, health)
         t = now()

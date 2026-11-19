@@ -14,7 +14,7 @@ import httpx
 import pytest
 
 from app.services.stream_providers import engine, registry
-from app.services.stream_providers.base import AUTH, LIMIT, NOT_FOUND, UNAVAILABLE, Address, ProviderError
+from app.services.stream_providers.base import AUTH, NOT_FOUND, UNAVAILABLE, Address, ProviderError
 from app.services.stream_providers.lumana import LumanaProvider, jwt_exp
 from app.utils.url_processor import (encode_rtsp_password, is_hls_url, is_provider_ref, make_provider_ref,
                                      parse_provider_ref, redact_camera_url, try_encode_rtsp_password)
@@ -143,7 +143,7 @@ def test_resolve_layout_both_shapes_and_location_uris():
                                                             engine.PLACEHOLDER + "key-refused", rtsp]
     assert group[1]["url"] == rtsp and group[2]["url"] == ""
     view = out["screens"][1]["views"]["v1"]["sources"][0]
-    assert view["url"] == "http://127.0.0.1:9/stream-unavailable/key-refused"
+    assert view["url"] == "http://127.0.0.1:9/stream-unavailable?code=key-refused"
     assert view["LocationUris"] == ["https://h/a.m3u8?token=T", rtsp]
     assert unresolved == [{"ref": b, "camera_id": "CAM_B", "camera_name": "Cam B", "code": "key-refused",
                            "message": "Acme: Lumana refused the API key"}]
@@ -154,7 +154,7 @@ def test_resolve_layout_placeholders():
     a, b, _rtsp, layout = _layout()
     out, _cells, unresolved = engine.resolve_layout(layout, {})
     assert {u["code"] for u in unresolved} == {"pending"}
-    assert out["screens"][0]["source_groups"][0][0]["url"].endswith("/stream-unavailable/pending")
+    assert out["screens"][0]["source_groups"][0][0]["url"].endswith("/stream-unavailable?code=pending")
     full = {a: engine.Resolved("https://h/a?token=T", engine.OK, ""), b: engine.Resolved("https://h/b?token=T",
                                                                                         engine.OK, "")}
     out, _cells, unresolved = engine.resolve_layout(layout, full, core_ok=False)
@@ -162,7 +162,7 @@ def test_resolve_layout_placeholders():
     assert "1.3.0 or later" in unresolved[0]["message"]
     for code in ("provider-removed", "camera-not-found", "limit-reached", "provider-unavailable"):
         out, _c, _u = engine.resolve_layout(layout, {a: engine.Resolved(None, code, "m"), b: full[b]})
-        assert out["screens"][0]["source_groups"][0][0]["url"] == f"http://127.0.0.1:9/stream-unavailable/{code}"
+        assert out["screens"][0]["source_groups"][0][0]["url"] == engine.PLACEHOLDER + code
 
 
 def test_layout_without_references_is_copied_unchanged():
@@ -204,7 +204,7 @@ def test_lumana_mint_reuses_the_session(lumana):
     assert first.handle == second.handle and first.handle["session_id"]
     assert first.expires_at == lumana.clock.t - 100 + 18000 and second.expires_at == lumana.clock.t + 18000
     assert jwt_exp(first.url.split("token=")[1]) == first.expires_at  # read from the JWT, not hard-coded
-    assert first.info == {"sessions": 1, "limit": 10} and lumana.open_sessions() == 1
+    assert first.info == {"sessions": 1} and lumana.open_sessions() == 1
     assert [entry[2] for entry in lumana.log if entry[0] == "start"] == [None, first.handle["session_id"]]
 
 
@@ -231,7 +231,9 @@ def test_lumana_error_mapping(lumana):
     assert (bad_key.value.code, bad_key.value.message) == (AUTH, "Lumana refused the API key")
     assert (unknown.value.code, unknown.value.message) == (NOT_FOUND, "Lumana does not know this camera id")
     assert (down.value.code, down.value.message) == (UNAVAILABLE, "Lumana answered HTTP 502")
-    assert limit.value.code == LIMIT and "limit of 10 live sessions per edge" in limit.value.message
+    # What Lumana answers at its limit is not known: no status is called "limit", the count is named.
+    assert (limit.value.code, limit.value.message) == (
+        UNAVAILABLE, "Lumana answered HTTP 502; 9 live session(s) were open at the last count")
     for error in (bad_key, unknown, down, limit):
         assert lumana.key not in error.value.message and lumana.key not in str(error.value)
 

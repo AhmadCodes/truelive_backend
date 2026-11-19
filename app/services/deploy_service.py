@@ -72,6 +72,11 @@ RELAY_EVENT = "deploy_config"
 REFRESH_EVENT = "refresh_config"
 REFRESH_TASK = "app.tasks.stream_provider_tasks.refresh_pc"
 REFRESH_FOLLOW_UP_SEC = 10
+# engine.io logs two ERROR lines on every healthy send ("websocket-client package not installed,
+# only polling transport is available", and "packet queue is empty, aborting" at the disconnect).
+# The sender polls on purpose (SENDER_WINDOW) and reports its own failures, so its transport is silent.
+_SENDER_TRANSPORT_LOG = logging.getLogger("truelive.sender.transport")
+_SENDER_TRANSPORT_LOG.setLevel(logging.CRITICAL)
 RELAY_CALL_TIMEOUT = 5.0
 # python-engineio 4.x refuses a polling POST that carries more than 16 packets
 # ("Too many packets in payload"), and the API's client polls (websocket-client
@@ -201,7 +206,7 @@ def socketio_sender(requests: List[Dict[str, Any]], *, url: Optional[str] = None
     if not sendable:
         return {request[id_key]: answers.get(request[id_key]) for request in requests}
 
-    client = socketio.Client(reconnection=False, logger=False, engineio_logger=False)
+    client = socketio.Client(reconnection=False, logger=False, engineio_logger=_SENDER_TRANSPORT_LOG)
     target = url or relay_url()
     try:
         logger.info(f"Connecting to display client service at {target}")
@@ -287,7 +292,8 @@ def _result(target: _Target, status: str, message: str, *, delivery: Optional[st
         result["provider_streams"] = target.provider_streams
         unresolved = target.provider_streams["unresolved"]
         if unresolved and delivery == DELIVERY_DELIVERED:
-            result["message"] += f" {len(unresolved)} provider camera(s) are not available: {unresolved[0]['message']}"
+            result["message"] = (f"{result['message'].rstrip('.')}. {len(unresolved)} provider camera(s) are not "
+                                 f"available: {unresolved[0]['message']}")
     return result
 
 
@@ -301,10 +307,11 @@ def _resolve_provider_streams(db, pcs: Sequence[PC], targets: List[_Target]) -> 
     hash stays the one of the unresolved layout."""
     from app.services.stream_providers import engine
 
-    refs = {t.pc_id: engine.layout_refs(t.payload) for t in targets}
-    with_refs = [t for t in targets if refs[t.pc_id]]
+    with_refs = [t for t in targets if engine.layout_refs(t.payload)]
     if not with_refs:
         return
+    # Only the cells of a wall get an address; a camera that is merely listed in LocationUris does not.
+    refs = {t.pc_id: engine.wall_refs(t.payload) for t in with_refs}
     by_id = {pc.id: pc for pc in pcs}
     core_ok: Dict[str, bool] = {}
     resolved: Dict[str, Any] = {}
@@ -335,6 +342,40 @@ def _resolve_provider_streams(db, pcs: Sequence[PC], targets: List[_Target]) -> 
             "unresolved": [{"camera_id": u.get("camera_id"), "code": u["code"], "message": u["message"]}
                            for u in unresolved],
         }
+
+
+def _lock_provider_sends(db, to_send: List[_Target]) -> Dict[str, str]:
+    """Hold each target's send lock (stream_providers.engine) from before the
+    send until the answers are recorded, so a renewal that is being sent
+    right now never arrives after this deploy and none starts before the
+    deploy is on record. Only when provider cameras exist: a system without
+    them makes no Redis call. A failure here never stops the deploy."""
+    from app.models.camera import Camera
+    from app.services.stream_providers import engine
+
+    try:
+        if not settings.STREAM_PROVIDERS_ENABLED:
+            return {}
+        if not any(t.resolved_payload is not None for t in to_send):
+            known = db.query(Camera.id).filter(Camera.rtsp_url.like("provider://%")).first() is not None
+            db.commit()  # end the read transaction before the relay call
+            if not known:
+                return {}
+        return engine.lock_pcs([t.pc_id for t in to_send])
+    except Exception as exc:
+        logger.warning(f"Stream address send locks not taken: {type(exc).__name__}")
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return {}
+
+
+def _unlock_provider_sends(held: Dict[str, str]) -> None:
+    if held:
+        from app.services.stream_providers import engine
+
+        engine.unlock_pcs(held)  # after an exception above, the locks expire by themselves (30 s)
 
 
 def _note_provider_deploys(delivered: List[_Target]) -> None:
@@ -504,6 +545,7 @@ def deploy_config_to_pcs(pcs: Sequence[PC], db, *, trigger: str, actor: ActorTri
             {"config_id": t.config_id, "targetId": t.pc_id, "content": t.payload}
             for t in to_send
         ]
+        provider_locks = _lock_provider_sends(db, to_send)
         try:
             answers = send(requests)
             unreachable = False
@@ -565,6 +607,7 @@ def deploy_config_to_pcs(pcs: Sequence[PC], db, *, trigger: str, actor: ActorTri
                 db.rollback()
             except Exception:
                 pass
+        _unlock_provider_sends(provider_locks)
 
     ordered = [t.result for t in targets]
     summary = {

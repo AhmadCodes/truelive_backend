@@ -420,6 +420,33 @@ def test_live_view_resolves_a_provider_camera(api):
     assert asyncio.run(api.stream._resolve_camera_rtsp("CAM_P2")) is None
 
 
+def test_live_view_notes_its_provider_address_as_in_use(api):
+    """While a live view plays, the address is stamped as used, so the tick
+    does not stop the vendor session under it after 5 minutes (LUM review)."""
+    from app.services.stream_providers import engine
+
+    provider = _create(api)["id"]
+    reference = make_provider_ref(provider, "cam1")
+    _camera(api, "CAM_P1", reference)
+    api.monkeypatch.setattr(api.stream, "SessionLocal", api.rig.Session)
+    use_key = engine.PREFIX + engine._ref_key("use", reference)
+
+    async def view(camera_id):
+        await api.stream._resolve_camera_rtsp(camera_id)
+        api.rig.clock.advance(250)
+        async with api.stream._provider_address_in_use(camera_id):
+            for _ in range(100):
+                if float(api.rig.redis.get(use_key) or 0) == api.rig.clock.t:
+                    return True
+                await asyncio.sleep(0.02)
+        return False
+
+    assert asyncio.run(view("CAM_P1")) is True
+    api.rig.clock.advance(250)  # 500 s after the mint, 250 s after the note
+    assert api.rig.tick()["released"] == 0 and api.rig.lumana.count("stop") == 0
+    assert asyncio.run(view("CAM_RTSP")) is False  # any other camera: nothing is noted
+
+
 def test_snapshot_skips_a_provider_camera_without_an_address(api):
     provider = _create(api)["id"]
     reference = make_provider_ref(provider, "cam1")

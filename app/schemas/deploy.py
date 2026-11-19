@@ -5,7 +5,7 @@ They carry outcomes, never the generated layout: the layout holds camera URLs
 with credentials. ``response_model`` drops any other key a caller might add.
 """
 
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -26,6 +26,13 @@ class PCDeployResult(BaseModel):
     )
     message: str
     screens: int = 0
+    provider_streams: Optional[Dict[str, Any]] = Field(
+        None,
+        description=(
+            "Only when the layout has provider cameras: {total, unresolved: [{camera_id, code, message}]} for "
+            "the cells of the wall"
+        ),
+    )
     ack_timeout_sec: Optional[int] = Field(
         None,
         description=(
