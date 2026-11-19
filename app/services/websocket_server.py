@@ -357,6 +357,10 @@ relay_counters: Dict[str, int] = {
     "catchup_not_needed": 0,
     "catchup_paused": 0,
     "catchup_errors": 0,
+    "provider_refresh_forwarded": 0,
+    "provider_refresh_offline": 0,
+    "provider_triggers_queued": 0,
+    "provider_trigger_errors": 0,
     "station_config_served": 0,
     "station_config_refused": 0,
     "station_config_errors": 0,
@@ -930,6 +934,10 @@ def _register(sid, data, retry: bool = False):
             session["catchup_evaluated"] = True
             schedule_catchup(sid, pc_id, catchup.AT_REGISTER)
 
+        # Stream providers: a station that (re)connects gets fresh addresses
+        # when the ones it has are behind (decided by the worker).
+        schedule_provider_trigger("connect", sid, pc_id)
+
     except Exception as e:
         logger.error(f"Error during registration for {sid}: {type(e).__name__}: {e}")
         sio.emit("error", {"message": "Registration failed"}, room=sid)
@@ -1176,11 +1184,14 @@ def deploy_config(sid, data=None):
 
         confirmable = session_confirmable(target_sid) and root_id == config_id
         forwarded_at = deploy_tracking.now_ts()
+        track_ack = data.get("track_ack") is True  # the layout holds provider cameras
 
         def _on_pc_ack(*_ack):
             # Any ACK proves the Client's config handler ran (receipt); its
             # payload, if any, is not trusted for anything else.
             _spawn(_record_receipt, config_id, target_id, confirmable, forwarded_at, deploy_tracking.now_ts())
+            if track_ack:
+                _spawn(_record_provider_ack, target_id, config_id)
 
         forward_to_pc(target_sid, "config", content, callback=_on_pc_ack)
         relay_counters["deploys_forwarded"] += 1
@@ -1190,6 +1201,162 @@ def deploy_config(sid, data=None):
     except Exception as e:
         logger.error(f"Error in {DEPLOY_EVENT} from {sid}: {type(e).__name__}")
         return _deploy_answer(DEPLOY_ERROR, reason="relay error")
+
+
+# --------------------------------------------------------------------------- #
+# Stream providers: renewed addresses and the triggers (stream_providers.engine)
+# --------------------------------------------------------------------------- #
+
+PROVIDER_PREFIX = "truelive:sp:"
+PROVIDER_ACK_TTL_SECONDS = 30 * 86400
+PROVIDER_FAIL_LIMIT_SECONDS = 60  # at most one failure trigger per PC in this time
+PROVIDER_QUEUE_MAX = 1000
+PROVIDER_TASK_REFRESH = "app.tasks.stream_provider_tasks.refresh_pc"
+PROVIDER_TASK_FAILED = "app.tasks.stream_provider_tasks.station_failed"
+# (kind, pc_id) -> (sid, failed source ids); one entry per PC and kind, oldest first.
+_provider_queue: "OrderedDict[tuple, tuple]" = OrderedDict()
+provider_breaker = catchup.Breaker()
+_provider_redis_client = None
+PROVIDER_CAMERAS_CACHE_SECONDS = 60.0
+_provider_cameras = (False, 0.0)  # (any provider camera exists, monotonic time the answer is good until)
+
+
+def _provider_redis():
+    global _provider_redis_client
+    if _provider_redis_client is None:
+        import redis
+
+        _provider_redis_client = redis.Redis.from_url(
+            settings.REDIS_URL, socket_connect_timeout=catchup.SOCKET_TIMEOUT_SECONDS,
+            socket_timeout=catchup.SOCKET_TIMEOUT_SECONDS, retry_on_timeout=False)
+    return _provider_redis_client
+
+
+def _record_provider_ack(pc_id: str, delivery_id: str) -> None:
+    """The station acknowledged a layout with provider addresses: the engine
+    compares this id with what it last sent."""
+    try:
+        _run_blocking(lambda: _provider_redis().set(f"{PROVIDER_PREFIX}ack:{pc_id}", delivery_id,
+                                                    ex=PROVIDER_ACK_TTL_SECONDS))
+    except Exception as exc:
+        # Not kept for retry: the engine re-delivers once and the next ACK writes it.
+        logger.warning(f"Could not record the stream address ACK of PC {pc_id}: {type(exc).__name__}")
+
+
+@sio.on("refresh_config")
+def refresh_config(sid, data=None):
+    """
+    Re-deliver a PC's deployed layout with renewed stream addresses (sender
+    sessions only; stream_providers.engine.refresh_pc).
+
+    Expected data: ``{refresh_id: str, targetId: str, content: dict}``. The
+    layout goes to the PC as the ``config`` event, like a deploy, but this is
+    not a deploy: no pc_deployments row, no audit entry, no history line.
+    The PC's ACK is written to Redis (``truelive:sp:ack:<pc id>``).
+
+    Returns ``{status: delivered|offline|error, reason?}``. The layout is
+    never logged.
+    """
+    try:
+        if not _is_sender(sid):
+            relay_counters["deploys_rejected"] += 1
+            logger.warning(f"Rejected refresh_config from {sid}: not a sender session")
+            return {"status": DEPLOY_ERROR, "reason": "not authorized"}
+        if not isinstance(data, dict):
+            return {"status": DEPLOY_ERROR, "reason": "invalid request"}
+        refresh_id = data.get("refresh_id")
+        target_id = data.get("targetId")
+        content = data.get("content")
+        if not isinstance(refresh_id, str) or not _CONFIG_ID_RE.fullmatch(refresh_id):
+            return {"status": DEPLOY_ERROR, "reason": "invalid refresh_id"}
+        if not isinstance(target_id, str) or not target_id or len(target_id) > MAX_TARGET_ID_LENGTH:
+            return {"status": DEPLOY_ERROR, "reason": "invalid targetId"}
+        if not isinstance(content, dict):
+            return {"status": DEPLOY_ERROR, "reason": "invalid content"}
+        target_sid = connected_pcs.get(target_id)
+        if target_sid is None or _registered_pc(target_sid) != target_id:
+            relay_counters["provider_refresh_offline"] += 1
+            return {"status": DEPLOY_OFFLINE}
+
+        def _on_pc_ack(*_ack):
+            _spawn(_record_provider_ack, target_id, refresh_id)
+
+        forward_to_pc(target_sid, "config", content, callback=_on_pc_ack)
+        relay_counters["provider_refresh_forwarded"] += 1
+        logger.info(f"Stream addresses {refresh_id} forwarded to PC {target_id} (sid: {target_sid})")
+        return {"status": DEPLOY_DELIVERED}
+    except Exception as e:
+        logger.error(f"Error in refresh_config from {sid}: {type(e).__name__}")
+        return {"status": DEPLOY_ERROR, "reason": "relay error"}
+
+
+def schedule_provider_trigger(kind: str, sid: str, pc_id: str, source_ids: Optional[List[str]] = None) -> bool:
+    """Queue the connect (``connect``) or failure-report (``failure``)
+    trigger of a PC. Instant and in memory: Redis and the broker are touched
+    by the catch-up loop, off the hub."""
+    if not settings.STREAM_PROVIDERS_ENABLED:
+        return False
+    key = (kind, pc_id)
+    if key not in _provider_queue and len(_provider_queue) >= PROVIDER_QUEUE_MAX:
+        _provider_queue.popitem(last=False)
+    _provider_queue[key] = (sid, list(source_ids or [])[:50])
+    return True
+
+
+def _has_provider_cameras() -> bool:
+    """True when any camera comes from a stream provider (one small query,
+    remembered for PROVIDER_CAMERAS_CACHE_SECONDS). While there is none, the
+    triggers touch neither Redis nor the broker."""
+    global _provider_cameras
+    known, until = _provider_cameras
+    if time.monotonic() < until:
+        return known
+    from app.models.camera import Camera
+
+    known = _in_transaction(
+        lambda db: db.query(Camera.id).filter(Camera.rtsp_url.like("provider://%")).first() is not None)
+    _provider_cameras = (known, time.monotonic() + PROVIDER_CAMERAS_CACHE_SECONDS)
+    return known
+
+
+def _provider_work(kind: str, pc_id: str, source_ids: List[str]) -> Optional[str]:
+    """On a tpool thread. Only a PC with a provider-camera record gets a
+    task; a failure report at most once per PROVIDER_FAIL_LIMIT_SECONDS."""
+    if not _has_provider_cameras():
+        return None
+    client = _provider_redis()
+    if not client.exists(f"{PROVIDER_PREFIX}pc:{pc_id}"):
+        return None
+    if kind == "failure":
+        if not client.set(f"{PROVIDER_PREFIX}rl:fail:{pc_id}", "1", nx=True, ex=PROVIDER_FAIL_LIMIT_SECONDS):
+            return None
+        return catchup.send_task(PROVIDER_TASK_FAILED, [pc_id, source_ids])
+    return catchup.send_task(PROVIDER_TASK_REFRESH, [pc_id, "connect"])
+
+
+def process_provider_triggers_once(max_items: int = 100) -> int:
+    """Work through queued provider triggers, one at a time. A Redis or
+    broker failure pauses them (the engine's 30 s tick covers the gap)."""
+    global _provider_redis_client
+    processed = 0
+    while _provider_queue and processed < max_items:
+        (kind, pc_id), (sid, source_ids) = _provider_queue.popitem(last=False)
+        processed += 1
+        if _registered_pc(sid) != pc_id or provider_breaker.is_open():
+            continue
+        try:
+            task_id = _run_blocking(_provider_work, kind, pc_id, source_ids)
+        except Exception as exc:
+            _provider_redis_client = None  # reconnect next time
+            provider_breaker.trip()
+            relay_counters["provider_trigger_errors"] += 1
+            logger.warning(f"Stream address check for PC {pc_id} not queued ({type(exc).__name__}); paused for "
+                           f"{provider_breaker.seconds:g}s")
+            continue
+        if task_id:
+            relay_counters["provider_triggers_queued"] += 1
+            logger.info(f"Stream address check queued for PC {pc_id} ({kind}; task {task_id})")
+    return processed
 
 
 # --------------------------------------------------------------------------- #
@@ -1496,6 +1663,10 @@ def _catchup_loop(interval_seconds: float):
             process_catchup_once()
         except Exception as exc:
             logger.error(f"Catch-up loop error: {type(exc).__name__}")
+        try:
+            process_provider_triggers_once()
+        except Exception as exc:
+            logger.error(f"Stream provider trigger loop error: {type(exc).__name__}")
 
 
 # --------------------------------------------------------------------------- #
@@ -1654,6 +1825,11 @@ def station_status(sid, pc_id, data):
                 and session_confirmable(sid)):
             session["catchup_evaluated"] = True
             schedule_catchup(sid, pc_id, catchup.AT_STATUS, running)
+        # Stream providers: failed cells may be provider cameras whose address
+        # stopped working (the worker checks; rate-limited per PC).
+        failed = list(model.wall.streams_failed or []) if model.wall is not None else []
+        if failed:
+            schedule_provider_trigger("failure", sid, pc_id, failed)
         return _ack("ok", model.message_id)
     except Exception as exc:
         logger.error(f"Error in station_status from PC {pc_id}: {type(exc).__name__}")

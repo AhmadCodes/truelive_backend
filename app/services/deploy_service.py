@@ -67,6 +67,11 @@ TRIGGER_CATCH_UP = "catch_up"  # D17
 # The sender event the relay serves (websocket_server.deploy_config) and the
 # ``sio.call`` timeout of the card.
 RELAY_EVENT = "deploy_config"
+# Stream providers: the same layout with renewed addresses. The relay forwards
+# it as the config event and writes no deploy row (websocket_server.refresh_config).
+REFRESH_EVENT = "refresh_config"
+REFRESH_TASK = "app.tasks.stream_provider_tasks.refresh_pc"
+REFRESH_FOLLOW_UP_SEC = 10
 RELAY_CALL_TIMEOUT = 5.0
 # python-engineio 4.x refuses a polling POST that carries more than 16 packets
 # ("Too many packets in payload"), and the API's client polls (websocket-client
@@ -161,8 +166,13 @@ def plan_rounds(requests: Sequence[Mapping[str, Any]], *, window: int = SENDER_W
 def socketio_sender(requests: List[Dict[str, Any]], *, url: Optional[str] = None,
                     timeout: float = RELAY_CALL_TIMEOUT, window: int = SENDER_WINDOW,
                     round_bytes: int = SENDER_ROUND_BYTES,
-                    max_request_bytes: int = RELAY_MAX_HTTP_BUFFER_BYTES) -> Dict[str, Optional[Any]]:
+                    max_request_bytes: int = RELAY_MAX_HTTP_BUFFER_BYTES,
+                    event: str = RELAY_EVENT, id_key: str = "config_id") -> Dict[str, Optional[Any]]:
     """Send every request over one authenticated sender session.
+
+    ``event`` and ``id_key`` name the relay event and the request field that
+    identifies a request (``refresh_sender`` sends ``refresh_config`` keyed by
+    ``refresh_id``); the text below describes the default, ``deploy_config``.
 
     Each ``deploy_config`` is emitted with an ACK callback, in rounds of at
     most ``window`` calls (SENDER_WINDOW) and ``round_bytes`` encoded bytes
@@ -181,7 +191,7 @@ def socketio_sender(requests: List[Dict[str, Any]], *, url: Optional[str] = None
     for request in requests:
         size = encoded_size(request)
         if size > max_request_bytes:
-            config_id = request["config_id"]
+            config_id = request[id_key]
             logger.error(f"Deploy {config_id} to PC {request.get('targetId')} not sent: {size} bytes is more than "
                          f"the relay accepts ({max_request_bytes})")
             answers[config_id] = {"status": DELIVERY_ERROR, "config_id": config_id, "confirmable": False,
@@ -189,7 +199,7 @@ def socketio_sender(requests: List[Dict[str, Any]], *, url: Optional[str] = None
         else:
             sendable.append(request)
     if not sendable:
-        return {request["config_id"]: answers.get(request["config_id"]) for request in requests}
+        return {request[id_key]: answers.get(request[id_key]) for request in requests}
 
     client = socketio.Client(reconnection=False, logger=False, engineio_logger=False)
     target = url or relay_url()
@@ -207,7 +217,7 @@ def socketio_sender(requests: List[Dict[str, Any]], *, url: Optional[str] = None
         for number, indexes in enumerate(rounds):
             round_waits = []
             for request in (sendable[i] for i in indexes):
-                config_id = request["config_id"]
+                config_id = request[id_key]
                 done = threading.Event()
                 waits[config_id] = done
                 round_waits.append(done)
@@ -217,7 +227,7 @@ def socketio_sender(requests: List[Dict[str, Any]], *, url: Optional[str] = None
                     _done.set()
 
                 try:
-                    client.emit(RELAY_EVENT, request, callback=_on_answer)
+                    client.emit(event, request, callback=_on_answer)
                 except Exception as exc:
                     logger.error(f"Could not send deploy {config_id}: {type(exc).__name__}")
                     done.set()
@@ -229,14 +239,20 @@ def socketio_sender(requests: List[Dict[str, Any]], *, url: Optional[str] = None
                 if rest:
                     logger.error(f"The relay left deploys unanswered; {len(rest)} more not sent")
                 for request in rest:
-                    waits.setdefault(request["config_id"], threading.Event())
+                    waits.setdefault(request[id_key], threading.Event())
                 break
     finally:
         try:
             client.disconnect()
         except Exception:
             pass
-    return {request["config_id"]: answers.get(request["config_id"]) for request in requests}
+    return {request[id_key]: answers.get(request[id_key]) for request in requests}
+
+
+def refresh_sender(requests: List[Dict[str, Any]]) -> Dict[str, Optional[Any]]:
+    """Send ``refresh_config`` requests ``{refresh_id, targetId, content}``;
+    answers per refresh_id."""
+    return socketio_sender(requests, event=REFRESH_EVENT, id_key="refresh_id")
 
 
 @dataclass
@@ -249,11 +265,15 @@ class _Target:
     screens: int = 0
     result: Optional[Dict[str, Any]] = None
     answer: Optional[Dict[str, Any]] = field(default=None)
+    # Stream providers: set only when the layout holds provider cameras.
+    resolved_payload: Optional[Dict[str, Any]] = None
+    provider_fingerprint: Optional[str] = None
+    provider_streams: Optional[Dict[str, Any]] = None
 
 
 def _result(target: _Target, status: str, message: str, *, delivery: Optional[str] = None,
             confirmable: bool = False) -> Dict[str, Any]:
-    return {
+    result = {
         "pc_id": target.pc_id,
         "status": status,
         "delivery": delivery,
@@ -263,6 +283,74 @@ def _result(target: _Target, status: str, message: str, *, delivery: Optional[st
         "screens": target.screens,
         "ack_timeout_sec": int(settings.DEPLOY_ACK_TIMEOUT_SEC),
     }
+    if target.provider_streams is not None:
+        result["provider_streams"] = target.provider_streams
+        unresolved = target.provider_streams["unresolved"]
+        if unresolved and delivery == DELIVERY_DELIVERED:
+            result["message"] += f" {len(unresolved)} provider camera(s) are not available: {unresolved[0]['message']}"
+    return result
+
+
+def _resolve_provider_streams(db, pcs: Sequence[PC], targets: List[_Target]) -> None:
+    """Replace provider camera references in the layouts about to be sent
+    with playable addresses (stream_providers.engine). One bounded pass for
+    all targets, so a slow provider costs the deploy at most
+    ``deploy_resolve_budget_sec``; what is not ready is sent as a cell that
+    fails alone and is delivered later by ``refresh_pc``. A layout without a
+    reference is not touched and costs no Redis or provider call. The content
+    hash stays the one of the unresolved layout."""
+    from app.services.stream_providers import engine
+
+    refs = {t.pc_id: engine.layout_refs(t.payload) for t in targets}
+    with_refs = [t for t in targets if refs[t.pc_id]]
+    if not with_refs:
+        return
+    by_id = {pc.id: pc for pc in pcs}
+    core_ok: Dict[str, bool] = {}
+    resolved: Dict[str, Any] = {}
+    try:
+        from app.models.pc_tracking import PcHealth
+
+        healths = {h.pc_id: h for h in db.query(PcHealth).filter(
+            PcHealth.pc_id.in_([t.pc_id for t in with_refs])).all()}
+        for target in with_refs:
+            core_ok[target.pc_id] = engine.core_supports_hls(by_id.get(target.pc_id), healths.get(target.pc_id))
+        cfg = engine.config(db)
+        wanted = [ref for t in with_refs if core_ok[t.pc_id] for ref in refs[t.pc_id]]
+        resolved = engine.resolve_refs(db, wanted, budget_sec=cfg["deploy_resolve_budget_sec"], cfg=cfg)
+        db.commit()  # end the read transaction before the relay call
+    except Exception as exc:
+        # The deploy goes on: unresolved cells fail alone and the tick delivers later.
+        logger.error(f"Provider cameras could not be resolved for this deploy: {type(exc).__name__}")
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    for target in with_refs:
+        ok = core_ok.get(target.pc_id, False)
+        target.resolved_payload, _cells, unresolved = engine.resolve_layout(target.payload, resolved, ok)
+        target.provider_fingerprint = engine.fingerprint(refs[target.pc_id], resolved, ok)
+        target.provider_streams = {
+            "total": len(refs[target.pc_id]),
+            "unresolved": [{"camera_id": u.get("camera_id"), "code": u["code"], "message": u["message"]}
+                           for u in unresolved],
+        }
+
+
+def _note_provider_deploys(delivered: List[_Target]) -> None:
+    """Remember what was delivered, and follow up on cells left pending."""
+    from app.services import catchup
+    from app.services.stream_providers import engine
+
+    for target in delivered:
+        try:
+            engine.note_deployed(target.pc_id, target.config_id, target.config_hash, target.payload,
+                                 target.provider_fingerprint)
+            if any(u["code"] == engine.CODE_PENDING for u in target.provider_streams["unresolved"]):
+                catchup.send_task(REFRESH_TASK, [target.pc_id, "deploy"], countdown=REFRESH_FOLLOW_UP_SEC)
+        except Exception as exc:
+            # The tick rebuilds the record from the database and delivers.
+            logger.error(f"Provider cameras of deploy {target.config_id} not recorded: {type(exc).__name__}")
 
 
 def _valid_answer(answer: Any, config_id: str) -> Optional[Dict[str, Any]]:
@@ -409,7 +497,13 @@ def deploy_config_to_pcs(pcs: Sequence[PC], db, *, trigger: str, actor: ActorTri
 
     # 4. Send.
     if to_send:
-        requests = [{"config_id": t.config_id, "targetId": t.pc_id, "content": t.payload} for t in to_send]
+        _resolve_provider_streams(db, pcs, to_send)
+        requests = [
+            {"config_id": t.config_id, "targetId": t.pc_id, "content": t.resolved_payload, "track_ack": True}
+            if t.resolved_payload is not None else
+            {"config_id": t.config_id, "targetId": t.pc_id, "content": t.payload}
+            for t in to_send
+        ]
         try:
             answers = send(requests)
             unreachable = False
@@ -455,6 +549,8 @@ def deploy_config_to_pcs(pcs: Sequence[PC], db, *, trigger: str, actor: ActorTri
                     message = f"The display client service did not confirm delivery to PC {target.pc_id}"
                 transitions.append((target.config_id, deploy_tracking.RELAY_FAILED, detail, None))
                 target.result = _result(target, STATUS_FAILED, message, delivery=DELIVERY_ERROR)
+        _note_provider_deploys([t for t in to_send if t.resolved_payload is not None
+                                and t.result["delivery"] == DELIVERY_DELIVERED])
         try:
             for config_id, to, detail, confirmable in transitions:
                 if confirmable is not None:

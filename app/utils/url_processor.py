@@ -3,7 +3,7 @@ URL processing utilities.
 
 This module provides functions for encoding RTSP URLs with special characters in passwords.
 """
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 import logging
 import re
 
@@ -23,6 +23,31 @@ def is_hls_url(url: str) -> bool:
     return bool(sep) and scheme.lower() in _HLS_SCHEMES
 
 
+# A camera of a stream provider is stored as provider://<provider id>/<camera id
+# at the provider, percent-encoded> (app/services/stream_providers). It holds no
+# secret and never reaches a station: the deploy path replaces it.
+PROVIDER_SCHEME = "provider"
+
+
+def is_provider_ref(url) -> bool:
+    return isinstance(url, str) and url.strip().lower().startswith(PROVIDER_SCHEME + "://")
+
+
+def parse_provider_ref(url):
+    """``(provider_id, camera_id)`` of a provider reference, else None."""
+    if not is_provider_ref(url):
+        return None
+    provider_id, sep, camera = url.strip()[len(PROVIDER_SCHEME) + 3:].partition("/")
+    camera = unquote(camera)
+    if not sep or not provider_id or not camera:
+        return None
+    return provider_id, camera
+
+
+def make_provider_ref(provider_id: str, camera_id: str) -> str:
+    return f"{PROVIDER_SCHEME}://{provider_id}/{quote(camera_id, safe='')}"
+
+
 def redact_camera_url(url: str) -> str:
     """A camera URL that is safe to log: userinfo and the query string are masked.
 
@@ -31,6 +56,8 @@ def redact_camera_url(url: str) -> str:
     """
     if not url or not isinstance(url, str):
         return ""
+    if is_provider_ref(url):
+        return url.strip()
     scheme, sep, rest = url.strip().partition("://")
     if not sep:
         return "<redacted>"
@@ -83,7 +110,8 @@ def encode_rtsp_password(rtsp_url: str) -> str:
 
         # HLS (http/https): never rewritten. An "@" or ":" in its query string is
         # token data, not user:pass, and encoding it would break the stream URL.
-        if prefix.strip().lower() in _HLS_SCHEMES:
+        # A provider reference is not a URL to encode either.
+        if prefix.strip().lower() in _HLS_SCHEMES or prefix.strip().lower() == PROVIDER_SCHEME:
             return rtsp_url
 
         # Split at @ to separate user_info from host_info

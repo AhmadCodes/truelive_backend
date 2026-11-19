@@ -6,6 +6,7 @@ from sqlalchemy import (
     Column,
     String,
     BigInteger,
+    Boolean,
     CheckConstraint,
     ForeignKey,
     Index,
@@ -112,6 +113,12 @@ class PC(BaseModel, ActorStampMixin):
         comment="Unix timestamp of last configuration applied",
     )
 
+    hls_capable = Column(
+        Boolean,
+        nullable=True,
+        comment="Admin-set: runs TrueLive Live (Core) 1.3.0 or later; NULL = not confirmed",
+    )
+
     # Constraints
     __table_args__ = (
         CheckConstraint("role IN ('controller', 'manager')", name="check_pc_role"),
@@ -193,6 +200,7 @@ class PC(BaseModel, ActorStampMixin):
             "last_connected": self.last_connected,
             "last_seen": self.last_seen,
             "last_applied": self.last_applied,
+            "hls_capable": self.hls_capable,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }

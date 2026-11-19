@@ -36,6 +36,10 @@ class PCCreate(PCBase):
         ..., min_length=1, max_length=50, description="Team this PC belongs to"
     )
 
+    hls_capable: Optional[bool] = Field(
+        None, description="Runs TrueLive Live (Core) 1.3.0 or later: plays HLS and provider cameras. "
+                          "A Core version the station reports wins over this flag")
+
     @field_validator("manager_id")
     @classmethod
     def validate_manager_id(cls, v: Optional[str], info) -> Optional[str]:
@@ -73,6 +77,9 @@ class PCUpdate(BaseModel):
     team_id: Optional[str] = Field(
         None, max_length=50, description="Team this PC belongs to"
     )
+    hls_capable: Optional[bool] = Field(
+        None, description="Runs TrueLive Live (Core) 1.3.0 or later: plays HLS and provider cameras. "
+                          "A Core version the station reports wins over this flag")
 
 
 class PCResponse(ActorStampsMixin):
@@ -90,6 +97,7 @@ class PCResponse(ActorStampsMixin):
     last_connected: Optional[datetime] = None
     last_seen: Optional[datetime] = None
     last_applied: Optional[datetime] = None
+    hls_capable: Optional[bool] = None
 
     class Config:
         from_attributes = True

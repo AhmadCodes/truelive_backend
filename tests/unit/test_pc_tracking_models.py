@@ -259,6 +259,7 @@ def test_pcs_model_is_unchanged():
     assert {c.name for c in PC.__table__.columns} == {
         "id", "name", "ip_address", "gpu_type", "role", "manager_id", "screen_layout_id", "team_id", "auth_token",
         "token_expiry", "last_connected", "last_seen", "last_applied", "created_at", "updated_at",
+        "hls_capable",  # migration 016 (stream providers), not D13
         "created_by_type", "created_by_id", "created_by_label", "updated_by_type", "updated_by_id", "updated_by_label",
     }
     assert set(PC.__mapper__.relationships.keys()) == {"manager", "screen_layout", "team", "controlled_pcs"}

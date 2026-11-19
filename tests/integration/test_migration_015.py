@@ -1,7 +1,8 @@
 """
 Migration 015 (plan 06 D13) on scratch Postgres: "migration round trip".
 
-* upgrade -> downgrade -> upgrade works; the head is 015 and single.
+* upgrade -> downgrade -> upgrade works (to 015: later migrations have their
+  own tests); there is a single head and 015 is in its history.
 * ``pcs`` (columns, defaults, comments, indexes, constraints and rows) and
   every other table are unchanged by the upgrade and by the downgrade.
 * A restricted autogenerate (only the three new tables) shows an empty diff,
@@ -155,10 +156,11 @@ def _restricted_diff(engine, metadata):
 # --------------------------------------------------------------------------- #
 
 
-def test_single_head_is_015(scratch):
+def test_single_head_follows_015(scratch):
+    """One head; 015 is in its history (016_stream_providers came after it)."""
     url, _engine = scratch
-    heads = _alembic(url, "heads")
-    assert REV_015 in heads and heads.count("(head)") == 1
+    assert _alembic(url, "heads").count("(head)") == 1
+    assert REV_015 in _alembic(url, "history")
 
 
 def test_migration_round_trip(scratch):
@@ -170,7 +172,7 @@ def test_migration_round_trip(scratch):
     assert "pcs" in before and before["pcs"][0][0] == 2
 
     # upgrade: the three tables appear; nothing else changes.
-    _alembic(url, "upgrade", "head")
+    _alembic(url, "upgrade", REV_015)
     assert set(NEW_TABLES) <= _tables(engine)
     after_up = _fingerprint(engine)
     assert {t: v for t, v in after_up.items() if t not in NEW_TABLES} == before
@@ -188,7 +190,7 @@ def test_migration_round_trip(scratch):
         assert conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar() == REV_014
 
     # upgrade again: back, empty, and identical to the models.
-    _alembic(url, "upgrade", "head")
+    _alembic(url, "upgrade", REV_015)
     assert set(NEW_TABLES) <= _tables(engine)
     with engine.connect() as conn:
         for table in NEW_TABLES:
@@ -271,7 +273,7 @@ def _check_postgres_behaviour(engine):
 def test_restricted_autogenerate_sees_drift(scratch):
     """The empty diff above is meaningful: a drifted model is reported."""
     url, engine = scratch
-    _alembic(url, "upgrade", "head")
+    _alembic(url, "upgrade", REV_015)
     assert _restricted_diff(engine, Base.metadata) == []
     drifted = sa.MetaData()
     for table in Base.metadata.sorted_tables:
@@ -287,7 +289,7 @@ def test_restricted_autogenerate_sees_drift(scratch):
 
 def test_migration_is_idempotent(scratch):
     url, engine = scratch
-    _alembic(url, "upgrade", "head")
+    _alembic(url, "upgrade", REV_015)
     with engine.begin() as conn:
         conn.exec_driver_sql("INSERT INTO teams (id, name) VALUES ('TEAM_i', 'Idempotent')")
         conn.exec_driver_sql("INSERT INTO pcs (id, name, role, team_id) VALUES ('PC_I', 'PC_I', 'controller', 'TEAM_i')")
@@ -295,7 +297,7 @@ def test_migration_is_idempotent(scratch):
 
     # Re-running the upgrade over existing tables keeps them and their rows.
     _alembic(url, "stamp", REV_014)
-    _alembic(url, "upgrade", "head")
+    _alembic(url, "upgrade", REV_015)
     with engine.connect() as conn:
         assert conn.exec_driver_sql("SELECT count(*) FROM pc_health").scalar() == 1
 
@@ -307,6 +309,6 @@ def test_migration_is_idempotent(scratch):
 
     # A partial state (one table present) is completed by the upgrade.
     PcHealth.__table__.create(engine)
-    _alembic(url, "upgrade", "head")
+    _alembic(url, "upgrade", REV_015)
     assert set(NEW_TABLES) <= _tables(engine)
     assert _restricted_diff(engine, Base.metadata) == []

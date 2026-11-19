@@ -199,6 +199,30 @@ DEFAULT_SETTINGS = [
         "data_type": "integer"
     },
 
+    # Stream providers (app/services/stream_providers/engine.py reads these
+    # on every use; the defaults also live in engine.DEFAULTS).
+    {"key": "stream_providers.renew_fraction", "value": "0.5", "category": "stream_providers",
+     "description": "Renew a stream address at this fraction of its lifetime (0.05 to 0.95)",
+     "is_encrypted": False, "data_type": "string"},
+    {"key": "stream_providers.renew_min_margin_sec", "value": "1800", "category": "stream_providers",
+     "description": "Never renew later than this many seconds before the address expires",
+     "is_encrypted": False, "data_type": "integer"},
+    {"key": "stream_providers.watch_interval_sec", "value": "60", "category": "stream_providers",
+     "description": "Seconds between server checks of each address in use; 0 turns the check off",
+     "is_encrypted": False, "data_type": "integer"},
+    {"key": "stream_providers.release_after_sec", "value": "300", "category": "stream_providers",
+     "description": "Release an address no connected station used for this many seconds",
+     "is_encrypted": False, "data_type": "integer"},
+    {"key": "stream_providers.deploy_resolve_budget_sec", "value": "6", "category": "stream_providers",
+     "description": "Longest a deploy waits for providers, in seconds",
+     "is_encrypted": False, "data_type": "integer"},
+    {"key": "stream_providers.request_timeout_sec", "value": "8", "category": "stream_providers",
+     "description": "Timeout of every request to a provider, in seconds",
+     "is_encrypted": False, "data_type": "integer"},
+    {"key": "stream_providers.pc_refresh_min_interval_sec", "value": "60", "category": "stream_providers",
+     "description": "At most one automatic address delivery per station in this many seconds",
+     "is_encrypted": False, "data_type": "integer"},
+
     # Fleet Core settings (C10): client_managed_config, the four Core
     # addresses, heartbeat_interval_sec and client_admin_password_hash.
     *core_station_config.seed_entries(),

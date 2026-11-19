@@ -130,6 +130,7 @@ async def create_pc(
         role=pc_data.role,
         manager_id=pc_data.manager_id,
         team_id=pc_data.team_id,
+        hls_capable=pc_data.hls_capable,
     )
 
     db.add(new_pc)
@@ -1040,7 +1041,12 @@ def get_pc_health(pc_id: str, current_user: CurrentUser, db: DBSession):
 
     _require_pc(db, pc_id)
     row = db.query(PcHealth).filter(PcHealth.pc_id == pc_id).first()
-    return pc_status.health_detail(row)
+    detail = pc_status.health_detail(row)
+    if detail is not None:
+        from app.services.stream_providers import engine
+
+        detail["provider_streams"] = engine.status_for_pc(db, pc_id)
+    return detail
 
 
 @router.post("/{pc_id}/import-config", response_model=ImportConfigResponse)

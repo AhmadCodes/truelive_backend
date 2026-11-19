@@ -73,6 +73,13 @@ celery_app.conf.beat_schedule = {
         'task': 'app.tasks.pc_maintenance.prune_deploy_history',
         'schedule': crontab(hour=3, minute=30),  # Daily at 03:30 UTC
     },
+    # Stream providers: renew, check, deliver, release (does nothing while no
+    # provider camera exists).
+    'stream-providers-tick': {
+        'task': 'app.tasks.stream_provider_tasks.tick',
+        'schedule': 30,
+        'options': {'expires': 25},
+    },
 }
 
 
@@ -126,3 +133,8 @@ try:
     from app.tasks import pc_maintenance  # noqa: F401
 except ImportError as e:
     logger.warning(f"Could not import pc_maintenance task module: {e}")
+
+try:
+    from app.tasks import stream_provider_tasks  # noqa: F401
+except ImportError as e:
+    logger.warning(f"Could not import stream_provider_tasks task module: {e}")

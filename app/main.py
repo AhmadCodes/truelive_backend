@@ -28,6 +28,7 @@ from app.api.v1 import (
     snapshots,
     configs,
     stream,
+    stream_providers,
     invitations,
     audit_logs,
     settings as settings_router,
@@ -295,6 +296,9 @@ app.include_router(
 
 app.include_router(
     stream.router, prefix=f"{settings.API_V1_PREFIX}/stream", tags=["Streaming"]
+)
+app.include_router(
+    stream_providers.router, prefix=f"{settings.API_V1_PREFIX}/stream-providers", tags=["Stream providers"]
 )
 
 # ---------------- Alerting feature ---------------- #

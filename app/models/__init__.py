@@ -19,6 +19,7 @@ from app.models.screen_mapping import ScreenMapping
 from app.models.pc_screen_mapping_state import PcScreenMappingState
 from app.models.pc_tracking import PcDeployment, PcHealth, PcTokenRenewal
 from app.models.system_setting import SystemSetting
+from app.models.stream_provider import StreamProvider
 from app.models.alerting import (
     AlertAddress,
     RawMessage,
@@ -66,6 +67,7 @@ __all__ = [
     "PcTokenRenewal",
     # System models
     "SystemSetting",
+    "StreamProvider",
     # Alerting models
     "AlertAddress",
     "RawMessage",

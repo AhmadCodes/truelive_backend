@@ -15,7 +15,7 @@ import threading
 from app.models.camera import Camera
 from app.models.screenshot import Screenshot
 from app.models.device import Device
-from app.utils.url_processor import redact_camera_url
+from app.utils.url_processor import is_provider_ref, redact_camera_url
 
 logger = logging.getLogger(__name__)
 
@@ -125,8 +125,19 @@ def process_camera(
             result["reason"] = "outdated"
 
         if should_update:
+            url = camera.rtsp_url
+            if is_provider_ref(url):
+                # A provider camera: only an address a station already uses. A
+                # screenshot must not open a vendor session of its own.
+                from app.services.stream_providers import engine
+
+                url = engine.peek(url)
+                if url is None:
+                    result["reason"] = "provider camera with no address in use"
+                    return result
+
             # Try to get a screenshot
-            frame = get_camera_screenshot(camera.rtsp_url)
+            frame = get_camera_screenshot(url)
 
             if frame is not None:
                 # Convert frame to bytes for database storage

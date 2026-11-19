@@ -31,7 +31,7 @@ from app.api.deps import user_or_scope
 from app.core.security import decode_token
 from app.database import SessionLocal, get_db
 from app.models.camera import Camera
-from app.utils.url_processor import is_hls_url, redact_camera_url
+from app.utils.url_processor import is_hls_url, is_provider_ref, redact_camera_url
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +139,22 @@ async def _resolve_camera_rtsp(camera_id: str) -> Optional[str]:
         camera = db.query(Camera).filter(Camera.id == camera_id).first()
         if camera is None:
             return None
-        return camera.rtsp_url or None
+        url = camera.rtsp_url or None
+        if is_provider_ref(url):
+            # A provider camera: the address every station shares (minted when none is cached).
+            return (await asyncio.to_thread(_provider_address, db, url)).url
+        return url
+
+
+def _provider_address(db, ref: str):
+    """Resolve a provider camera reference (blocking: Redis and the provider)."""
+    from app.services.stream_providers import engine
+
+    try:
+        return engine.resolve_refs(db, [ref], budget_sec=10)[ref]
+    except Exception as exc:
+        logger.error("Provider camera not resolved: %s", type(exc).__name__)
+        return engine.Resolved(None, engine.CODE_UNAVAILABLE, "The address cache is not available.")
 
 
 def _input_opts(url: str) -> list[str]:
@@ -502,6 +517,15 @@ async def test_camera_stream(
         "rtsp_url": redact_camera_url(rtsp_url),
         "tests": {},
     }
+    if is_provider_ref(rtsp_url):
+        # The response shows the reference; the minted address is only tested.
+        resolved = await asyncio.to_thread(_provider_address, db, rtsp_url)
+        if not resolved.url:
+            result["tests"]["provider"] = {"status": "failed", "code": resolved.code, "message": resolved.message}
+            result["overall_status"] = "failed"
+            return result
+        result["tests"]["provider"] = {"status": "success", "message": "The provider gave a stream address"}
+        rtsp_url = resolved.url
 
     # Test 1: ffprobe via async subprocess (non-blocking)
     try:

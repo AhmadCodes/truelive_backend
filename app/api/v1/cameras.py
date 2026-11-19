@@ -27,9 +27,54 @@ from app.services.actor import (
 )
 from app.services import audit_service
 from app.services.audit_service import ResourceType
+from app.utils.url_processor import is_provider_ref, parse_provider_ref
 
 
 router = APIRouter()
+
+
+def _check_provider_ref(db, url: Optional[str]) -> None:
+    """A provider camera (``provider://<provider id>/<camera id>``) must name
+    an existing provider. Any other URL is stored as before."""
+    if not is_provider_ref(url):
+        return
+    from app.models.stream_provider import StreamProvider
+
+    parsed = parse_provider_ref(url)
+    if parsed is None or db.query(StreamProvider.id).filter(StreamProvider.id == parsed[0]).first() is None:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Stream provider not found")
+
+
+def _with_sources(db, items: list) -> list:
+    """Add ``stream_source`` to camera dicts: ``{kind: "url"}``, or for a
+    provider camera the provider, the camera's id there and the address
+    status (never the address)."""
+    refs = [item["rtsp_url"] for item in items if is_provider_ref(item.get("rtsp_url"))]
+    providers, statuses = {}, {}
+    if refs:
+        from app.models.stream_provider import StreamProvider
+        from app.services.stream_providers import engine
+
+        ids = {parsed[0] for parsed in map(parse_provider_ref, refs) if parsed}
+        providers = {row.id: row for row in db.query(StreamProvider).filter(StreamProvider.id.in_(ids)).all()}
+        statuses = engine.status_for_cameras(refs)
+    for item in items:
+        parsed = parse_provider_ref(item.get("rtsp_url"))
+        if parsed is None:
+            item["stream_source"] = {"kind": "url"}
+            continue
+        row = providers.get(parsed[0])
+        item["stream_source"] = {
+            "kind": "provider",
+            "provider_id": parsed[0],
+            "provider_name": row.name if row else None,
+            "provider_type": row.type if row else None,
+            "provider_camera_id": parsed[1],
+            "status": statuses.get(item["rtsp_url"]) if row else {
+                "state": "error", "code": "provider-removed",
+                "message": "The stream provider of this camera was removed."},
+        }
+    return items
 
 
 @router.post("", response_model=CameraDetailResponse, status_code=status.HTTP_201_CREATED)
@@ -72,6 +117,8 @@ async def create_camera(
             detail=f"Device with ID '{camera_data.device_id}' not found"
         )
 
+    _check_provider_ref(db, camera_data.rtsp_url)
+
     # Create new camera
     new_camera = Camera(
         id=camera_data.id,
@@ -105,7 +152,7 @@ async def create_camera(
         )
 
     # Return camera with device_name
-    return {
+    return _with_sources(db, [{
         "id": new_camera.id,
         "device_id": new_camera.device_id,
         "device_name": device.name,
@@ -118,7 +165,7 @@ async def create_camera(
         "updated_at": new_camera.updated_at,
         "created_by": new_camera.created_by,
         "updated_by": new_camera.updated_by
-    }
+    }])[0]
 
 
 @router.get("", response_model=List[CameraDetailResponse])
@@ -194,7 +241,7 @@ async def list_cameras(
         }
         result.append(camera_dict)
 
-    return result
+    return _with_sources(db, result)
 
 
 @router.get("/count")
@@ -265,7 +312,7 @@ async def get_camera(
     created_by, updated_by = resolve_stamps_for_orms(db, [camera])[0]
 
     # Add device_name to response
-    return {
+    return _with_sources(db, [{
         "id": camera.id,
         "device_id": camera.device_id,
         "device_name": camera.device.name if camera.device else None,
@@ -278,7 +325,7 @@ async def get_camera(
         "updated_at": camera.updated_at,
         "created_by": created_by,
         "updated_by": updated_by
-    }
+    }])[0]
 
 
 @router.api_route("/{camera_id}", methods=["PUT", "PATCH"], response_model=CameraDetailResponse)
@@ -332,6 +379,8 @@ async def update_camera(
         camera.name = camera_data.name
 
     if camera_data.rtsp_url is not None:
+        if camera_data.rtsp_url != camera.rtsp_url:
+            _check_provider_ref(db, camera_data.rtsp_url)
         camera.rtsp_url = camera_data.rtsp_url
 
     if camera_data.main_stream_url is not None:
@@ -359,7 +408,7 @@ async def update_camera(
     from sqlalchemy.orm import joinedload
     camera = db.query(Camera).options(joinedload(Camera.device)).filter(Camera.id == camera_id).first()
 
-    return {
+    return _with_sources(db, [{
         "id": camera.id,
         "device_id": camera.device_id,
         "device_name": camera.device.name if camera.device else None,
@@ -372,7 +421,7 @@ async def update_camera(
         "updated_at": camera.updated_at,
         "created_by": camera.created_by,
         "updated_by": camera.updated_by
-    }
+    }])[0]
 
 
 @router.delete("/{camera_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -554,4 +603,4 @@ async def get_cameras_by_device(
         }
         result.append(camera_dict)
 
-    return result
+    return _with_sources(db, result)

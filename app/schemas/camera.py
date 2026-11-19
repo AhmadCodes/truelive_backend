@@ -3,7 +3,7 @@ Pydantic schemas for Camera CRUD operations.
 """
 
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Any, Dict, Optional
 from datetime import datetime
 
 from app.schemas.actor import ActorStampsMixin
@@ -13,7 +13,7 @@ class CameraBase(BaseModel):
     """Base schema with common camera fields."""
 
     name: str = Field(..., min_length=1, max_length=255, description="Display name of the camera")
-    rtsp_url: str = Field(..., description="Camera stream URL: rtsp(s):// or an HLS http(s):// playlist URL (stored and deployed unchanged)")
+    rtsp_url: str = Field(..., description="Camera stream URL: rtsp(s):// or an HLS http(s):// playlist URL (stored and deployed unchanged), or provider://<provider id>/<camera id> for a camera of a stream provider")
     main_stream_url: Optional[str] = Field(None, description="Main stream URL for camera (optional)")
     new: bool = Field(True, description="Flag indicating if this is a newly added camera")
     use_tcp: Optional[bool] = Field(None, description="Force RTSP over TCP; null to inherit from device")
@@ -51,6 +51,9 @@ class CameraResponse(ActorStampsMixin):
     main_stream_url: Optional[str]
     new: bool
     use_tcp: Optional[bool] = None
+    stream_source: Optional[Dict[str, Any]] = Field(
+        None, description='{kind: "url"} or {kind: "provider", provider_id, provider_name, provider_type, '
+                          'provider_camera_id, status}; rtsp_url of a provider camera is provider://<id>/<camera id>')
 
     class Config:
         from_attributes = True

@@ -148,9 +148,15 @@ def _transport_options(broker_url: Optional[str]) -> Dict[str, Any]:
 
 
 def enqueue(pc_id: str, config_id: str, config_hash: Optional[str]) -> str:
-    """Queue the catch-up task: ``retry=False``, short socket timeouts, an
-    expiry, no result. Returns the task id; raises when the broker is
-    unreachable."""
+    """Queue the catch-up task. Returns the task id; raises when the broker
+    is unreachable."""
+    return send_task(TASK_NAME, [pc_id, config_id, config_hash])
+
+
+def send_task(name: str, args: list, countdown: Optional[float] = None) -> str:
+    """Queue a task without ever blocking long: ``retry=False``, short socket
+    timeouts, an expiry, no result. Returns the task id; raises when the
+    broker is unreachable."""
     from app.tasks.celery_app import celery_app
 
     with celery_app.connection_for_write(
@@ -159,7 +165,7 @@ def enqueue(pc_id: str, config_id: str, config_hash: Optional[str]) -> str:
     ) as connection:
         # ignore_result: otherwise send_task first subscribes to the result
         # backend (Redis, with its own 20-retry policy): about 60 s when it is down.
-        result = celery_app.send_task(TASK_NAME, args=[pc_id, config_id, config_hash], connection=connection,
+        result = celery_app.send_task(name, args=args, connection=connection, countdown=countdown,
                                       retry=False, expires=TASK_EXPIRES_SECONDS, ignore_result=True)
     return result.id
 

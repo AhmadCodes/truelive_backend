@@ -120,6 +120,10 @@ class PCHealthDetail(PCHealthSummary):
     data_dir_acl_warning: Optional[bool] = None
     fleet_errors_count: Optional[int] = None
     updated_at: Optional[datetime] = None
+    # Stream providers: null when the PC's latest deploy has no provider camera.
+    provider_streams: Optional[Dict[str, Any]] = Field(
+        None, description="{cameras, unresolved: [{camera_id, camera_name, code, message}], last_delivery_at, "
+                          "acknowledged, next_renewal_at, blocked}; times are Unix seconds")
 
 
 class DeploymentHistory(BaseModel):

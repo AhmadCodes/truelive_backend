@@ -14,7 +14,9 @@ class Settings(BaseSettings):
 
     # Application
     APP_NAME: str = "TrueLive Portal API"
-    APP_VERSION: str = "1.1.1"  # 1.1.0 = M2 (plan 06 4.1); 1.1.1 = HLS camera URLs pass through unchanged
+    # 1.1.0 = M2 (plan 06 4.1); 1.1.1 = HLS camera URLs pass through unchanged;
+    # 1.2.0 = stream providers (Lumana) with address renewal, migration 016
+    APP_VERSION: str = "1.2.0"
     DEBUG: bool = False
     ENVIRONMENT: str = "production"
 
@@ -93,6 +95,9 @@ class Settings(BaseSettings):
     RELAY_STATION_REPORTS: bool = True  # "off" makes the report handlers return disabled
     DEPLOY_CATCHUP_ENABLED: bool = False
     DEPLOY_ACK_TIMEOUT_SEC: int = Field(300, ge=30, le=86400)
+    # Stream providers (app/services/stream_providers). False: provider cameras
+    # stay unresolved (provider-unavailable) and the renewal tick does nothing.
+    STREAM_PROVIDERS_ENABLED: bool = True
     # Engine.IO / Socket.IO packet logging in the relay (D12). Off by default:
     # packets carry tokens and layouts (NEW-56).
     RELAY_DEBUG_LOGGING: bool = False
