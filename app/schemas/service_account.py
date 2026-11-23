@@ -34,6 +34,7 @@ Scope = Literal[
     "cameras:manage",
     "teams:read",
     "teams:manage",
+    "stream_providers:manage",
 ]
 """Valid permission scopes for service-account tokens.
 
@@ -84,6 +85,18 @@ Teams (organizational grouping over sites/PCs/layouts; read + manage independent
                        (assign/unassign sites). Human callers must additionally be
                        super_admin; this scope grants the same management surface
                        to machine integrations.
+
+Stream providers (one scope; there is no separate read scope):
+
+- `stream_providers:manage`: GET /stream-providers, /stream-providers/types
+                       and /stream-providers/options; POST/PUT/DELETE on
+                       /stream-providers and POST /stream-providers/{id}/test.
+                       A **stream provider** is a vendor account (e.g. Lumana)
+                       that mints HLS addresses for its cameras. Its key is
+                       write-only: no response returns it. A camera uses a
+                       provider through `cameras:manage` with
+                       `rtsp_url = provider://<provider id>/<camera id>`.
+                       `cameras:manage` alone also reads /stream-providers/options.
 """
 
 

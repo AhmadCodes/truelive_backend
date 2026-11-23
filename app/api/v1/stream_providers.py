@@ -1,5 +1,7 @@
 """
-Stream providers API (admins only, except ``/options``).
+Stream providers API: admins, or a service account with
+``stream_providers:manage``. ``/options`` is open to any signed-in user and to
+a service account with ``stream_providers:manage`` or ``cameras:manage``.
 
 A provider is a vendor account that mints HLS addresses for its cameras
 (app/services/stream_providers). Its secret fields are write-only: they are
@@ -10,12 +12,12 @@ minted address. The form the portal shows is built from ``GET /types``.
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Annotated, Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from app.api.deps import AdminUser, CurrentUser, DBSession
+from app.api.deps import DBSession, admin_or_scope, user_or_scope
 from app.models.camera import Camera
 from app.models.stream_provider import StreamProvider
 from app.services import audit_service
@@ -30,6 +32,10 @@ router = APIRouter()
 
 RESOURCE_TYPE = "stream_provider"
 MSG_NO_KEY = "Set SETTINGS_ENCRYPTION_KEY before saving a provider key"
+
+# An admin JWT user, or a service account (e.g. VMS) holding the scope.
+Manager = Annotated[object, Depends(admin_or_scope("stream_providers:manage"))]
+Reader = Annotated[object, Depends(user_or_scope("stream_providers:manage", "cameras:manage"))]
 
 
 class ProviderWrite(BaseModel):
@@ -152,25 +158,25 @@ def _forget_addresses(db, row: StreamProvider, release: bool) -> None:
 
 
 @router.get("/types")
-def list_types(current_user: AdminUser) -> List[Dict[str, Any]]:
+def list_types(current_user: Manager) -> List[Dict[str, Any]]:
     """The provider types and their fields (no stored value)."""
     return registry.describe()
 
 
 @router.get("/options")
-def list_options(current_user: CurrentUser, db: DBSession) -> List[Dict[str, Any]]:
-    """``[{id, name, type}]`` for the camera form (any signed-in user)."""
+def list_options(current_user: Reader, db: DBSession) -> List[Dict[str, Any]]:
+    """``[{id, name, type}]`` for the camera form."""
     rows = db.query(StreamProvider).order_by(StreamProvider.name).all()
     return [{"id": row.id, "name": row.name, "type": row.type} for row in rows]
 
 
 @router.get("")
-def list_providers(current_user: AdminUser, db: DBSession) -> List[Dict[str, Any]]:
+def list_providers(current_user: Manager, db: DBSession) -> List[Dict[str, Any]]:
     return [_out(db, row) for row in db.query(StreamProvider).order_by(StreamProvider.name).all()]
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
-def create_provider(body: ProviderWrite, current_user: AdminUser, db: DBSession) -> Dict[str, Any]:
+def create_provider(body: ProviderWrite, current_user: Manager, db: DBSession) -> Dict[str, Any]:
     impl = registry.get(body.type or "")
     if impl is None:
         raise _invalid("Unknown provider type")
@@ -197,7 +203,7 @@ def create_provider(body: ProviderWrite, current_user: AdminUser, db: DBSession)
 
 
 @router.put("/{provider_id}")
-def update_provider(provider_id: str, body: ProviderWrite, current_user: AdminUser, db: DBSession) -> Dict[str, Any]:
+def update_provider(provider_id: str, body: ProviderWrite, current_user: Manager, db: DBSession) -> Dict[str, Any]:
     row = _get(db, provider_id)
     impl = registry.get(row.type)
     if impl is None:
@@ -233,7 +239,7 @@ def update_provider(provider_id: str, body: ProviderWrite, current_user: AdminUs
 
 
 @router.post("/{provider_id}/test")
-def test_provider(provider_id: str, current_user: AdminUser, db: DBSession) -> Dict[str, Any]:
+def test_provider(provider_id: str, current_user: Manager, db: DBSession) -> Dict[str, Any]:
     """Ask the provider whether the stored settings work (opens no stream)."""
     row = _get(db, provider_id)
     try:
@@ -243,7 +249,7 @@ def test_provider(provider_id: str, current_user: AdminUser, db: DBSession) -> D
 
 
 @router.delete("/{provider_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_provider(provider_id: str, current_user: AdminUser, db: DBSession) -> None:
+def delete_provider(provider_id: str, current_user: Manager, db: DBSession) -> None:
     row = _get(db, provider_id)
     cameras = _cameras_of(db, provider_id)
     count = cameras.count()

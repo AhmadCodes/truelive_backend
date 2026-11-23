@@ -1,6 +1,6 @@
 """
 Stream providers through the API (LUM-SRV): provider CRUD and its test
-action, admin-only access, the key never returned, logged or audited, delete
+action, admin or stream_providers:manage access, the key never returned, logged or audited, delete
 refused while cameras use the provider, provider cameras in the camera API,
 the test-stream endpoint, snapshots, ``hls_capable`` and the PC health block.
 Routes run through TestClient on SQLite with the engine's rig
@@ -518,3 +518,86 @@ def test_pc_health_carries_the_provider_block(api):
                     "next_renewal_at": rig.clock.t + 9000, "blocked": None}
     assert api.client.get("/pcs/PC_C/health").json()["provider_streams"] is None  # no provider camera
     assert "token" not in json.dumps([old_core, good])
+
+
+# --------------------------------------------------------------------------- #
+# Service accounts (VMS): stream_providers:manage
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def sa(api):
+    """A service-account principal; its tokens start with ``tlsa_``."""
+    from app.api import deps
+
+    account = SimpleNamespace(id="sa-vms", name="vms", scopes=["stream_providers:manage"])
+
+    async def current_sa(*_args, **_kwargs):
+        return account
+
+    api.monkeypatch.setattr(deps, "get_current_service_account", current_sa)
+    api.client.headers["Authorization"] = "Bearer tlsa_fixture"
+    return account
+
+
+def test_service_account_with_the_scope_manages_providers(api, sa):
+    created = _create(api)
+    provider = created["id"]
+    assert [p["id"] for p in api.client.get(BASE).json()] == [provider]
+    assert api.client.get(f"{BASE}/types").json()[0]["type"] == "lumana"
+    assert api.client.get(f"{BASE}/options").status_code == 200
+    updated = api.client.put(f"{BASE}/{provider}", json={"name": "Lumana VMS", "settings": {}})
+    assert updated.status_code == 200 and updated.json()["name"] == "Lumana VMS"
+    assert api.client.post(f"{BASE}/{provider}/test").json()["ok"] is True
+    with api.rig.db() as db:
+        row = db.get(StreamProvider, provider)
+        assert (row.created_by_type, row.created_by_id, row.created_by_label) == ("service_account", "sa-vms", "vms")
+        assert row.updated_by_type == "service_account"
+    assert {a["actor"] for a in api.audits if a["resource_type"] == "stream_provider"} == {
+        ("service_account", "sa-vms", "vms")}
+    # A camera of the provider through cameras:manage, then the provider goes once the camera is unset.
+    sa.scopes = ["stream_providers:manage", "cameras:manage"]
+    camera = _camera(api, "CAM_VMS", make_provider_ref(provider, "cam1"))
+    assert camera["stream_source"]["provider_id"] == provider
+    assert api.client.delete(f"{BASE}/{provider}").status_code == 409
+    assert api.client.put("/cameras/CAM_VMS", json={"rtsp_url": camera_url()}).status_code == 200
+    assert api.client.delete(f"{BASE}/{provider}").status_code == 204
+    assert api.client.get(BASE).json() == []
+
+
+def test_service_account_without_the_scope_is_refused(api, sa):
+    provider = _create(api)["id"]
+    sa.scopes = ["cameras:read", "sites:read", "teams:manage"]
+    body = {"name": "n", "type": "lumana", "settings": {"api_key": "k"}}
+    calls = [("get", f"{BASE}/types", None), ("get", BASE, None), ("post", BASE, body),
+             ("put", f"{BASE}/{provider}", body), ("post", f"{BASE}/{provider}/test", None),
+             ("delete", f"{BASE}/{provider}", None), ("get", f"{BASE}/options", None)]
+    for method, url, payload in calls:
+        response = api.client.request(method, url, json=payload)
+        assert response.status_code == 403, (method, url, response.status_code)
+        assert "stream_providers:manage" in response.json()["detail"]
+    # cameras:manage alone reads the options (the camera form's list), nothing else.
+    sa.scopes = ["cameras:manage"]
+    assert api.client.get(f"{BASE}/options").json() == [{"id": provider, "name": "Lumana main", "type": "lumana"}]
+    assert api.client.get(BASE).status_code == 403
+    # The admin JWT still works.
+    api.client.headers["Authorization"] = "Bearer fixture"
+    assert api.client.get(BASE).status_code == 200
+
+
+def test_service_account_never_gets_the_key(api, sa):
+    key = new_key()
+    api.rig.lumana.keys.add(key)
+    created = _create(api, key=key)
+    replies = [created, api.client.get(BASE).json(), api.client.get(f"{BASE}/options").json(),
+               api.client.put(f"{BASE}/{created['id']}", json={"name": "R", "settings": {"api_key": key}}).json(),
+               api.client.post(f"{BASE}/{created['id']}/test").json()]
+    text = json.dumps(replies)
+    assert key not in text and created["secrets_set"] == {"api_key": True}
+    assert key not in json.dumps(api.audits, default=str)
+
+
+def test_scope_is_a_valid_service_account_scope():
+    from app.schemas.service_account import ServiceAccountCreate
+
+    assert ServiceAccountCreate(name="vms", scopes=["stream_providers:manage"]).scopes == ["stream_providers:manage"]

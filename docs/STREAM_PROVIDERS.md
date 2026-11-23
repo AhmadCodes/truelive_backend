@@ -18,6 +18,8 @@ The server must have `SETTINGS_ENCRYPTION_KEY` set (the same value in the API, t
 
 **Remove** is refused while cameras still use the provider; the message names them. Move or delete those cameras first.
 
+A service account with the scope `stream_providers:manage` can do all of this through the API (`/api/v1/stream-providers`). A provider camera set through the API needs `cameras:manage`. The guide for API callers is `VMS_STREAM_PROVIDERS_GUIDE.md` in the release folder.
+
 ### Add a provider camera
 
 On the camera form choose **From a provider** as the source, pick the provider and enter the camera's ID as the vendor shows it. Everything else (name, NVR, screen layouts, deploy) works as for any camera. A camera with a typed-in RTSP or HLS address behaves exactly as before.
