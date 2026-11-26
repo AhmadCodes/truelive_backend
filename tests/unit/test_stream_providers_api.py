@@ -418,6 +418,20 @@ def test_direct_stream_hands_the_browser_the_shared_address(api):
     assert api.client.get("/stream/direct/NOPE").status_code == 404
 
 
+def test_direct_stream_revives_a_session_lumana_closed_while_nobody_watched(api):
+    provider = _create(api)["id"]
+    reference = make_provider_ref(provider, "cam1")
+    _camera(api, "CAM_P1", reference)
+    first = api.client.get("/stream/direct/CAM_P1").json()
+    api.rig.lumana.close_session()  # Lumana ends a session nobody read for ~90 s
+    starts = api.rig.lumana.count("start")
+    api.rig.clock.advance(engine.IMMEDIATE_PROBE_MIN_SEC + 1)
+    again = api.client.get("/stream/direct/CAM_P1").json()
+    assert api.rig.lumana.count("start") == starts + 1  # started again with its session id
+    assert again["url"].split("?")[0] == first["url"].split("?")[0]  # same address
+    assert api.rig.lumana.open_sessions() == 1
+
+
 def test_test_stream_endpoint_reports_the_provider_error(api, no_tools):
     provider = _create(api, key="wrong-" + new_key())["id"]
     _camera(api, "CAM_P1", make_provider_ref(provider, "cam1"))

@@ -8,6 +8,7 @@ logged. RTSP handling stays exactly as it was.
     python -m pytest tests/unit/test_hls_urls.py -o addopts='' -p no:cacheprovider
 """
 
+import asyncio
 import logging
 from types import SimpleNamespace
 
@@ -238,3 +239,22 @@ def test_preview_ffmpeg_command(build):
     # Only the input options differ between the two commands.
     assert [a for a in rtsp if a not in ("-rtsp_transport", "tcp", rtsp_url)] == [
         a for a in hls[:1] + hls[5:] if a != HLS_URLS[0]]
+
+
+def test_ffmpeg_failure_log_keeps_the_error_and_masks_the_token(caplog):
+    banner = "ffmpeg version 7.1 Copyright (c) 2000-2026 the FFmpeg developers\n" + "  configuration: --x\n" * 40
+    error = f"Error opening input file {HLS_URLS[0]}\nServer returned 5XX Server Error reply\n"
+
+    class _Stream:
+        def __init__(self, data):
+            self.data = data
+
+        async def read(self, _n=-1):
+            data, self.data = self.data, b""
+            return data
+
+    proc = SimpleNamespace(stdout=_Stream(b""), stderr=_Stream((banner + error).encode()), returncode=8)
+    with caplog.at_level(logging.ERROR, logger=stream_api.logger.name):
+        asyncio.run(stream_api._pump_ffmpeg_to_ws(None, proc, chunk_size=8, camera_id="c1", label="h264"))
+    assert "Server returned 5XX" in caplog.text and "exit=8" in caplog.text
+    assert TOKEN not in caplog.text and "hls.example.com" in caplog.text

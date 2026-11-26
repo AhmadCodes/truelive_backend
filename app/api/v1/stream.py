@@ -185,7 +185,13 @@ def _provider_address(db, ref: str):
     from app.services.stream_providers import engine
 
     try:
-        return engine.resolve_refs(db, [ref], budget_sec=10)[ref]
+        resolved = engine.resolve_refs(db, [ref], budget_sec=10)[ref]
+        if resolved.url:
+            # Lumana ends a session nobody read for ~90 s (walls read all the time, a live view
+            # does not); the engine's check starts it again with its id, same address.
+            engine.check_addresses(db, [ref], engine.config(db), immediate=True, skip_recent=True)
+            resolved = engine.resolve_refs(db, [ref], budget_sec=10)[ref]
+        return resolved
     except Exception as exc:
         logger.error("Provider camera not resolved: %s", type(exc).__name__)
         return engine.Resolved(None, engine.CODE_UNAVAILABLE, "The address cache is not available.")
@@ -302,7 +308,9 @@ async def _pump_ffmpeg_to_ws(
                     logger.error(
                         "ffmpeg exited with error for camera %s (%s) exit=%s stderr=%r",
                         camera_id, label, rc,
-                        stderr_bytes.decode("utf-8", errors="ignore")[:500],
+                        # The tail holds the error (the head is the banner); URLs carry tokens.
+                        _ANY_URL.sub(lambda m: redact_camera_url(m.group(0)),
+                                     stderr_bytes.decode("utf-8", errors="ignore")[-500:]),
                     )
                 return
             await ws.send_bytes(chunk)
