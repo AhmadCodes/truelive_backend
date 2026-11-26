@@ -23,8 +23,9 @@ import os
 import re
 from contextlib import asynccontextmanager, suppress
 from typing import Annotated, Optional
+from urllib.parse import parse_qs, urlsplit
 
-from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 
 from app.api.deps import user_or_scope
@@ -190,10 +191,24 @@ def _provider_address(db, ref: str):
         return engine.Resolved(None, engine.CODE_UNAVAILABLE, "The address cache is not available.")
 
 
+def _hls_headers(url: str) -> dict[str, str]:
+    """Request headers an HLS address needs on every request. A playlist's
+    ``?token=`` is not carried to its segment URLs, and Lumana refuses a segment
+    (403) unless the token comes as the raw ``Authorization`` header."""
+    token = parse_qs(urlsplit(url).query).get("token", [None])[0]
+    return {"Authorization": token} if token else {}
+
+
 def _input_opts(url: str) -> list[str]:
     """FFmpeg input options for a camera URL. -rtsp_transport belongs to the RTSP
-    demuxer: on an HLS (http/https) input ffmpeg rejects it as an unknown option."""
-    return [] if is_hls_url(url) else ["-rtsp_transport", "tcp"]
+    demuxer: on an HLS (http/https) input ffmpeg rejects it as an unknown option.
+    On HLS, -extension_picky 0 lets ffmpeg 7.1+ read segments named like
+    ``*.fmp4.45114`` (Lumana), which it otherwise refuses."""
+    if not is_hls_url(url):
+        return ["-rtsp_transport", "tcp"]
+    opts = ["-extension_picky", "0"]
+    headers = "".join(f"{k}: {v}\r\n" for k, v in _hls_headers(url).items())
+    return opts + (["-headers", headers] if headers else [])
 
 
 _ANY_URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s'\"]+")
@@ -517,6 +532,37 @@ async def stream_camera_jpeg(
     finally:
         with suppress(Exception):
             await websocket.close()
+
+
+@router.get("/direct/{camera_id}", tags=["Streaming"])
+async def direct_stream(
+    camera_id: str,
+    _auth: Annotated[object, Depends(user_or_scope("cameras:read", "cameras:manage"))],
+    db: Session = Depends(get_db),
+):
+    """
+    Where a browser can play a stream-provider camera itself (HLS), so the
+    server does not transcode it. ``direct: false`` means use the WebSocket
+    stream. Call again about once a minute while playing: that keeps the
+    provider address in use (the tick releases idle ones) and returns the
+    current token after a renewal.
+    """
+    camera = db.query(Camera).filter(Camera.id == camera_id).first()
+    if camera is None:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    ref = camera.rtsp_url
+    if not is_provider_ref(ref):
+        return {"direct": False}
+    resolved = await asyncio.to_thread(_provider_address, db, ref)
+    if not resolved.url:
+        return {"direct": False, "code": resolved.code, "message": resolved.message}
+    from app.services.stream_providers import engine
+
+    try:
+        await asyncio.to_thread(engine.touch, ref)
+    except Exception as exc:
+        logger.warning("direct view use not noted camera=%s: %s", camera_id, type(exc).__name__)
+    return {"direct": True, "url": resolved.url, "headers": _hls_headers(resolved.url)}
 
 
 @router.get("/test/{camera_id}", tags=["Streaming"])

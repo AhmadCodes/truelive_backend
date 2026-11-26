@@ -233,5 +233,8 @@ def test_preview_ffmpeg_command(build):
     rtsp = build(rtsp_url)
     assert rtsp[:3] == ["ffmpeg", "-rtsp_transport", "tcp"]
     assert rtsp[rtsp.index("-i") + 1] == rtsp_url
-    # Only the RTSP-only option differs between the two commands.
-    assert [a for a in rtsp if a not in ("-rtsp_transport", "tcp", rtsp_url)] == [a for a in hls if a != HLS_URLS[0]]
+    hls_opts = ["-extension_picky", "0", "-headers", f"Authorization: {TOKEN}\r\n"]
+    assert hls[1:5] == hls_opts
+    # Only the input options differ between the two commands.
+    assert [a for a in rtsp if a not in ("-rtsp_transport", "tcp", rtsp_url)] == [
+        a for a in hls[:1] + hls[5:] if a != HLS_URLS[0]]

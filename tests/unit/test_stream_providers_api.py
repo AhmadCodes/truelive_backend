@@ -386,7 +386,7 @@ def test_test_stream_endpoint_for_a_provider_camera(api, no_tools):
     assert result["rtsp_url"] == reference  # the reference, never the minted address
     assert result["tests"]["provider"] == {"status": "success", "message": "The provider gave a stream address"}
     minted = api.rig.addr(reference)["url"]
-    assert no_tools == [["ffprobe", minted]] and _NoCapture.opened == [minted]  # HLS: no -rtsp_transport
+    assert no_tools == [["ffprobe", *stream_hls_opts(api, minted), minted]] and _NoCapture.opened == [minted]
     assert "token" not in json.dumps(result) and "/v2/file/" not in json.dumps(result)
     # It shares the session every station uses: a second test opens nothing new.
     api.client.get("/stream/test/CAM_P1")
@@ -395,6 +395,27 @@ def test_test_stream_endpoint_for_a_provider_camera(api, no_tools):
     result = api.client.get("/stream/test/CAM_RTSP").json()
     assert result["rtsp_url"] == "rtsp://<redacted>@192.0.2.10/stream1" and "provider" not in result["tests"]
     assert no_tools[-1] == ["ffprobe", "-rtsp_transport", "tcp", camera_url()]
+
+
+def stream_hls_opts(api, url):
+    """HLS: no -rtsp_transport; segment names unchecked; the token as a header on every request."""
+    token = url.split("token=", 1)[1]
+    return ["-extension_picky", "0", "-headers", f"Authorization: {token}\r\n"]
+
+
+def test_direct_stream_hands_the_browser_the_shared_address(api):
+    provider = _create(api)["id"]
+    reference = make_provider_ref(provider, "cam1")
+    _camera(api, "CAM_P1", reference)
+    result = api.client.get("/stream/direct/CAM_P1").json()
+    minted = api.rig.addr(reference)["url"]
+    assert result == {"direct": True, "url": minted, "headers": {"Authorization": minted.split("token=", 1)[1]}}
+    assert api.rig.redis.get(engine.PREFIX + engine._ref_key("use", reference)) is not None  # kept in use
+    api.client.get("/stream/direct/CAM_P1")
+    assert api.rig.lumana.count("start") == 1  # the session every station shares
+    # RTSP cameras and unknown cameras are not direct.
+    assert api.client.get("/stream/direct/CAM_RTSP").json() == {"direct": False}
+    assert api.client.get("/stream/direct/NOPE").status_code == 404
 
 
 def test_test_stream_endpoint_reports_the_provider_error(api, no_tools):

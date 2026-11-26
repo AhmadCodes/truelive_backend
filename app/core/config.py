@@ -16,8 +16,9 @@ class Settings(BaseSettings):
     APP_NAME: str = "TrueLive Portal API"
     # 1.1.0 = M2 (plan 06 4.1); 1.1.1 = HLS camera URLs pass through unchanged;
     # 1.2.0 = stream providers (Lumana) with address renewal, migration 016;
-    # 1.2.1 = service accounts manage stream providers (stream_providers:manage)
-    APP_VERSION: str = "1.2.1"
+    # 1.2.1 = service accounts manage stream providers (stream_providers:manage);
+    # 1.2.2 = Lumana cameras play in the portal live view (direct HLS + transcode fix)
+    APP_VERSION: str = "1.2.2"
     DEBUG: bool = False
     ENVIRONMENT: str = "production"
 
